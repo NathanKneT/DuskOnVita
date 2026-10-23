@@ -98,7 +98,11 @@ constexpr uint32_t TwvGpuFeaturePrimitives=1u;     // TwvVitaDrawState.primitive
 constexpr uint32_t TwvGpuFeatureCompact=2u;        // packed integer attributes (positions, normals, UVs)
 constexpr uint32_t TwvGpuFeatureCompactColors=4u;  // RGBA8 colours as U8N
 constexpr uint32_t TwvGpuFeatureResident=8u;      // certified geometry and static-list indices in GPU memory
+constexpr uint32_t TwvGpuFeatureTiming=16u;       // diagnostic: GPU and present timing receipts
+constexpr uint32_t TwvGpuFeatureSplit=32u;        // diagnostic: frames split into twv_gpu_split_scenes() scenes
+constexpr uint32_t TwvGpuFeatureScale75=64u,TwvGpuFeatureScale67=128u,TwvGpuFeatureScale50=256u; // diagnostic render size
 uint32_t twv_gpu_features(void);
+uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it
 // (vitaGL: its resident arena; GXM: a CDRAM arena retired by frame fence).
 int twv_gpu_resident_available(void);

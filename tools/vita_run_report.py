@@ -22,7 +22,15 @@ from pathlib import Path
 SCENES = {'R_SP01': 'house-R_SP01', 'F_SP103': 'outside-F_SP103', 'F_SP108': 'faron-F_SP108'}
 INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusive_us': 'painter_ms',
              'prof_fifo_inclusive_us': 'fifo_ms', 'prof_shader_us': 'shader_ms',
-             'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms'}
+             'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms',
+             # GXM --vita-gxm-gpu-timing (platform/vita/gfx_gxm/gxm_timing.hpp): per-frame means;
+             # the two *_max_ms are the largest frame of any window.
+             'gxm_gpu_busy_us': 'gpu_busy_ms', 'gxm_gpu_busy_max_us': 'gpu_busy_max_ms',
+             'gxm_gpu_latency_us': 'gpu_latency_ms', 'gxm_gpu_starved_us': 'gpu_starved_ms',
+             'gxm_gpu_vertex_tail_us': 'gpu_vertex_tail_ms', 'gxm_present_wait_us': 'present_wait_ms',
+             'gxm_present_wait_max_us': 'present_wait_max_ms', 'gxm_present_gpu_us': 'present_gpu_ms',
+             'gxm_present_display_us': 'present_display_ms', 'gxm_flip_interval_us': 'flip_ms',
+             'gxm_display_lag_us': 'display_lag_ms', 'gxm_fence_wait_us': 'fence_wait_ms'}
 # decode_probe.hpp; builds before draw_setup existed lack it (their texture setup counts as pipeline).
 # Shader stages compiled so far: vitaGL's counter, or the GXM backend's (G1). A run has one of them.
 COMPILE_COUNTERS = ('gfx_shader_stage_compile_calls', 'gxm_stage_compiles')
@@ -50,6 +58,38 @@ def split_boots(lines):
         if current is not None:
             current['records'].append((number, record))
     return boots
+
+
+def parse_segment(text):
+    """One gxm_gpu_segment receipt ("k=0;n=4;f=30;busy=..."): integer fields by name."""
+    out = {}
+    for part in text.split(';'):
+        key, _, value = part.partition('=')
+        if value.isdigit():
+            out[key] = int(value)
+    return out
+
+
+def segment_columns(steady):
+    """Per-scene means over windows that all split into the same number of scenes, else None."""
+    counts = {r['segments'][0].get('n') for r in steady if r.get('segments')}
+    if len(counts) != 1 or not all(r.get('segments') for r in steady):
+        return None
+    n = counts.pop()
+    if not n or any(len(r['segments']) != n for r in steady):
+        return None
+    frames = sum(r['segments'][0].get('f', 0) for r in steady)
+    if not frames:
+        return None
+    result = []
+    for k in range(n):
+        rows = [next(s for s in r['segments'] if s.get('k') == k) for r in steady]
+        mean = lambda key: sum(s.get(key, 0) * s.get('f', 0) for s in rows) / frames
+        result.append({'scene': k, 'busy_ms': round(mean('busy') / 1000, 2), 'draws': round(mean('draws'), 1),
+                       'tris': round(mean('tris')), 'blend': round(mean('blend'), 1),
+                       'discard': round(mean('discard'), 1), 'nodepth': round(mean('nodepth'), 1),
+                       'fs_bytes': round(mean('fsb'))})
+    return result
 
 
 def hist_p95(bounds, counts):
@@ -82,6 +122,8 @@ def summarize(boot, settle_s):
                 bounds = [int(x) for x in r['text'].split(',') if x.strip().lstrip('-').isdigit()]
             if name == 'prof_interval_hist_counts' and report is not None:
                 report['hist'] = [int(x) for x in r['text'].split(',') if x.strip().isdigit()]
+            if name == 'gxm_gpu_segment' and report is not None:
+                report.setdefault('segments', []).append(parse_segment(r['text']))
             continue
         v = r.get('value')
         value.setdefault(name, v)
@@ -206,8 +248,13 @@ def scene_result(out, scene_stage, steady, bounds, sims, draw_samples):
     frames = sum(r['frames'] for r in steady)
     out['costs_ms'] = {}
     for key, label in INCLUSIVE.items():
-        if all(key in r['costs'] for r in steady):
+        if label.endswith('_max_ms') and all(key in r['costs'] for r in steady):
+            out['costs_ms'][label] = round(max(r['costs'][key] for r in steady) / 1000, 2)
+        elif all(key in r['costs'] for r in steady):
             out['costs_ms'][label] = round(sum(r['costs'][key] * r['frames'] for r in steady) / frames / 1000, 2)
+    segments = segment_columns(steady)  # GXM --vita-gxm-gpu-split
+    if segments:
+        out['gpu_segments'] = segments
     t0, t1 = steady[0]['ms'], steady[-1]['ms']
     span = [s for s in sims if t0 - 1000 <= s[0] <= t1 + 1000 and s[2] == scene_stage and s[3]]
     if len(span) >= 2 and span[-1][0] > span[0][0]:
@@ -234,6 +281,8 @@ def ledger_rows(runs, args, receipt_sha):
         if run.get('frame_ms_p95_bin') is not None:
             details['p95_hist_bin_ms'] = run['frame_ms_p95_bin']
         details['over_33ms'] = run.get('over_33ms')
+        if run.get('gpu_segments'):  # scene: GPU ms / draws
+            details['gpu_segments'] = ','.join(f"{s['busy_ms']}/{s['draws']}" for s in run['gpu_segments'])
         for key in ('shader_warmup_prepared', 'shader_play_compiles', 'shader_play_slow_compiles', 'shader_play_compile_max_us'):
             details[key] = run.get(key)
         if run.get('decode'):
@@ -282,6 +331,9 @@ def main():
             print(f"        decode per timed frame: fifo={d['fifo_ms']}ms {parts} | parts={d['parts_pct_of_fifo']}% "
                   f"of fifo, {d['sampled_frames']} timed frames, {d['clock_switches_per_timed_frame']} clock reads "
                   f"x {d['clock_read_ns']}ns each")
+        for s in run.get('gpu_segments') or []:
+            print(f"{'':>8}scene {s['scene']}: gpu {s['busy_ms']} ms, {s['draws']} draws, {s['tris']} tris, "
+                  f"{s['blend']} blended, {s['discard']} discard, {s['nodepth']} no-depth, {s['fs_bytes']} B fragment program")
     if args.ledger:
         if not args.version or not args.commit or not args.receipt_path:
             sys.exit('--ledger needs --version, --commit and --receipt-path')

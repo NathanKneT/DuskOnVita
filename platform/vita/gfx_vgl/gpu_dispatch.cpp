@@ -18,6 +18,7 @@ namespace {
 const TwvGpuBackend* backend=nullptr; // chosen once, before init
 bool selected=false,initialised=false;
 uint32_t requestedFeatures=0;          // G2 TwvGpuFeature* bits, a subset of backend->features
+uint32_t splitScenes=0;                // --vita-gxm-gpu-split (with TwvGpuFeatureSplit)
 int digestMode=0; // 0 off, 1 per-frame, 2 per-frame + per-draw hashes in a frame window
 uint32_t digestFirst=0,digestLast=0,frameIndex=0; // frameIndex: twv_vgl_end calls so far
 std::unique_ptr<twv::gpu::DrawDigest> digest;
@@ -48,7 +49,7 @@ void load_capture_match() {
 
 extern "C" int twv_vita_gpu_select(int which,int digestOption,uint32_t first,uint32_t last,
                                    uint32_t captureFirst,uint32_t captureLast,uint32_t captureStep,
-                                   int captureMatch,uint32_t features) {
+                                   int captureMatch,uint32_t features,uint32_t split) {
     if(selected || initialised || which<0 || which>1 || digestOption<0 || digestOption>2)return 0;
 #if TWV_VITA_GFX_GXM
     const TwvGpuBackend* chosen=which==0?twv_gpu_backend_vgl():twv_gpu_backend_gxm();
@@ -56,7 +57,8 @@ extern "C" int twv_vita_gpu_select(int which,int digestOption,uint32_t first,uin
     const TwvGpuBackend* chosen=which==0?twv_gpu_backend_vgl():nullptr;
 #endif
     if(!chosen || (features & ~chosen->features))return 0;
-    backend=chosen;selected=true;requestedFeatures=features;
+    if(((features&TwvGpuFeatureSplit)!=0)!=(split>=2 && split<=8))return 0;
+    backend=chosen;selected=true;requestedFeatures=features;splitScenes=split;
     digestMode=digestOption;digestFirst=first;digestLast=last;
     capture.first=captureFirst;capture.last=captureLast;capture.step=captureStep;
     if(captureMatch && digestMode)load_capture_match();
@@ -64,6 +66,7 @@ extern "C" int twv_vita_gpu_select(int which,int digestOption,uint32_t first,uin
 }
 
 extern "C" uint32_t twv_gpu_features(void) {return requestedFeatures;}
+extern "C" uint32_t twv_gpu_split_scenes(void) {return splitScenes;}
 // patches/aurora/0008: whether quads, strips and fans reach the backend without index lists.
 extern "C" int twv_gx_native_primitives(void) noexcept {return (requestedFeatures&TwvGpuFeaturePrimitives)!=0;}
 extern "C" int twv_gpu_resident_available(void) {return gpu().resident_available();}

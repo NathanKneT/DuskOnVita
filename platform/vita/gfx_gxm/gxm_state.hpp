@@ -82,6 +82,19 @@ constexpr Region scissor_region(int gx,int gy,int gw,int gh) {
     if(w<=0||h<=0)return {0,0,0,0,true};
     return {unsigned(x),unsigned(y),unsigned(x+w-1),unsigned(y+h-1),false};
 }
+// Diagnostic render scale (--vita-gxm-scale): the same viewport and region on a smaller surface
+// that the display hardware scales up; regions grow outward to whole pixels. Scale 1: identity.
+constexpr Viewport scale_viewport(const Viewport& v,float sx,float sy) {
+    return {v.xOffset*sx,v.xScale*sx,v.yOffset*sy,v.yScale*sy,v.zOffset,v.zScale};
+}
+constexpr unsigned ceil_scaled(unsigned v,float s) {
+    const float f=float(v)*s;const unsigned i=unsigned(f);return float(i)<f?i+1:i;
+}
+constexpr Region scale_region(const Region& r,float sx,float sy,unsigned width,unsigned height) {
+    if(r.empty)return r;
+    const unsigned xEnd=ceil_scaled(r.xMax+1,sx),yEnd=ceil_scaled(r.yMax+1,sy);
+    return {unsigned(float(r.xMin)*sx),unsigned(float(r.yMin)*sy),(xEnd<width?xEnd:width)-1,(yEnd<height?yEnd:height)-1,false};
+}
 // Clear rectangle (GL origin) in clip space for the full-screen viewport, and the clear depth
 // in vitaGL's form (NDC d*2-1, mapped back by z offset/scale 0.5).
 struct ClearQuad {float x0,x1,yTop,yBottom,z;};

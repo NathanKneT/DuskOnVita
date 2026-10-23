@@ -50,6 +50,30 @@ int main() {
         assert(!GpuOptions{}.any());
     }
     {
+        // GPU diagnostics: GXM only, once.
+        GpuOptions o;
+        assert(o.consume("--vita-gxm-gpu-timing=on")==1 && o.features==GpuOptions::FeatureTiming && o.any());
+        assert(!o.consistent() && o.consume("--vita-gxm-gpu-timing=off")==-1);
+        assert(o.consume("--vita-gpu=gxm")==1 && o.consistent());
+        GpuOptions off;assert(off.consume("--vita-gxm-gpu-timing=off")==1 && off.features==0 && off.any() && off.consistent());
+        assert(GpuOptions{}.consume("--vita-gxm-gpu-timing=yes")==-1 && GpuOptions{}.consume("--vita-gxm-gpu-timing")==0);
+        // The split implies the timing; 2..8 scenes, once.
+        GpuOptions s;
+        assert(s.consume("--vita-gxm-gpu-split=4")==1 && s.splitScenes==4 &&
+               s.features==(GpuOptions::FeatureSplit|GpuOptions::FeatureTiming) && !s.consistent());
+        assert(s.consume("--vita-gxm-gpu-split=4")==-1 && s.consume("--vita-gpu=gxm")==1 && s.consistent());
+        for(const char* t:{"--vita-gxm-gpu-split=1","--vita-gxm-gpu-split=9","--vita-gxm-gpu-split=4x",
+                           "--vita-gxm-gpu-split=","--vita-gxm-gpu-split=-2"})
+            assert(GpuOptions{}.consume(t)==-1);
+        assert(GpuOptions{}.consume("--vita-gxm-gpu-split=8")==1);
+        // Render scale: one of four sizes, once, GXM only.
+        GpuOptions r;
+        assert(r.consume("--vita-gxm-scale=75")==1 && r.features==GpuOptions::FeatureScale75 && !r.consistent());
+        assert(r.consume("--vita-gxm-scale=50")==-1 && r.consume("--vita-gpu=gxm")==1 && r.consistent());
+        GpuOptions full;assert(full.consume("--vita-gxm-scale=100")==1 && full.features==0 && full.any());
+        assert(GpuOptions{}.consume("--vita-gxm-scale=67")==1 && GpuOptions{}.consume("--vita-gxm-scale=60")==-1);
+    }
+    {
         twv::gpu::CaptureSchedule s;s.first=10;s.last=30;s.step=10;
         assert(s.active() && !s.wants(9,0) && s.wants(10,0) && !s.wants(15,0) && s.wants(20,0) && s.wants(30,0) && !s.wants(40,0));
         assert(s.load_match("# comment\r\n00000000000000aa\r\n\n00000000000000BB\n")==false);

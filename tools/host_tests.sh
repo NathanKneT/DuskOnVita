@@ -574,3 +574,7 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/pipeline_fast_test.cpp" -o "$out/pipeline_fast_test"
 "$out/pipeline_fast_test"
+# GPU timing diagnostic: per-frame metrics from submit/notification/present/flip times.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/gxm_timing_test.cpp" -o "$out/gxm_timing_test"
+"$out/gxm_timing_test"

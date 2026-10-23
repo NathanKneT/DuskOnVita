@@ -20,15 +20,18 @@
 #include "gxm_memory.hpp"
 #include "gxm_shader_cache.hpp"
 #include "gxm_state.hpp"
+#include "gxm_timing.hpp"
 #include "runtime/telemetry.hpp"
 #include <psp2/display.h>
 #include <psp2/gxm.h>
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/shacccg.h>
 #include <shacccg_ext.h>
 #include <sys/stat.h>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,6 +58,10 @@ static_assert(SCE_GXM_TEXTURE_ADDR_MIRROR==AddrMirror && SCE_GXM_TEXTURE_ADDR_CL
 constexpr unsigned DisplayBuffers=3;
 constexpr uint32_t DisplayStride=960; // ALIGN(960,64)
 constexpr uint32_t DisplayBytes=DisplayStride*DisplayHeight*4;
+// Render size: the display's, or (--vita-gxm-scale, diagnostic) 720x408, 640x368 or 480x272,
+// which the display hardware scales up. Draw coordinates stay in 960x544 and are scaled when set.
+uint32_t renderWidth=DisplayWidth,renderHeight=DisplayHeight,renderStride=DisplayStride;
+float renderScaleX=1.f,renderScaleY=1.f;
 // Sized from the G1 peaks in house, Ordon and the Faron fight (Vita3K): frame ring 4.0 MiB per
 // frame, texture pool 11.9 MiB; about twice the peak each. Resident geometry is new in G2.
 constexpr uint32_t RingSlotBytes=8u<<20;
@@ -64,7 +71,7 @@ constexpr uint32_t QuadTableQuads=16384; // 65536 vertices
 constexpr const char* GxpRoot="ux0:data/twilight-vita/gxp_cache";
 
 struct Block {SceUID uid=-1;void* base=nullptr;uint32_t size=0;};
-struct DisplayData {void* address;};
+struct DisplayData {void* address;uint64_t frame;}; // frame: for the GPU timing diagnostic
 
 // --- state ---
 bool ready=false,inScene=false;
@@ -123,13 +130,77 @@ void* usse_block(Block& b,const char* name,uint32_t size,bool vertex,unsigned in
     if(!ok(result,name)){sceKernelFreeMemBlock(b.uid);b.uid=-1;b.base=nullptr;return nullptr;}
     return b.base;
 }
+// --- GPU timing diagnostic (--vita-gxm-gpu-timing, gxm_timing.hpp) ---
+// A monitor thread (core 2, top user priority, asleep on a semaphore or a notification) stamps
+// the frame's vertex notification and each scene's fragment notification as the GPU writes
+// them; the display callback stamps the flip. The main thread sums each frame into the
+// receipt window once all its stamps are in, in frame order.
+constexpr unsigned TimingRing=16,TimingQueue=64;
+constexpr unsigned VertexNotificationBase=8; // slots 8..10; 0..2 are the frame fences
+struct TimedFrame {
+    std::atomic<uint64_t> frame{0};
+    std::array<std::atomic<uint64_t>,MaxTimedScenes> fragmentDone{};
+    std::atomic<uint64_t> vertexDone{0},flipStart{0},flipEnd{0};
+    FrameTimes main; // submit, present and fence fields: main thread only
+    std::array<SegmentStats,MaxTimedScenes> segments{}; // per scene (--vita-gxm-gpu-split): main thread
+};
+struct TimedWait {uint64_t frame;uint32_t scene;bool vertex;volatile unsigned int* address;unsigned int value;};
+bool timingOn=false;
+std::array<TimedFrame,TimingRing> timedFrames;
+std::array<TimedWait,TimingQueue> timedWaits{};
+std::atomic<uint32_t> timedHead{0},timedTail{0};
+std::atomic<bool> timingStop{false};
+SceUID timingSema=-1,timingThread=-1;
+uint64_t timedFinal=0,timingDropped=0,timingQueueFull=0;
+TimingWindow timingWindow;
+// Scene split (--vita-gxm-gpu-split): the frame's draws in up to splitScenes scenes, cut at equal
+// shares of the previous frame's draws. Depth (with stencil and mask bit) is stored at the end of
+// every scene but the last and reloaded at the start of every scene but the first, so the picture
+// is the frame's; colour is always loaded and stored. Each scene ends with its own notification.
+constexpr unsigned SceneNotificationBase=16; // slots 16..39: (frame%3)*MaxTimedScenes+scene
+uint32_t splitScenes=0,frameSplits=1,frameScene=0;
+uint64_t splitStarts[MaxTimedScenes]{},frameDraws=0;
+SceGxmDepthStencilSurface depthFirst{},depthNext{}; // force store / force load+store copies
+
+int timing_main(SceSize,void*) {
+    while(sceKernelWaitSema(timingSema,1,nullptr)>=0 && !timingStop.load(std::memory_order_acquire)) {
+        const TimedWait w=timedWaits[timedTail.load(std::memory_order_relaxed)%TimingQueue];
+        SceGxmNotification n{w.address,w.value};
+        sceGxmNotificationWait(&n);
+        const uint64_t now=twv::vita::processTimeUs();
+        auto& rec=timedFrames[w.frame%TimingRing];
+        if(rec.frame.load(std::memory_order_acquire)==w.frame) {
+            if(w.vertex)rec.vertexDone.store(now,std::memory_order_release);
+            else rec.fragmentDone[w.scene].store(now,std::memory_order_release);
+        }
+        timedTail.fetch_add(1,std::memory_order_release);
+    }
+    return 0;
+}
+// Queued in GPU completion order: a frame's vertex notification before its fragment ones.
+void timing_wait(uint64_t frame,uint32_t scene,bool vertex,const SceGxmNotification& n) {
+    const uint32_t head=timedHead.load(std::memory_order_relaxed);
+    if(head-timedTail.load(std::memory_order_acquire)>=TimingQueue){++timingQueueFull;return;}
+    timedWaits[head%TimingQueue]={frame,scene,vertex,n.address,n.value};
+    timedHead.store(head+1,std::memory_order_release);
+    sceKernelSignalSema(timingSema,1);
+}
+
 void display_callback(const void* data) {
     const auto* d=static_cast<const DisplayData*>(data);
+    const uint64_t start=timingOn?twv::vita::processTimeUs():0;
     SceDisplayFrameBuf fb{};
-    fb.size=sizeof fb;fb.base=d->address;fb.pitch=DisplayStride;
-    fb.pixelformat=SCE_DISPLAY_PIXELFORMAT_A8B8G8R8;fb.width=DisplayWidth;fb.height=DisplayHeight;
+    fb.size=sizeof fb;fb.base=d->address;fb.pitch=renderStride;
+    fb.pixelformat=SCE_DISPLAY_PIXELFORMAT_A8B8G8R8;fb.width=renderWidth;fb.height=renderHeight;
     sceDisplaySetFrameBuf(&fb,SCE_DISPLAY_SETBUF_NEXTFRAME);
     sceDisplayWaitVblankStartMulti(1); // vitaGL's default swap interval
+    if(timingOn && d->frame) {
+        auto& rec=timedFrames[d->frame%TimingRing];
+        if(rec.frame.load(std::memory_order_acquire)==d->frame) {
+            rec.flipStart.store(start,std::memory_order_release);
+            rec.flipEnd.store(twv::vita::processTimeUs(),std::memory_order_release);
+        }
+    }
 }
 
 // --- Cg compiler (SceShaccCg, the user's module) ---
@@ -275,6 +346,7 @@ struct Program {
     std::vector<uint8_t> vertexDefaults,fragmentDefaults;
     std::vector<VertexVariant> vertexVariants;
     std::vector<FragmentVariant> fragmentVariants;
+    int discard=-1;uint32_t fragmentBytes=0; // GPU split receipts: alpha test, GXP size (on first use)
 };
 std::vector<Program> programs(1);
 std::vector<uint32_t> freeProgramIds;
@@ -467,12 +539,14 @@ struct Shadow {
 } shadow;
 void set_viewport(const Viewport& v) {
     if(shadow.valid && std::memcmp(&v,&shadow.viewport,sizeof v)==0)return;
-    sceGxmSetViewport(ctx,v.xOffset,v.xScale,v.yOffset,v.yScale,v.zOffset,v.zScale);shadow.viewport=v;
+    const auto s=scale_viewport(v,renderScaleX,renderScaleY);
+    sceGxmSetViewport(ctx,s.xOffset,s.xScale,s.yOffset,s.yScale,s.zOffset,s.zScale);shadow.viewport=v;
 }
 void set_region(const Region& r) {
     if(shadow.valid && r.xMin==shadow.region.xMin && r.yMin==shadow.region.yMin && r.xMax==shadow.region.xMax &&
        r.yMax==shadow.region.yMax)return;
-    sceGxmSetRegionClip(ctx,SCE_GXM_REGION_CLIP_OUTSIDE,r.xMin,r.yMin,r.xMax,r.yMax);shadow.region=r;
+    const auto s=scale_region(r,renderScaleX,renderScaleY,renderWidth,renderHeight);
+    sceGxmSetRegionClip(ctx,SCE_GXM_REGION_CLIP_OUTSIDE,s.xMin,s.yMin,s.xMax,s.yMax);shadow.region=r;
 }
 void set_depth(uint32_t func,uint32_t write) {
     if(!shadow.valid || func!=shadow.depthFunc) {
@@ -569,6 +643,34 @@ void wait_frame(uint64_t frame,uint64_t& counter) {
     }
     completedFrame=frame;
 }
+// GPU timing: sum every frame whose stamps are all in, oldest first. A frame still missing a
+// stamp after TimingRing-4 newer frames (or overwritten) is counted as dropped.
+uint64_t timed_done(uint64_t frame) {
+    if(!frame)return 0;
+    const auto& rec=timedFrames[frame%TimingRing];
+    if(rec.frame.load(std::memory_order_acquire)!=frame)return 0;
+    return rec.fragmentDone[rec.main.scenes-1].load(std::memory_order_acquire);
+}
+void timing_finalize() {
+    for(uint64_t f=timedFinal+1;f<frameSerial;++f) {
+        auto& rec=timedFrames[f%TimingRing];
+        if(rec.frame.load(std::memory_order_acquire)!=f){++timingDropped;timedFinal=f;continue;}
+        FrameTimes t=rec.main;
+        for(unsigned k=0;k<MaxTimedScenes;++k)t.fragmentDone[k]=rec.fragmentDone[k].load(std::memory_order_acquire);
+        t.vertexDone=rec.vertexDone.load(std::memory_order_acquire);
+        t.flipStart=rec.flipStart.load(std::memory_order_acquire);
+        t.flipEnd=rec.flipEnd.load(std::memory_order_acquire);
+        if(!t.complete()) {
+            if(frameSerial-f<TimingRing-4)break; // still on the GPU or in the display queue
+            ++timingDropped;timedFinal=f;continue;
+        }
+        const auto& previous=timedFrames[(f-1)%TimingRing];
+        const uint64_t previousFlip=previous.frame.load(std::memory_order_acquire)==f-1?
+            previous.flipEnd.load(std::memory_order_acquire):0;
+        timingWindow.add(frame_metrics(t,timed_done(f-1),timed_done(f-2),previousFlip),t.scenes,rec.segments.data());
+        timedFinal=f;
+    }
+}
 
 // --- table entries ---
 int gxm_init() {
@@ -597,8 +699,17 @@ int gxm_init() {
     context.fragmentUsseRingBufferMemSize=SCE_GXM_DEFAULT_FRAGMENT_USSE_RING_BUFFER_SIZE;
     context.fragmentUsseRingBufferOffset=fragmentUsseOffset;
     if(!ok(sceGxmCreateContext(&context,&ctx),"sceGxmCreateContext"))return 0;
+    const uint32_t features=twv_gpu_features();
+    if(features&(TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50)) {
+        renderWidth=features&TwvGpuFeatureScale75?720:features&TwvGpuFeatureScale67?640:480;
+        renderHeight=features&TwvGpuFeatureScale75?408:features&TwvGpuFeatureScale67?368:272;
+        renderStride=(renderWidth+63)&~63u;
+        renderScaleX=float(renderWidth)/float(DisplayWidth);renderScaleY=float(renderHeight)/float(DisplayHeight);
+        twv::vita::telemetryEvent("gxm_render_width",renderWidth);
+        twv::vita::telemetryEvent("gxm_render_height",renderHeight);
+    }
     SceGxmRenderTargetParams rt{};
-    rt.flags=0;rt.width=DisplayWidth;rt.height=DisplayHeight;rt.scenesPerFrame=8; // room for EFB splits (G5)
+    rt.flags=0;rt.width=renderWidth;rt.height=renderHeight;rt.scenesPerFrame=8; // room for EFB splits (G5)
     rt.multisampleMode=SCE_GXM_MULTISAMPLE_NONE;rt.multisampleLocations=0;rt.driverMemBlock=-1;
     if(!ok(sceGxmCreateRenderTarget(&rt,&target),"sceGxmCreateRenderTarget"))return 0;
     for(unsigned i=0;i<DisplayBuffers;++i) {
@@ -606,15 +717,15 @@ int gxm_init() {
         if(!gpu_block(displayMemory[i],name,SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,DisplayBytes,SCE_GXM_MEMORY_ATTRIB_RW))return 0;
         std::memset(displayMemory[i].base,0,DisplayBytes);
         if(!ok(sceGxmColorSurfaceInit(&displaySurface[i],SCE_GXM_COLOR_FORMAT_A8B8G8R8,SCE_GXM_COLOR_SURFACE_LINEAR,
-               SCE_GXM_COLOR_SURFACE_SCALE_NONE,SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT,DisplayWidth,DisplayHeight,
-               DisplayStride,displayMemory[i].base),"sceGxmColorSurfaceInit") ||
+               SCE_GXM_COLOR_SURFACE_SCALE_NONE,SCE_GXM_OUTPUT_REGISTER_SIZE_32BIT,renderWidth,renderHeight,
+               renderStride,displayMemory[i].base),"sceGxmColorSurfaceInit") ||
            !ok(sceGxmSyncObjectCreate(&displaySync[i]),"sceGxmSyncObjectCreate"))return 0;
     }
     // vitaGL's display depth/stencil: 32-bit float depth with mask bit, separate 8-bit stencil, linear.
     constexpr uint32_t depthBytes=DisplayStride*DisplayHeight*4,stencilBytes=DisplayStride*DisplayHeight;
     if(!gpu_block(depthMemory,"twv_gxm_depth",SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW,depthBytes+stencilBytes,SCE_GXM_MEMORY_ATTRIB_RW))return 0;
     if(!ok(sceGxmDepthStencilSurfaceInit(&depthSurface,SCE_GXM_DEPTH_STENCIL_FORMAT_DF32M_S8,SCE_GXM_DEPTH_STENCIL_SURFACE_LINEAR,
-           DisplayStride,depthMemory.base,static_cast<unsigned char*>(depthMemory.base)+depthBytes),"sceGxmDepthStencilSurfaceInit"))return 0;
+           renderStride,depthMemory.base,static_cast<unsigned char*>(depthMemory.base)+depthBytes),"sceGxmDepthStencilSurfaceInit"))return 0;
     sceGxmDepthStencilSurfaceSetBackgroundDepth(&depthSurface,1.0f);
     unsigned int vertexUsseOffset=0,patcherFragmentUsseOffset=0;
     if(!gpu_block(patcherBuffer,"twv_gxm_patcher",SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE,256*1024,SCE_GXM_MEMORY_ATTRIB_READ) ||
@@ -651,7 +762,24 @@ int gxm_init() {
         std::memcpy(quadTable+q*6,tri,sizeof tri);
     }
     notifications=sceGxmGetNotificationRegion();
-    for(unsigned i=0;i<FrameRing::Slots;++i)notifications[i]=0;
+    for(unsigned i=0;i<FrameRing::Slots;++i){notifications[i]=0;notifications[VertexNotificationBase+i]=0;}
+    if(twv_gpu_features()&TwvGpuFeatureTiming) {
+        timingSema=sceKernelCreateSema("twv_gxm_timing",0,0,TimingQueue,nullptr);
+        timingThread=timingSema<0?-1:sceKernelCreateThread("twv_gxm_timing",timing_main,64,16*1024,0,
+                                                         0x40000 /* SCE_KERNEL_CPU_MASK_USER_2 */,nullptr);
+        timingOn=timingThread>=0 && sceKernelStartThread(timingThread,0,nullptr)>=0;
+        if(!timingOn){++errors;twv::vita::telemetryText("gxm_error","GPU timing monitor thread");}
+        twv::vita::telemetryEvent("gxm_gpu_timing",timingOn);
+    }
+    if(timingOn && (twv_gpu_features()&TwvGpuFeatureSplit)) {
+        splitScenes=std::min<uint32_t>(twv_gpu_split_scenes(),MaxTimedScenes);
+        for(unsigned i=0;i<FrameRing::Slots*MaxTimedScenes;++i)notifications[SceneNotificationBase+i]=0;
+        depthFirst=depthNext=depthSurface;
+        sceGxmDepthStencilSurfaceSetForceStoreMode(&depthFirst,SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED);
+        sceGxmDepthStencilSurfaceSetForceLoadMode(&depthNext,SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED);
+        sceGxmDepthStencilSurfaceSetForceStoreMode(&depthNext,SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED);
+        twv::vita::telemetryEvent("gxm_gpu_split_scenes",splitScenes);
+    }
     ready=true;
     // Missing-texture stand-in (unit bound with no texture): 1x1 transparent black.
     missingTexture.width=missingTexture.height=missingTexture.levels=1;
@@ -715,16 +843,34 @@ void gxm_shutdown() {
     if(inScene){sceGxmEndScene(ctx,nullptr,nullptr);inScene=false;}
     sceGxmDisplayQueueFinish();
     sceGxmFinish(ctx);
+    if(timingOn) { // every queued notification has been written: the monitor drains, then stops
+        timingStop.store(true,std::memory_order_release);sceKernelSignalSema(timingSema,1);
+        SceUInt timeout=200000;sceKernelWaitThreadEnd(timingThread,nullptr,&timeout);
+        timingOn=false;
+    }
     ready=false; // process-lifetime pools end with the app, as for vitaGL
 }
 void gxm_begin() {
     if(!ready || inScene)return;
     const uint64_t frame=++frameSerial;
+    const uint64_t waitedBefore=frameWaitUs;
     wait_frame(frame>FrameRing::Slots?frame-FrameRing::Slots:0,frameWaits);
+    if(timingOn) {
+        auto& rec=timedFrames[frame%TimingRing];
+        rec.frame.store(0,std::memory_order_release);
+        for(auto& done:rec.fragmentDone)done.store(0,std::memory_order_relaxed);
+        rec.vertexDone.store(0,std::memory_order_relaxed);
+        rec.flipStart.store(0,std::memory_order_relaxed);rec.flipEnd.store(0,std::memory_order_relaxed);
+        rec.main=FrameTimes{};rec.segments={};
+        rec.main.begin=twv::vita::processTimeUs();rec.main.fenceWait=frameWaitUs-waitedBefore;
+        rec.frame.store(frame,std::memory_order_release);
+    }
     collect_completed();
     ring.begin(frame);
-    if(!ok(sceGxmBeginScene(ctx,0,target,nullptr,nullptr,displaySync[backBuffer],&displaySurface[backBuffer],&depthSurface),
-           "sceGxmBeginScene"))return;
+    frameSplits=splitScenes?split_points(frameDraws,splitScenes,splitStarts):1;
+    frameScene=0;frameDraws=0;
+    if(!ok(sceGxmBeginScene(ctx,0,target,nullptr,nullptr,displaySync[backBuffer],&displaySurface[backBuffer],
+                            frameSplits>1?&depthFirst:&depthSurface),"sceGxmBeginScene"))return;
     inScene=true;shadow.valid=false;
     // Physical pillarbox and depth reset, as the vitaGL backend's full-screen glClear.
     draw_clear(0,0,0,1,1.f,7,0,0,DisplayWidth,DisplayHeight);
@@ -733,20 +879,32 @@ int gxm_end(const char* capture) {
     if(!ready || !inScene)return 0;
     const uint64_t frame=frameSerial;
     SceGxmNotification done{&notifications[frame%FrameRing::Slots],unsigned(frame)};
-    ok(sceGxmEndScene(ctx,nullptr,&done),"sceGxmEndScene");
+    SceGxmNotification vertexDone{&notifications[VertexNotificationBase+frame%FrameRing::Slots],unsigned(frame)};
+    auto& timed=timedFrames[frame%TimingRing];
+    if(timingOn)timed.main.submit[timed.main.scenes-1]=twv::vita::processTimeUs();
+    ok(sceGxmEndScene(ctx,timingOn?&vertexDone:nullptr,&done),"sceGxmEndScene");
+    if(timingOn) {
+        timing_wait(frame,0,true,vertexDone);
+        timing_wait(frame,timed.main.scenes-1,false,done);
+    }
     inScene=false;++frames;
     if(capture) {
         wait_frame(frame,captureWaits);
         const unsigned char* pixels=static_cast<const unsigned char*>(displayMemory[backBuffer].base);
         std::vector<unsigned char> copy(pixels,pixels+DisplayBytes);
-        twv::gpu::write_png_rgba(capture,copy.data(),DisplayWidth,DisplayHeight,DisplayStride*4,false);
+        twv::gpu::write_png_rgba(capture,copy.data(),renderWidth,renderHeight,renderStride*4,false);
     }
     const uint64_t presentStart=twv::vita::processTimeUs();
     sceGxmPadHeartbeat(&displaySurface[backBuffer],displaySync[backBuffer]);
-    DisplayData data{displayMemory[backBuffer].base};
+    DisplayData data{displayMemory[backBuffer].base,timingOn?frame:0};
     ok(sceGxmDisplayQueueAddEntry(displaySync[frontBuffer],displaySync[backBuffer],&data),"DisplayQueueAddEntry");
     frontBuffer=backBuffer;backBuffer=(backBuffer+1)%DisplayBuffers;
-    twv_vgl_profile_add(TWV_PROFILE_PRESENT,twv::vita::processTimeUs()-presentStart);
+    const uint64_t presentEnd=twv::vita::processTimeUs();
+    twv_vgl_profile_add(TWV_PROFILE_PRESENT,presentEnd-presentStart);
+    if(timingOn) {
+        timed.main.presentStart=presentStart;timed.main.presentEnd=presentEnd;
+        timing_finalize();
+    }
     return 1;
 }
 void gxm_pacing_report() {
@@ -754,6 +912,32 @@ void gxm_pacing_report() {
     twv::vita::telemetryEvent("gfx_unique_programs",uniquePrograms);
     // vitaGL's name, so tools/vita_run_report.py bounds its windows the same way (SceShaccCg compiles).
     twv::vita::telemetryEvent("gfx_shader_stage_compile_calls",stageCompiles);
+    if(timingOn) { // per-frame means over the frames finalised since the last window
+        const auto& w=timingWindow;
+        twv::vita::telemetryEvent("gxm_gpu_timed_frames",w.frames);
+        twv::vita::telemetryEvent("gxm_gpu_busy_us",w.mean(w.sum.gpuBusy));
+        twv::vita::telemetryEvent("gxm_gpu_busy_max_us",w.maxGpuBusy);
+        twv::vita::telemetryEvent("gxm_gpu_latency_us",w.mean(w.sum.gpuLatency));
+        twv::vita::telemetryEvent("gxm_gpu_starved_us",w.mean(w.sum.gpuStarved));
+        twv::vita::telemetryEvent("gxm_gpu_vertex_tail_us",w.mean(w.sum.vertexTail));
+        twv::vita::telemetryEvent("gxm_present_wait_us",w.mean(w.sum.presentWait));
+        twv::vita::telemetryEvent("gxm_present_wait_max_us",w.maxPresentWait);
+        twv::vita::telemetryEvent("gxm_present_gpu_us",w.mean(w.sum.presentGpu));
+        twv::vita::telemetryEvent("gxm_present_display_us",w.mean(w.sum.presentDisplay));
+        twv::vita::telemetryEvent("gxm_flip_interval_us",w.flip_mean());
+        twv::vita::telemetryEvent("gxm_display_lag_us",w.mean(w.sum.displayLag));
+        twv::vita::telemetryEvent("gxm_fence_wait_us",w.mean(w.sum.fenceWait));
+        twv::vita::telemetryEvent("gxm_gpu_timing_dropped",timingDropped);
+        twv::vita::telemetryEvent("gxm_gpu_timing_queue_full",timingQueueFull);
+        if(splitScenes) {
+            twv::vita::telemetryEvent("gxm_gpu_split_window_scenes",w.report_scenes());
+            for(unsigned k=0;k<w.report_scenes();++k) {
+                char text[160];
+                if(w.segment_text(k,text,sizeof text)>0)twv::vita::telemetryText("gxm_gpu_segment",text);
+            }
+        }
+        timingWindow=TimingWindow{};
+    }
 }
 void gxm_report() {
     twv::vita::telemetryEvent("gxm_frame_waits",frameWaits);
@@ -839,6 +1023,25 @@ void uniform4(Program& p,const UniformRef& u,int count,const float* values) {
     auto& buffer=u.fragment?p.fragmentDefaults:p.vertexDefaults;
     if(!buffer.empty())sceGxmSetUniformDataF(buffer.data(),u.param,0,unsigned(count)*4,values);
 }
+// GPU split: end the current scene with its own notification and begin the next one on the
+// same surfaces, depth reloaded. Draw state is set again after every BeginScene.
+void split_scene() {
+    const uint64_t frame=frameSerial;
+    auto& rec=timedFrames[frame%TimingRing];
+    SceGxmNotification done{&notifications[SceneNotificationBase+(frame%FrameRing::Slots)*MaxTimedScenes+frameScene],
+                            unsigned(frame)};
+    rec.main.submit[frameScene]=twv::vita::processTimeUs();
+    if(!ok(sceGxmEndScene(ctx,nullptr,&done),"sceGxmEndScene split")){frameSplits=frameScene+1;return;}
+    timing_wait(frame,frameScene,false,done);
+    ++frameScene;rec.main.scenes=frameScene+1;
+    inScene=ok(sceGxmBeginScene(ctx,0,target,nullptr,nullptr,displaySync[backBuffer],&displaySurface[backBuffer],&depthNext),
+               "sceGxmBeginScene split");
+    shadow.valid=false;
+    if(!inScene) { // not expected with these surfaces: drop the frame, never leave its fence unwritten
+        splitScenes=0;frameSplits=1;sceGxmFinish(ctx);
+        notifications[frame%FrameRing::Slots]=unsigned(frame);
+    }
+}
 void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint16_t* indices,uint32_t indexCount) {
     const uint32_t samplerMask=pendingMask;pendingMask=0;
     if(pendingFailure) {
@@ -865,6 +1068,10 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     } else if(!indexCount) {
         if(count>65536){++drawsSkipped;return;}
         drawIndices=linearIndices;drawCount=count; // GXM draws are always indexed
+    }
+    if(frameScene+1<frameSplits && frameDraws>=splitStarts[frameScene+1]) {
+        split_scene();
+        if(!inScene)return;
     }
     if(s->primitive<4)++primitiveDraws[s->primitive];
     set_viewport(viewport(s->viewport[0],s->viewport[1],s->viewport[2],s->viewport[3]));
@@ -908,7 +1115,17 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     }
     sceGxmSetVertexStream(ctx,0,v);
     if(vertex->generic)sceGxmSetVertexStream(ctx,1,zeroAttribute);
-    if(ok(sceGxmDraw(ctx,primitive,SCE_GXM_INDEX_FORMAT_U16,drawIndices,drawCount),"sceGxmDraw"))++draws;
+    if(!ok(sceGxmDraw(ctx,primitive,SCE_GXM_INDEX_FORMAT_U16,drawIndices,drawCount),"sceGxmDraw"))return;
+    ++draws;++frameDraws;
+    if(splitScenes && timingOn) {
+        if(p.discard<0){p.discard=sceGxmProgramIsDiscardUsed(p.fs->program())?1:0;p.fragmentBytes=sceGxmProgramGetSize(p.fs->program());}
+        auto& seg=timedFrames[frameSerial%TimingRing].segments[frameScene];
+        ++seg.draws;
+        seg.triangles+=twv::gxm::triangles(primitive==SCE_GXM_PRIMITIVE_TRIANGLE_STRIP?1:primitive==SCE_GXM_PRIMITIVE_TRIANGLE_FAN?2:0,
+                                           drawCount);
+        seg.blended+=s->blend?1:0;seg.discard+=uint64_t(p.discard);seg.noDepth+=s->depth_test?0:1;
+        seg.fragmentBytes+=p.fragmentBytes;
+    }
 }
 uint32_t gxm_texture(uint32_t width,uint32_t height,uint32_t levels) {return create_texture(width,height,levels,nullptr);}
 uint32_t gxm_texture_static_rgba(uint32_t width,uint32_t height,uint32_t levels,const void* bytes,size_t size) {
@@ -972,6 +1189,7 @@ const TwvGpuBackend gxmBackend{
     gxm_program,gxm_program_delete,gxm_draw,gxm_texture,gxm_texture_static_rgba,
     gxm_texture_write,gxm_texture_delete,gxm_texture_sampler,gxm_texture_sampler_unit,gxm_clear,
     gxm_resident_available,gxm_resident_alloc,gxm_resident_release,
-    TwvGpuFeaturePrimitives|TwvGpuFeatureCompact|TwvGpuFeatureCompactColors|TwvGpuFeatureResident};
+    TwvGpuFeaturePrimitives|TwvGpuFeatureCompact|TwvGpuFeatureCompactColors|TwvGpuFeatureResident|
+    TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}

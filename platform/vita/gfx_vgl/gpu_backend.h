@@ -50,5 +50,5 @@ const TwvGpuBackend* twv_gpu_backend_gxm(void);
 // the backend is not compiled in, or when called twice or after init.
 int twv_vita_gpu_select(int backend, int digest, uint32_t digest_first, uint32_t digest_last,
                         uint32_t capture_first, uint32_t capture_last, uint32_t capture_step,
-                        int capture_match, uint32_t features);
+                        int capture_match, uint32_t features, uint32_t split_scenes);
 }

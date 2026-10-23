@@ -64,6 +64,9 @@ Available in every build:
 | `--vita-gxm-resident=on\|off` | `off` | GXM only: certified geometry and static-list indices stay in a GPU memory arena instead of being copied every frame |
 | `--vita-gxm-compact=off\|on\|colors` | `off` | GXM only: integer positions, normals and texture coordinates keep their GX format (exact); `colors` also sends RGBA8 colours as bytes |
 | `--vita-gxm-primitives=on\|off` | `off` | GXM only: quads, strips and fans drawn natively, without index lists (aurora 0008) |
+| `--vita-gxm-gpu-timing=on\|off` | `off` | GXM diagnostic: per-frame GPU time and what presenting waits for, stamped from the GPU's notifications and the display callback (retail GXM has no GPU timestamps) |
+| `--vita-gxm-gpu-split=N` | off | GXM diagnostic, N = 2-8: each frame cut into N scenes of equal draw shares, each with its own GPU time; the extra depth loads and stores keep the picture and add GPU time |
+| `--vita-gxm-scale=100\|75\|67\|50` | `100` | GXM diagnostic: render at 720x408, 640x368 or 480x272 and let the display scale up, to test whether a frame is fill-bound; changes the picture |
 | `--vita-pipeline-fast=off\|on\|verify` | `off` | fill the GX pipeline config in place and look it up by a compact key, instead of rebuilding, hashing and comparing the whole ~2.7 KB config at every state change; `verify` runs both and counts differences (`gfx_pipeline_fast_*_mismatch`) |
 | `--vita-gpu-digest=off\|on\|draws:A-B` | `off` | one `gfx_digest` receipt per frame: a hash of what the frame hands to the renderer; `draws:A-B` also writes each draw's hash for frames A to B to `digest_draws.txt` |
 | `--vita-capture=A-B/S` | off | PNG captures of frames A, A+S, ... up to B (at most 48) in `ux0:data/twilight-vita/captures/` |
@@ -135,6 +138,9 @@ Buffered lines are written by a low-priority thread on core 2, and drained at a 
   kinds of work (`gfx_decode_probe_*`: BP, XF and CP register decode, static lists, draw parsing,
   pipeline lookup, draw setup, backend draws, the rest); `tools/vita_run_report.py` prints it per run.
 - Off-screen draws the renderer drops, per target size (`gfx_offscreen_discard_<w>x<h>`).
+- GXM GPU timing: GPU busy, latency and idle time, present waits, flip interval and fence waits
+  (`gxm_gpu_*`, `gxm_present_*`), and with the split one `gxm_gpu_segment` per scene; the run report
+  prints them. Emulator values mean nothing here.
 - Stops: `stub_trap` (an unimplemented symbol), `abort`, `terminate`, the end of a timed run.
 
 ## Measuring on the console

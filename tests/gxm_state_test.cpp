@@ -46,6 +46,19 @@ static void state() {
     const auto top=scissor_region(200,500,10,44); // GL y=500..543 is the top band
     assert(top.yMin==0 && top.yMax==43 && top.xMin==200 && top.xMax==209);
     assert(scissor_region(950,0,40,10).xMax==959 && scissor_region(0,0,0,10).empty);
+    // Diagnostic render scale: identity at 1; regions grow outward and stay on the surface.
+    {
+        const auto same=scale_region(r,1.f,1.f,960,544);
+        assert(same.xMin==118 && same.xMax==841 && same.yMin==0 && same.yMax==543);
+        const auto s=scale_region(r,0.75f,0.75f,720,408); // x 88.5..631.5 -> 88..631
+        assert(s.xMin==88 && s.xMax==631 && s.yMin==0 && s.yMax==407);
+        const auto full=scale_region(scissor_region(0,0,960,544),640.f/960.f,368.f/544.f,640,368);
+        assert(full.xMin==0 && full.xMax==639 && full.yMin==0 && full.yMax==367);
+        assert(scale_region(scissor_region(0,0,0,10),0.5f,0.5f,480,272).empty);
+        const auto sv=scale_viewport(v,0.5f,0.5f),one=scale_viewport(v,1.f,1.f);
+        assert(sv.xOffset==240.f && sv.xScale==181.f && sv.yOffset==136.f && sv.yScale==-136.f && sv.zScale==.5f);
+        assert(one.xOffset==v.xOffset && one.yScale==v.yScale);
+    }
     const auto q=clear_quad(0,0,960,544,1.f);
     assert(q.x0==-1.f && q.x1==1.f && q.yTop==1.f && q.yBottom==-1.f && q.z==1.f);
     const auto g=clear_quad(118,0,724,544,0.5f);
