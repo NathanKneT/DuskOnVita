@@ -58,6 +58,9 @@ Available in every build:
 | `--vita-exit-after=SECONDS` | off | 10-3600: the run ends itself that long after Link first appears, with the receipts written |
 | `--vita-static-geometry=off\|on\|verify` | `off` | J3D display lists and their arrays by reference (aurora 0006, dusklight 0014); certified cache hits skip the byte comparison; `verify` compares every certified hit and counts differences |
 | `--vita-gx-thread=off\|on` | `off` | Aurora's GX FIFO, and every vitaGL draw, on a worker thread on core 1 (aurora 0007); the game thread keeps core 0 |
+| `--vita-gpu-digest=off\|on\|draws:A-B` | `off` | one `gfx_digest` receipt per frame: a hash of what the frame hands to the renderer; `draws:A-B` also writes each draw's hash for frames A to B to `digest_draws.txt` |
+| `--vita-capture=A-B/S` | off | PNG captures of frames A, A+S, ... up to B (at most 48) in `ux0:data/twilight-vita/captures/` |
+| `--vita-capture-match=on\|off` | `off` | with the digest on, also capture the first frame whose digest is listed in `capture_match.txt` |
 
 In the performance build, or with the matching `-D` option:
 
@@ -99,6 +102,16 @@ Stages outside the bundle still compile when first met; `gfx_shader_play_compile
 `gfx_shader_play_slow_compiles` (50 ms or more) count them after Link first appears. The bundle
 encodes the game's material configurations: make it on your console for your own use, and do not
 share or commit it.
+
+## Comparing renderers
+
+The draw digest hashes content, never handles or addresses: each program's Cg sources, each texture's
+size and uploaded bytes and sampler, each draw's state, the vertex bytes the GPU reads and the
+indices. Two runs, or two renderers, fed the same draws give the same digest frame by frame.
+`python3 tools/vita_gpu_compare.py digests RUN_A/runtime.jsonl RUN_B/runtime.jsonl` lines two runs up
+and reports the first frame that differs; `match-list` writes the digests of a run's captures for
+`--vita-capture-match`; `pixels CAPTURES_A CAPTURES_B` compares captures with equal digests pixel by
+pixel.
 
 ## Receipts
 

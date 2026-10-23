@@ -3,6 +3,7 @@
 // (src/m_Do/m_Do_main.cpp game_main) with the disc at its fixed Vita location.
 #include "runtime/telemetry.hpp"
 #include "runtime/renderer_options.hpp"
+#include "runtime/gpu_options.hpp"
 #include "runtime/clock_policy.hpp"
 #include "runtime/run_control.hpp"
 #include "runtime/run_sequence.hpp"
@@ -34,6 +35,10 @@ extern "C" int twv_vita_shader_capture_select(int enabled) __attribute__((weak))
 extern "C" int twv_vita_neon_decode_select(int mode) __attribute__((weak));
 // Strong on purpose: it pulls runtime/gx_thread.o (and the worker's core hook) into the link.
 extern "C" int twv_vita_gx_thread_pin_main(void);
+// G0/G1 (gfx_vgl/gpu_dispatch.cpp): backend, draw digest and frame capture. Absent in null-graphics builds.
+extern "C" int twv_vita_gpu_select(int backend, int digest, uint32_t digest_first, uint32_t digest_last,
+                                   uint32_t capture_first, uint32_t capture_last, uint32_t capture_step,
+                                   int capture_match) __attribute__((weak));
 #if TWV_VITA_BENCHMARK
 extern "C" int twv_vita_benchmark_enable(const char*);
 #endif
@@ -126,6 +131,7 @@ int main(int, char**) {
     char* gameArgs[32] = {arg0, arg1, arg2, arg3, arg4};
     int gameArgc = 5;
     twv::vita::RendererOptions rendererOptions;
+    twv::vita::GpuOptions gpuOptions;
     twv::vita::ClockOptions clockOptions;
     twv::vita::ExitAfterOption exitAfter;
     // A test sequence (run_sequence.hpp) takes precedence over args.txt until
@@ -197,6 +203,15 @@ int main(int, char**) {
                 twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
             }
             if (exitOption > 0) continue;
+            const int gpuOption = gpuOptions.consume(token);
+            if (gpuOption < 0) {
+                twv::vita::telemetryText("args_error", "GPU option invalid or selected more than once; see runtime/gpu_options.hpp");
+                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+            }
+            if (gpuOption > 0) {
+                twv::vita::telemetryText("gpu_option", token);
+                continue;
+            }
             const int rendererOption=rendererOptions.consume(token);
             const bool unavailable=(rendererOption==1 && (!twv_vita_stream_decode_select ||
                     !twv_vita_stream_decode_select(rendererOptions.streamDecode))) ||
@@ -304,6 +319,17 @@ int main(int, char**) {
         twv::vita::telemetryText("args_error","render bundle unavailable or selected after first use");
         twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
     }
+    if (gpuOptions.backendSelected || gpuOptions.digestSelected || gpuOptions.captureSelected ||
+        gpuOptions.matchSelected) {
+        if (!gpuOptions.consistent() || !twv_vita_gpu_select ||
+            !twv_vita_gpu_select(gpuOptions.backend, gpuOptions.digest, gpuOptions.digestFirst,
+                                 gpuOptions.digestLast, gpuOptions.captureFirst, gpuOptions.captureLast,
+                                 gpuOptions.captureStep, gpuOptions.captureMatch)) {
+            twv::vita::telemetryText("args_error", "GPU backend not in this build, or capture-match without digest");
+            twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        }
+    }
+    twv::vita::telemetryText("gpu_backend_requested", gpuOptions.backend ? "gxm" : "vgl");
     twv::vita::telemetryEvent("render_bundle_compiled",twv_vita_bundle_compiled());
     twv::vita::telemetryEvent("render_bundle_requested_features",rendererOptions.bundle_features());
     twv::vita::telemetryEvent("render_bundle_explicit",rendererOptions.bundleSelected || rendererOptions.featureSelected || rendererOptions.memorySelected);

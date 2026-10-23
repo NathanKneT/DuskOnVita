@@ -110,16 +110,22 @@ endif()
 
 if(TWV_VITA_GFX_VGL)
     include(cmake/VitaGL.cmake)
-    option(TWV_VITA_CAPTURE_FRAMES "Capture up to eight actual GPU frames (diagnostic IO cost)" OFF)
     option(TWV_VITA_SAMPLER_CACHE "Skip identical object sampler updates with bounded exact texture-ID shadows" ON)
     option(TWV_VITA_UNIFORM_CACHE "Skip byte-identical vec4 uploads with bounded program-object shadows" ON)
     option(TWV_VITA_RASTER_CACHE "Skip unchanged draw raster state; invalidate at clear/frame/context boundaries" ON)
     option(TWV_VITA_SHADER_STAGE_CACHE "Share exact compiled Cg stages between independently linked programs" ON)
     option(TWV_VITA_SHADER_WARMUP "Prepare optional private Cg source bundle before gameplay; retain startup time receipts" ON)
     option(TWV_VITA_SHADER_SOURCE_CAPTURE "Record bounded generated Cg source for a private warmup bundle (diagnostic IO)" OFF)
+    # gpu_dispatch.cpp exports twv_vgl_* and forwards to the start-up backend
+    # (--vita-gpu); gpu_api.cpp is the vitaGL backend, gpu_common.cpp the shared receipts.
     target_sources(twv_vita_runtime PRIVATE platform/vita/gfx_vgl/gpu_api.cpp
+        platform/vita/gfx_vgl/gpu_dispatch.cpp
+        platform/vita/gfx_vgl/gpu_common.cpp
+        platform/vita/gfx_vgl/frame_capture.cpp
         platform/vita/gfx_vgl/shader_preparation.cpp
         platform/vita/gfx_vgl/resident_geometry.cpp)
+    set_property(SOURCE platform/vita/gfx_vgl/gpu_common.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS TWV_VITA_DRAW_TIMERS=$<BOOL:${TWV_VITA_DRAW_TIMERS}>)
     set_property(SOURCE platform/vita/gfx_vgl/shader_preparation.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_SHADER_WARMUP=$<BOOL:${TWV_VITA_SHADER_WARMUP}>
                             TWV_VITA_SHADER_SOURCE_CAPTURE=$<BOOL:${TWV_VITA_SHADER_SOURCE_CAPTURE}>)
@@ -129,12 +135,8 @@ if(TWV_VITA_GFX_VGL)
                             TWV_VITA_RASTER_CACHE=$<BOOL:${TWV_VITA_RASTER_CACHE}>
                             TWV_VITA_SHADER_STAGE_CACHE=$<BOOL:${TWV_VITA_SHADER_STAGE_CACHE}>
                             TWV_VITA_DRAW_TIMERS=$<BOOL:${TWV_VITA_DRAW_TIMERS}>)
-    if(TWV_VITA_CAPTURE_FRAMES)
-        set_property(SOURCE platform/vita/gfx_vgl/gpu_api.cpp APPEND PROPERTY
-            COMPILE_DEFINITIONS TWV_VITA_CAPTURE_FRAMES=1)
-    endif()
     target_link_libraries(twv_vita_runtime PUBLIC
-        twv_vitagl vitashark SceShaccCgExt mathneon zip z taihen_stub toloader
+        twv_xxhash twv_vitagl vitashark SceShaccCgExt mathneon zip z taihen_stub toloader
         SceShaccCg_stub SceGxm_stub SceDisplay_stub SceSysmodule_stub
         SceCommonDialog_stub SceAppMgr_stub SceAppUtil_stub SceKernelDmacMgr_stub SceCtrl_stub PNG::PNG)
 endif()

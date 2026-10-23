@@ -1,5 +1,10 @@
 // SDK domain: short enums, no game/Aurora headers. Serialized by FIFO frame drain.
+// The vitaGL backend (--vita-gpu=vgl, default). Its entry points are reached through
+// the table at the end of this file; gpu_dispatch.cpp exports twv_vgl_*.
 #include "gpu_api.h"
+#include "gpu_backend.h"
+#include "gpu_common.hpp"
+#include "frame_capture.hpp"
 #include "scratch_alloc.hpp"
 #include "staging_policy.hpp"
 #include "write_class_cache.hpp"
@@ -7,7 +12,6 @@
 #include "cache_budget.hpp"
 #include "sampler_state.hpp"
 #include "uniform_state.hpp"
-#include "frame_pacing.hpp"
 #include "profile_scope.hpp"
 #include "raster_state.hpp"
 #include "shader_stage_pool.hpp"
@@ -38,22 +42,12 @@ extern "C" void vglGetUniformReservationDiagnostics(uint64_t*,uint64_t*,uint64_t
 #include <cstdio>
 #include <cstdlib>
 #include <cstddef>
-#include <png.h>
 #include <vector>
 #include <array>
 #include <map>
 #include <string>
 #include <algorithm>
 #include <malloc.h>
-extern "C" unsigned int _newlib_heap_size_user;
-#ifndef TWV_VITA_CAPTURE_FRAMES
-#define TWV_VITA_CAPTURE_FRAMES 0
-#endif
-
-namespace { int request_unit_sampler(uint32_t,int,int,int,int); }
-extern "C" int twv_vgl_texture_sampler_unit(uint32_t unit,int min,int mag,int s,int t) {
-    return request_unit_sampler(unit,min,mag,s,t);
-}
 
 namespace {
 bool ready = false;
@@ -76,8 +70,6 @@ std::map<ProgramKey,GLuint> programCache;
 uint32_t programCacheHits = 0, uniquePrograms = 0;
 twv::vgl::ShaderStagePool<> shaderStagePool;
 uint64_t shaderStageRequests=0,shaderCompileCalls=0;
-std::array<uint64_t,TWV_PROFILE_COUNT> profileUs{};
-twv::vgl::FramePacing framePacing;
 uint64_t directVertexBytes = 0, directIndexBytes = 0;
 TwvVitaVertexLayout activeLayout{};
 twv::vgl::TextureSamplerCache textureSamplerCache;
@@ -107,16 +99,6 @@ twv::vita::SubmitObserver submitObserver;
 bool submitObserverEnabled=false;
 uint64_t textureZeroInitBytes=0,textureDirectInitBytes=0;
 void submit_barrier(){if(submitObserverEnabled)submitObserver.barrier();}
-struct CpuHeapUsage {uint32_t valid=0,used=0,arena=0;};
-CpuHeapUsage cpu_heap_usage() {
-    const auto info=mallinfo();
-    CpuHeapUsage result;
-    if(info.arena>0 && info.uordblks>=0 && info.hblkhd>=0 && info.uordblks<=info.arena) {
-        const uint64_t used=uint64_t(info.uordblks)+uint64_t(info.hblkhd);
-        if(used<=UINT32_MAX)result={1,uint32_t(used),uint32_t(info.arena)};
-    }
-    return result;
-}
 GLenum wrap(int n);
 // C03_SAMPLER_UNIT_HELPERS_BEGIN
 bool unit_sampler_gl_ok(unsigned phase) {
@@ -238,53 +220,7 @@ void unit_sampler_receipts() {
     }
 }
 // C03_SAMPLER_UNIT_HELPERS_END
-void profile_receipts(uint64_t now) {
-    twv::vgl::FramePacingStats pacing;
-    if(!framePacing.frame_end(now,pacing))return;
-    const char* names[] = {"prof_vertex_cpu_us", "prof_gl_submit_us", "prof_shader_us",
-        "prof_state_us", "prof_pipeline_us", "prof_present_us",
-        "prof_fifo_inclusive_us", "prof_game_execute_inclusive_us", "prof_game_audio_us",
-        "prof_vi_callbacks_us", "prof_painter_inclusive_us", "prof_events_us"};
-    twv::vita::telemetryEvent("prof_frame_samples",pacing.frames);
-    twv::vita::telemetryEvent("prof_draw_timers_enabled",TWV_VITA_DRAW_TIMERS);
-    twv::vita::telemetryEvent("prof_interval_samples",pacing.intervals);
-    twv::vita::telemetryEvent("prof_interval_rejected",pacing.rejected);
-    twv::vita::telemetryEvent("prof_frame_interval_us",pacing.meanUs);
-    twv::vita::telemetryEvent("prof_frame_min_us",pacing.minUs);
-    twv::vita::telemetryEvent("prof_frame_p50_us",pacing.p50Us);
-    twv::vita::telemetryEvent("prof_frame_p95_us",pacing.p95Us);
-    twv::vita::telemetryEvent("prof_frame_p99_us",pacing.p99Us);
-    twv::vita::telemetryEvent("prof_frame_max_us",pacing.maxUs);
-    twv::vita::telemetryEvent("prof_frame_over_33334us",pacing.overBudget);
-    // One bounded group per existing 30-frame report, never per frame. Text
-    // preserves full unsigned timestamps/long intervals through signed EventLog.
-    // Repeating the small schema lets a complete extracted window stand alone.
-    char histogram[256];
-    std::snprintf(histogram,sizeof histogram,
-        "v=1;unit=us;e=%llu;s=%llu;f=%lu;a=%lu;r=%lu;t0=%llu;t1=%llu;x=%llu",
-        static_cast<unsigned long long>(pacing.epoch),
-        static_cast<unsigned long long>(pacing.sequence),
-        static_cast<unsigned long>(pacing.frames),
-        static_cast<unsigned long>(pacing.intervals),
-        static_cast<unsigned long>(pacing.rejected),
-        static_cast<unsigned long long>(pacing.startUs),
-        static_cast<unsigned long long>(pacing.endUs),
-        static_cast<unsigned long long>(pacing.maxUs));
-    twv::vita::telemetryText("prof_interval_hist_begin",histogram);
-    twv::vita::telemetryText("prof_interval_hist_bounds_us",twv::vgl::FrameIntervalBoundsText);
-    size_t histogramUsed=0;
-    for(size_t i=0;i<pacing.histogram.size();++i)
-        histogramUsed+=size_t(std::snprintf(histogram+histogramUsed,sizeof histogram-histogramUsed,
-            "%s%lu",i?",":"",static_cast<unsigned long>(pacing.histogram[i])));
-    twv::vita::telemetryText("prof_interval_hist_counts",histogram);
-    std::snprintf(histogram,sizeof histogram,"e=%llu;s=%llu",
-        static_cast<unsigned long long>(pacing.epoch),static_cast<unsigned long long>(pacing.sequence));
-    twv::vita::telemetryText("prof_interval_hist_end",histogram);
-    for(size_t i=0;i<profileUs.size();++i) {
-        if(twv::vgl::profile_category_enabled(i))
-            twv::vita::telemetryEvent(names[i],profileUs[i]/pacing.frames);
-        profileUs[i]=0;
-    }
+void vgl_pacing_report() {
     twv::vita::telemetryEvent("gfx_program_cache_hits",programCacheHits);
     twv::vita::telemetryEvent("gfx_unique_programs",uniquePrograms);
     twv::vita::telemetryEvent("gfx_shader_stage_requests",shaderStageRequests);
@@ -309,54 +245,13 @@ void profile_receipts(uint64_t now) {
     twv::vita::telemetryEvent("gfx_raster_requests",rasterRequests);
     twv::vita::telemetryEvent("gfx_raster_updates",rasterUpdates);
     twv::vita::telemetryEvent("gfx_raster_skips",rasterRequests-rasterUpdates);
-    const auto audio=twv::vita::audio::stats();
-    twv::vita::telemetryEvent("audio_buffers",audio.buffers);
-    twv::vita::telemetryEvent("audio_late_buffers",audio.late);
-    twv::vita::telemetryEvent("audio_max_render_us",audio.maxRenderUs);
-    twv::vita::telemetryFlush();
 }
-void capture_frame() {
-#if TWV_VITA_CAPTURE_FRAMES
-    // Actual framebuffer readback, never a CPU reference render. Bounded to
-    // eight images; disabled in ordinary builds to avoid SD/CPU overhead.
-    if(frames<60 || frames>270 || frames%30) return;
+void capture_frame(const char* path) {
+    // Actual framebuffer readback, never a CPU reference render. GL rows are
+    // bottom-up; the PNG is written top row first like the GXM capture.
     std::vector<unsigned char> pixels(960*544*4);
     glReadPixels(0,0,960,544,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());
-    char path[192]; std::snprintf(path,sizeof path,"ux0:data/twilight-vita/frame-%06lu.png",static_cast<unsigned long>(frames));
-    FILE* file=std::fopen(path,"wb");
-    if(!file) {twv::vita::telemetryText("capture_error",path);return;}
-    png_structp png=png_create_write_struct(PNG_LIBPNG_VER_STRING,nullptr,nullptr,nullptr);
-    png_infop info=png?png_create_info_struct(png):nullptr;
-    if(!png || !info || setjmp(png_jmpbuf(png))) {
-        if(png)png_destroy_write_struct(&png,info?&info:nullptr);
-        std::fclose(file); twv::vita::telemetryText("capture_error",path);return;
-    }
-    png_init_io(png,file);
-    png_set_IHDR(png,info,960,544,8,PNG_COLOR_TYPE_RGBA,PNG_INTERLACE_NONE,PNG_COMPRESSION_TYPE_DEFAULT,PNG_FILTER_TYPE_DEFAULT);
-    png_write_info(png,info);
-    for(int y=543;y>=0;--y)png_write_row(png,pixels.data()+size_t(y)*960*4);
-    png_write_end(png,info);png_destroy_write_struct(&png,&info);std::fclose(file);
-    twv::vita::telemetryText("frame_capture",path);
-#endif
-}
-void memory_receipts() {
-    const auto heap=cpu_heap_usage();
-    twv::vita::telemetryEvent("cpu_heap_stats_valid",heap.valid);
-    twv::vita::telemetryEvent("cpu_heap_limit_bytes",_newlib_heap_size_user);
-    if(heap.valid) {
-        twv::vita::telemetryEvent("cpu_heap_used_bytes",heap.used);
-        twv::vita::telemetryEvent("cpu_heap_arena_bytes",heap.arena);
-    }
-    // vglMemFree uses sceClibMspaceMallocStats, unimplemented by the pinned
-    // emulator and leaving its output uninitialized. Query checked kernel
-    // totals instead; these are system headroom, not per-pool high-water marks.
-    SceKernelFreeMemorySizeInfo info{};
-    static_assert(sizeof info==0x10);
-    info.size=sizeof info;
-    if(sceKernelGetFreeMemorySize(&info)==0) {
-        twv::vita::telemetryEvent("gfx_system_user_free_kib",info.size_user/1024);
-        twv::vita::telemetryEvent("gfx_system_cdram_free_kib",info.size_cdram/1024);
-    }
+    twv::gpu::write_png_rgba(path,pixels.data(),960,544,960*4,true);
 }
 GLenum factor(int n, bool destination) {
     const GLenum values[] = {GL_ZERO, GL_ONE, GLenum(destination ? GL_SRC_COLOR : GL_DST_COLOR),
@@ -467,7 +362,8 @@ void release_shader(GLuint shader) {
 }
 }
 
-extern "C" int twv_vgl_init() {
+namespace {
+int vgl_init() {
     submitObserver.reset();
     submitObserverEnabled=twv_vita_bundle_feature(TWV_BUNDLE_SUBMIT_OBSERVER)!=0;
     const bool resident=twv_vita_bundle_feature(TWV_BUNDLE_RESIDENT_GEOMETRY)!=0;
@@ -477,7 +373,6 @@ extern "C" int twv_vgl_init() {
     twv_vgl_texture_conversion_cache_clear();
     textureSamplerCache.clear();
     programUniformCache.clear();
-    framePacing.reset();profileUs.fill(0);
     rasterShadow.invalidate();
     // Two bounded GPU pools, independent of the 160 MiB CPU/newlib reservation.
     // No MSAA during bring-up. Compiler errors are fatal evidence, never a fake PASS.
@@ -547,7 +442,7 @@ extern "C" int twv_vgl_init() {
 }
 // Pinned vitaGL has no public global teardown API. The backend releases its
 // programs/textures separately; process-lifetime driver pools end with the app.
-extern "C" void twv_vgl_shutdown() {
+void vgl_shutdown() {
     vertexWriteClassCache.clear();++vertexWriteOwner;
     submit_barrier();
     twv_vgl_texture_conversion_cache_clear();
@@ -568,7 +463,7 @@ extern "C" void twv_vgl_shutdown() {
     release_unit_samplers();
     vertexBuffer=indexBuffer=0; ready = false;
 }
-extern "C" void twv_vgl_begin() {
+void vgl_begin() {
     if (!ready) return;
     submit_barrier();
     // GXM display-buffer rotation and clear state are outside draw submission.
@@ -582,8 +477,8 @@ extern "C" void twv_vgl_begin() {
     glClearDepthf(1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
-extern "C" void twv_vgl_end() {
-    if (!ready) return;
+int vgl_end(const char* capture) {
+    if (!ready) return 0;
     submit_barrier();
     const auto error = glGetError();
     if (error != GL_NO_ERROR) {
@@ -591,81 +486,59 @@ extern "C" void twv_vgl_end() {
         if (errors <= 8) twv::vita::telemetryEvent("gfx_gl_error", error);
     }
     ++frames;
-    capture_frame();
+    if(capture)capture_frame(capture);
     const auto presentStart=twv::vita::processTimeUs();
     vglSwapBuffers(GL_FALSE);
-    profileUs[TWV_PROFILE_PRESENT]+=twv::vita::processTimeUs()-presentStart;
-    profile_receipts(twv::vita::processTimeUs());
-    twv::vita::system_probe_sample(sceKernelGetThreadId(),twv::vita::audio::threadId());
-    twv::vita::runControlFrame();
-    if (frames % 60 == 0) {
-        uint64_t vertexBytes=0,fragmentBytes=0,vertexCalls=0,fragmentCalls=0,failures=0;
-        vglGetUniformReservationStats(&vertexBytes,&fragmentBytes,&vertexCalls,&fragmentCalls,&failures);
-        twv::vita::telemetryEvent("gfx_native_uniform_vertex_bytes",vertexBytes);
-        twv::vita::telemetryEvent("gfx_native_uniform_fragment_bytes",fragmentBytes);
-        twv::vita::telemetryEvent("gfx_native_uniform_vertex_calls",vertexCalls);
-        twv::vita::telemetryEvent("gfx_native_uniform_fragment_calls",fragmentCalls);
-        twv::vita::telemetryEvent("gfx_native_uniform_failures",failures);
-        uint64_t nulls=0,negative=0,emptyVertex=0,emptyFragment=0;
-        uint32_t firstStage=0,firstBytes=0,lastStage=0,lastBytes=0;
-        int32_t firstResult=0,lastResult=0;
-        vglGetUniformReservationDiagnostics(&nulls,&negative,&emptyVertex,&emptyFragment,
-            &firstStage,&firstResult,&firstBytes,&lastStage,&lastResult,&lastBytes);
-        twv::vita::telemetryEvent("gfx_native_uniform_null_successes",nulls);
-        twv::vita::telemetryEvent("gfx_native_uniform_negative_errors",negative);
-        twv::vita::telemetryEvent("gfx_native_uniform_empty_vertex",emptyVertex);
-        twv::vita::telemetryEvent("gfx_native_uniform_empty_fragment",emptyFragment);
-        twv::vita::telemetryEvent("gfx_native_uniform_first_stage",firstStage);
-        twv::vita::telemetryEvent("gfx_native_uniform_first_result",firstResult);
-        twv::vita::telemetryEvent("gfx_native_uniform_first_bytes",firstBytes);
-        twv::vita::telemetryEvent("gfx_native_uniform_last_stage",lastStage);
-        twv::vita::telemetryEvent("gfx_native_uniform_last_result",lastResult);
-        twv::vita::telemetryEvent("gfx_native_uniform_last_bytes",lastBytes);
-        const auto log=twv::vita::telemetryStats();
-        twv::vita::telemetryEvent("diag_log_written_bytes",log.writtenBytes);
-        twv::vita::telemetryEvent("diag_log_write_us",log.writeUs);
-        twv::vita::telemetryEvent("diag_log_max_write_us",log.maxWriteUs);
-        twv::vita::telemetryEvent("diag_log_writes",log.writes);
-        twv::vita::telemetryEvent("diag_log_write_failures",log.writeFailures);
-        twv::vita::telemetryEvent("diag_log_overflow_flushes",log.overflowFlushes);
-        twv::vita::telemetryEvent("diag_log_lost",log.lost);
-        twv::vita::telemetryEvent("diag_log_async",log.async);
-        twv::vita::telemetryEvent("diag_log_async_queued_bytes",log.asyncQueuedBytes);
-        twv::vita::telemetryEvent("diag_log_async_waits",log.asyncWaits);
-        twv::vita::telemetryEvent("diag_log_async_lost_bytes",log.asyncLostBytes);
-        twv_resident_geometry_stats resident{};twv_vgl_resident_get_stats(&resident);
-        twv::vita::telemetryEvent("gfx_resident_arena_live_bytes",resident.liveBytes);
-        twv::vita::telemetryEvent("gfx_resident_arena_retired_bytes",resident.retiredBytes);
-        twv::vita::telemetryEvent("gfx_resident_arena_peak_bytes",resident.peakBytes);
-        twv::vita::telemetryEvent("gfx_resident_arena_allocations",resident.allocations);
-        twv::vita::telemetryEvent("gfx_resident_arena_fallbacks",resident.fallbacks);
-        twv::vita::telemetryEvent("gfx_resident_arena_collections",resident.collections);
-        twv::vita::telemetryEvent("gfx_resident_arena_completion_failures",resident.completionFailures);
-        twv::vita::telemetryEvent("gfx_resident_arena_scanned_units",resident.scannedUnits);
-        twv::vita::telemetryEvent("gfx_resident_arena_completed_waits",resident.completedWaits);
-        twv::vita::telemetryEvent("gfx_resident_arena_wait_us",resident.waitTimeUs);
-        twv::vita::telemetryEvent("gfx_texture_zero_init_bytes",textureZeroInitBytes);
-        twv::vita::telemetryEvent("gfx_texture_direct_init_bytes",textureDirectInitBytes);
-        if(submitObserverEnabled){
-            const auto& s=submitObserver.stats();
-            twv::vita::telemetryEvent("gfx_submit_observed_draws",s.draws);
-            twv::vita::telemetryEvent("gfx_submit_compatible_pairs",s.compatible_pairs);
-            twv::vita::telemetryEvent("gfx_submit_array_proposals",s.array_proposal_pairs);
-            twv::vita::telemetryEvent("gfx_submit_longest_run",s.longest_run);
-        }
-        twv::vgl::shader_compile_report();
-        twv::vita::telemetryEvent("gfx_frames_presented", frames);
-        twv::vita::telemetryEvent("gfx_draws", draws);
-        twv::vita::telemetryEvent("gfx_errors", errors);
-        memory_receipts();
-        twv::vita::telemetryFlush();
+    twv_vgl_profile_add(TWV_PROFILE_PRESENT,twv::vita::processTimeUs()-presentStart);
+    return 1;
+}
+void vgl_report() {
+    uint64_t vertexBytes=0,fragmentBytes=0,vertexCalls=0,fragmentCalls=0,failures=0;
+    vglGetUniformReservationStats(&vertexBytes,&fragmentBytes,&vertexCalls,&fragmentCalls,&failures);
+    twv::vita::telemetryEvent("gfx_native_uniform_vertex_bytes",vertexBytes);
+    twv::vita::telemetryEvent("gfx_native_uniform_fragment_bytes",fragmentBytes);
+    twv::vita::telemetryEvent("gfx_native_uniform_vertex_calls",vertexCalls);
+    twv::vita::telemetryEvent("gfx_native_uniform_fragment_calls",fragmentCalls);
+    twv::vita::telemetryEvent("gfx_native_uniform_failures",failures);
+    uint64_t nulls=0,negative=0,emptyVertex=0,emptyFragment=0;
+    uint32_t firstStage=0,firstBytes=0,lastStage=0,lastBytes=0;
+    int32_t firstResult=0,lastResult=0;
+    vglGetUniformReservationDiagnostics(&nulls,&negative,&emptyVertex,&emptyFragment,
+        &firstStage,&firstResult,&firstBytes,&lastStage,&lastResult,&lastBytes);
+    twv::vita::telemetryEvent("gfx_native_uniform_null_successes",nulls);
+    twv::vita::telemetryEvent("gfx_native_uniform_negative_errors",negative);
+    twv::vita::telemetryEvent("gfx_native_uniform_empty_vertex",emptyVertex);
+    twv::vita::telemetryEvent("gfx_native_uniform_empty_fragment",emptyFragment);
+    twv::vita::telemetryEvent("gfx_native_uniform_first_stage",firstStage);
+    twv::vita::telemetryEvent("gfx_native_uniform_first_result",firstResult);
+    twv::vita::telemetryEvent("gfx_native_uniform_first_bytes",firstBytes);
+    twv::vita::telemetryEvent("gfx_native_uniform_last_stage",lastStage);
+    twv::vita::telemetryEvent("gfx_native_uniform_last_result",lastResult);
+    twv::vita::telemetryEvent("gfx_native_uniform_last_bytes",lastBytes);
+    twv_resident_geometry_stats resident{};twv_vgl_resident_get_stats(&resident);
+    twv::vita::telemetryEvent("gfx_resident_arena_live_bytes",resident.liveBytes);
+    twv::vita::telemetryEvent("gfx_resident_arena_retired_bytes",resident.retiredBytes);
+    twv::vita::telemetryEvent("gfx_resident_arena_peak_bytes",resident.peakBytes);
+    twv::vita::telemetryEvent("gfx_resident_arena_allocations",resident.allocations);
+    twv::vita::telemetryEvent("gfx_resident_arena_fallbacks",resident.fallbacks);
+    twv::vita::telemetryEvent("gfx_resident_arena_collections",resident.collections);
+    twv::vita::telemetryEvent("gfx_resident_arena_completion_failures",resident.completionFailures);
+    twv::vita::telemetryEvent("gfx_resident_arena_scanned_units",resident.scannedUnits);
+    twv::vita::telemetryEvent("gfx_resident_arena_completed_waits",resident.completedWaits);
+    twv::vita::telemetryEvent("gfx_resident_arena_wait_us",resident.waitTimeUs);
+    twv::vita::telemetryEvent("gfx_texture_zero_init_bytes",textureZeroInitBytes);
+    twv::vita::telemetryEvent("gfx_texture_direct_init_bytes",textureDirectInitBytes);
+    if(submitObserverEnabled){
+        const auto& s=submitObserver.stats();
+        twv::vita::telemetryEvent("gfx_submit_observed_draws",s.draws);
+        twv::vita::telemetryEvent("gfx_submit_compatible_pairs",s.compatible_pairs);
+        twv::vita::telemetryEvent("gfx_submit_array_proposals",s.array_proposal_pairs);
+        twv::vita::telemetryEvent("gfx_submit_longest_run",s.longest_run);
     }
+    twv::vita::telemetryEvent("gfx_draws", draws);
+    twv::vita::telemetryEvent("gfx_errors", errors);
 }
-extern "C" uint64_t twv_vgl_time_us() { return twv::vita::processTimeUs(); }
-extern "C" void twv_vgl_profile_add(uint32_t category,uint64_t microseconds) {
-    if (category<TWV_PROFILE_COUNT) profileUs[category]+=microseconds;
-}
-extern "C" void* twv_vgl_alloc(size_t size) {
+void* vgl_alloc(size_t size) {
     static_assert(alignof(TwvVitaVertex) <= twv::vgl::ScratchAlignment);
     if (!ready) return nullptr;
     auto* result=twv::vgl::aligned_scratch(size, [](size_t bytes) { return vglAllocFromScratch(bytes); });
@@ -676,25 +549,10 @@ extern "C" void* twv_vgl_alloc(size_t size) {
     }
     return result;
 }
-extern "C" void twv_vgl_submit_barrier(void){submit_barrier();}
-extern "C" uint32_t twv_vgl_texture_cache_budget(uint32_t current) {
-    const auto heap=cpu_heap_usage();
-    constexpr uint64_t reserve=48u*1024u*1024u;
-    constexpr uint32_t metadata=sizeof(twv::vgl::TextureConversionCache);
-    if(!heap.valid || heap.used>_newlib_heap_size_user || current>twv::vgl::TextureConversionCache::limit)return 0;
-    const uint64_t reclaimable=current>metadata?current-metadata:0;
-    const uint64_t available=uint64_t(_newlib_heap_size_user)-heap.used+reclaimable;
-    if(available<=reserve)return 0;
-    return uint32_t(std::min<uint64_t>(twv::vgl::TextureConversionCache::limit,available-reserve+metadata));
-}
-extern "C" uint32_t twv_vgl_geometry_cache_budget(uint32_t current_payload) {
-    const auto heap=cpu_heap_usage();
-    return twv::vgl::geometry_cache_budget(current_payload,heap.used,_newlib_heap_size_user,heap.valid);
-}
-extern "C" uint32_t twv_vgl_vertex_is_vram(const void* address) {
+uint32_t vgl_vertex_is_vram(const void* address) {
     return vgl_mem_get_type_by_addr(const_cast<void*>(address))==VGL_MEM_VRAM;
 }
-extern "C" uint32_t twv_vgl_vertex_write_class(const void* address,size_t bytes) {
+uint32_t vgl_vertex_write_class(const void* address,size_t bytes) {
     using twv::vgl::VertexWriteClass;
     const auto result=[](VertexWriteClass value){return uint32_t(value);};
     const uintptr_t ptr=reinterpret_cast<uintptr_t>(address);
@@ -726,13 +584,13 @@ extern "C" uint32_t twv_vgl_vertex_write_class(const void* address,size_t bytes)
         return result(VertexWriteClass::VerifiedUncachedRam);
     return result(VertexWriteClass::Unknown);
 }
-extern "C" void twv_vgl_vertex_write_class_report(void) {
+void vgl_vertex_write_class_report(void) {
     twv::vita::telemetryEvent("gfx_vertex_write_class_queries",vertexWriteQueries);
     twv::vita::telemetryEvent("gfx_vertex_write_class_cache_hits",vertexWriteHits);
     twv::vita::telemetryEvent("gfx_vertex_write_class_errors",vertexWriteErrors);
     twv::vita::telemetryEvent("gfx_vertex_write_class_last_error",vertexWriteLastError);
 }
-extern "C" uint32_t twv_vgl_program(const char* vs, const char* fs) {
+uint32_t vgl_program(const char* vs, const char* fs) {
     submit_barrier();
     ProgramKey key{vs,fs};
     if (const auto found=programCache.find(key);found!=programCache.end()) {
@@ -794,7 +652,7 @@ extern "C" uint32_t twv_vgl_program(const char* vs, const char* fs) {
     programCache.emplace(std::move(key),program); ++uniquePrograms;
     return program;
 }
-extern "C" void twv_vgl_program_delete(uint32_t program) {
+void vgl_program_delete(uint32_t program) {
     submit_barrier();
     if (!program || program>=programs.size() || !programs[program].references) return;
     auto& info=programs[program];
@@ -805,7 +663,7 @@ extern "C" void twv_vgl_program_delete(uint32_t program) {
     glDeleteProgram(program);
     release_shader(info.stages[0]);release_shader(info.stages[1]);info.stages={};
 }
-extern "C" void twv_vgl_draw(const TwvVitaDrawState* s, const void* v,
+void vgl_draw(const TwvVitaDrawState* s, const void* v,
                                 uint32_t count, const uint16_t* indices, uint32_t index_count) {
     const auto samplerMask=consume_unit_sampler_requests();
     if (!ready || !s || !s->program || !v || s->program>=programs.size()) return;
@@ -844,7 +702,7 @@ extern "C" void twv_vgl_draw(const TwvVitaDrawState* s, const void* v,
     else glDrawArrays(GL_TRIANGLES,0,count);
     ++draws;
 }
-extern "C" uint32_t twv_vgl_texture(uint32_t width, uint32_t height, uint32_t levels) {
+uint32_t vgl_texture(uint32_t width, uint32_t height, uint32_t levels) {
     submit_barrier();
     GLint maximum=0; glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maximum);
     if (!width || !height || width>uint32_t(maximum) || height>uint32_t(maximum)) {
@@ -877,7 +735,7 @@ extern "C" uint32_t twv_vgl_texture(uint32_t width, uint32_t height, uint32_t le
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     return id;
 }
-extern "C" uint32_t twv_vgl_texture_static_rgba(uint32_t width,uint32_t height,uint32_t levels,const void* bytes,size_t size) {
+uint32_t vgl_texture_static_rgba(uint32_t width,uint32_t height,uint32_t levels,const void* bytes,size_t size) {
     if(!twv::vgl::complete_rgba_chain(width,height,levels,bytes,size))return 0;
     GLint maximum=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maximum);
     if(maximum<=0 || width>uint32_t(maximum) || height>uint32_t(maximum))return 0;
@@ -917,7 +775,7 @@ extern "C" uint32_t twv_vgl_texture_static_rgba(uint32_t width,uint32_t height,u
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
     return id;
 }
-extern "C" void twv_vgl_texture_write(uint32_t texture,uint32_t level,uint32_t w,uint32_t h,const void* rgba) {
+void vgl_texture_write(uint32_t texture,uint32_t level,uint32_t w,uint32_t h,const void* rgba) {
     submit_barrier();
     // Conservatively reapply after uploads in case the native mip metadata
     // changed. The cache does not infer which driver texture writes are inert.
@@ -925,12 +783,12 @@ extern "C" void twv_vgl_texture_write(uint32_t texture,uint32_t level,uint32_t w
     glBindTexture(GL_TEXTURE_2D,texture);
     glTexSubImage2D(GL_TEXTURE_2D,level,0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
 }
-extern "C" void twv_vgl_texture_delete(uint32_t texture) {
+void vgl_texture_delete(uint32_t texture) {
     submit_barrier();
     textureSamplerCache.invalidate(texture);
     if(texture)glDeleteTextures(1,&texture);
 }
-extern "C" void twv_vgl_texture_sampler(uint32_t texture,int min,int mag,int s,int t) {
+void vgl_texture_sampler(uint32_t texture,int min,int mag,int s,int t) {
     ++samplerRequests;
 #if TWV_VITA_SAMPLER_CACHE
     const twv::vgl::SamplerParams params{min,mag,s,t};
@@ -949,7 +807,7 @@ extern "C" void twv_vgl_texture_sampler(uint32_t texture,int min,int mag,int s,i
     textureSamplerCache.applied(texture,params);
 #endif
 }
-extern "C" void twv_vgl_clear(float r,float g,float b,float a,float z,unsigned mask,int x,int y,int w,int h) {
+void vgl_clear(float r,float g,float b,float a,float z,unsigned mask,int x,int y,int w,int h) {
     submit_barrier();
     rasterShadow.invalidate();
     glEnable(GL_SCISSOR_TEST); glScissor(x,y,w,h);
@@ -958,3 +816,15 @@ extern "C" void twv_vgl_clear(float r,float g,float b,float a,float z,unsigned m
     glClearColor(r,g,b,a); glClearDepthf(z);
     glClear(((mask&3) ? GL_COLOR_BUFFER_BIT : 0) | ((mask&4) ? GL_DEPTH_BUFFER_BIT : 0));
 }
+int vgl_texture_sampler_unit(uint32_t unit,int min,int mag,int s,int t) {
+    return request_unit_sampler(unit,min,mag,s,t);
+}
+const TwvGpuBackend vglBackend{
+    "vgl",vgl_init,vgl_shutdown,vgl_begin,vgl_end,vgl_pacing_report,vgl_report,vgl_alloc,
+    vgl_vertex_is_vram,vgl_vertex_write_class,vgl_vertex_write_class_report,
+    vgl_program,vgl_program_delete,vgl_draw,vgl_texture,vgl_texture_static_rgba,
+    vgl_texture_write,vgl_texture_delete,vgl_texture_sampler,vgl_texture_sampler_unit,vgl_clear};
+} // namespace
+// resident_geometry.cpp (vitaGL only) orders its waits after observed submissions.
+extern "C" void twv_vgl_submit_barrier(void){submit_barrier();}
+extern "C" const TwvGpuBackend* twv_gpu_backend_vgl(void) {return &vglBackend;}

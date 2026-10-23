@@ -9,6 +9,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from vgl_backend_source import exported,function as backend_function  # noqa: E402
 
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=ROOT/'platform/vita/gfx_vgl/gpu_api.cpp'
@@ -35,21 +39,25 @@ def main():
     args=parser.parse_args()
     args.output_dir.mkdir(parents=True,exist_ok=True)
     source=SOURCE.read_text()
+    # G0: vitaGL entry points are backend-table functions (vgl_X); the harness calls
+    # their exported names, so each body gets its exported signature back.
+    current=lambda name:exported(backend_function(source,name))
     pieces={
         'sampler_unit_state.inc':marked(source,'C03_SAMPLER_UNIT_STATE'),
         'sampler_unit_helpers.inc':marked(source,'C03_SAMPLER_UNIT_HELPERS'),
-        'sampler_unit_draw.inc':function(source,'extern "C" void twv_vgl_draw('),
-        'sampler_unit_shutdown.inc':function(source,'extern "C" void twv_vgl_shutdown('),
+        'sampler_unit_draw.inc':current('draw'),
+        'sampler_unit_shutdown.inc':current('shutdown'),
     }
     names=('extern "C" int twv_vgl_texture_sampler_unit(',
            'extern "C" void twv_vgl_texture_write(',
            'extern "C" void twv_vgl_texture_delete(',
            'extern "C" void twv_vgl_texture_sampler(')
-    pieces['sampler_unit_api.inc']='\n'.join(function(source,name) for name in names)
+    short=('texture_sampler_unit','texture_write','texture_delete','texture_sampler')
+    pieces['sampler_unit_api.inc']='\n'.join(current(name) for name in short)
     start=source.index('using ProgramKey = ')
     end=source.index('\n};',source.index('struct ProgramInfo {',start))+3
     pieces['sampler_unit_program.inc']=source[start:end]
-    init=function(source,'extern "C" int twv_vgl_init(')
+    init=current('init')
     shutdown=pieces['sampler_unit_shutdown.inc']
     # Full init remains SDK-dependent. Audit actual placement: sampler failure
     # changes ready before the final initialized receipt and before buffer use.
@@ -64,8 +72,8 @@ def main():
               (ROOT/'tests/fixtures/baseline'/REFERENCE_COMMIT[:7]/'platform/vita/gfx_vgl/gpu_api.cpp').read_text())
     if hashlib.sha256(baseline.encode()).hexdigest()!=REFERENCE_SHA256:
         raise SystemExit('Unexpected frozen V60 gpu_api.cpp; re-audit sampler conversion oracle')
-    for signature in names[1:]:
-        assert function(source,signature)==function(baseline,signature)
+    for name,signature in zip(short[1:],names[1:]):
+        assert current(name)==function(baseline,signature),name
     wrap='GLenum wrap(int n) {'
     assert source[source.index(wrap):source.index('\n',source.index(wrap))]==baseline[baseline.index(wrap):baseline.index('\n',baseline.index(wrap))]
     for name,body in pieces.items():

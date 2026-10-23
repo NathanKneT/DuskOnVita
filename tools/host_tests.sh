@@ -241,12 +241,17 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
   -I "$repo/platform/vita" \
   "$repo/tests/scratch_alloc_test.cpp" -o "$out/scratch_alloc_test"
 "$out/scratch_alloc_test"
-python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/profile_receipts_function.inc" <<'PY'
+# G0: the pacing window is shared (gpu_common.cpp); its vitaGL counters are the backend's
+# pacing_report (gpu_api.cpp). The harness joins both through a one-entry backend table.
+python3 - "$repo/platform/vita/gfx_vgl/gpu_common.cpp" "$repo/platform/vita/gfx_vgl/gpu_api.cpp" \
+  "$out/profile_receipts_function.inc" <<'PY'
 from pathlib import Path
 import sys
-source=Path(sys.argv[1]).read_text();start=source.index('void profile_receipts(')
-end=source.index('\nvoid capture_frame(',start)
-Path(sys.argv[2]).write_text(source[start:end])
+common=Path(sys.argv[1]).read_text();start=common.index('void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {')
+end=common.index('\nvoid memory_receipts(',start)
+vgl=Path(sys.argv[2]).read_text();vstart=vgl.index('void vgl_pacing_report() {')
+vend=vgl.index('\nvoid capture_frame(',vstart)
+Path(sys.argv[3]).write_text(vgl[vstart:vend]+'\n'+common[start:end])
 PY
 for timers in 0 1; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -308,16 +313,17 @@ for thread in 0 1; do
 done
 # Exercise the production uniform upload/release functions with a GL recorder.
 # Both enabled and rollback builds must produce the same live object contents.
-python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out" <<'PY'
+python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out" "$repo/tools" <<'PY'
 from pathlib import Path
 import sys
+sys.path.insert(0,sys.argv[3])
+from vgl_backend_source import exported,function
 source=Path(sys.argv[1]).read_text();out=Path(sys.argv[2])
 start=source.index('using ProgramKey = ');end=source.index('\nstd::vector<ProgramInfo>',start)
 (out/'uniform_program_info.inc').write_text(source[start:end])
 start=source.index('void uniform4(');end=source.index('\nGLuint compile_native(',start)
 body=source[start:end]
-start=source.index('extern "C" void twv_vgl_program_delete(');end=source.index('extern "C" void twv_vgl_draw(',start)
-(out/'uniform_submission_functions.inc').write_text(body+'\n'+source[start:end])
+(out/'uniform_submission_functions.inc').write_text(body+'\n'+exported(function(source,'program_delete'))+'\n')
 PY
 for cached in 0 1; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -327,14 +333,16 @@ for cached in 0 1; do
 done
 # Compile the real Cg shader-stage ownership and linked-program lifecycle in
 # cache and rollback modes. Native-style stage refs keep shared objects alive.
-python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/shader_program_functions.inc" <<'PY'
+python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/shader_program_functions.inc" "$repo/tools" <<'PY'
 from pathlib import Path
 import sys
+sys.path.insert(0,sys.argv[3])
+from vgl_backend_source import exported,function
 source=Path(sys.argv[1]).read_text()
-start=source.index('GLuint compile_native(');end=source.index('\n}\n\nextern "C" int twv_vgl_init()',start)
+start=source.index('GLuint compile_native(');end=source.index('\n}\n\nnamespace {\nint vgl_init()',start)
 body=source[start:end]
-start=source.index('extern "C" uint32_t twv_vgl_program(');end=source.index('\nextern "C" void twv_vgl_draw(',start)
-Path(sys.argv[2]).write_text(body+'\n'+source[start:end])
+Path(sys.argv[2]).write_text(body+'\n'+exported(function(source,'program'))+'\n'+
+                             exported(function(source,'program_delete'))+'\n')
 PY
 for cached in 0 1; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -461,15 +469,15 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
 # Compile actual SDK-facing sampler/upload/delete functions against a recording
 # GL context, in both optimized and rollback modes. Test object state and ID
 # lifetime, not a second implementation of the cache's lookup algorithm.
-python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/texture_sampler_functions.inc" <<'PY'
+python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/texture_sampler_functions.inc" "$repo/tools" <<'PY'
 from pathlib import Path
 import sys
+sys.path.insert(0,sys.argv[3])
+from vgl_backend_source import exported,function
 source=Path(sys.argv[1]).read_text()
 sections=[source[source.index('GLenum wrap(int n) {'):source.index('\nvoid uniform4(',source.index('GLenum wrap(int n) {'))]]
-for name,following in [('twv_vgl_texture_write','twv_vgl_texture_delete'),('twv_vgl_texture_delete','twv_vgl_texture_sampler'),('twv_vgl_texture_sampler','twv_vgl_clear')]:
-    start=source.index('extern "C" void '+name+'(')
-    end=source.index('extern "C" void '+following+'(',start)
-    sections.append(source[start:end])
+for name in ('texture_write','texture_delete','texture_sampler'):
+    sections.append(exported(function(source,name))+'\n')
 Path(sys.argv[2]).write_text('\n'.join(sections))
 PY
 for cached in 0 1; do
@@ -529,15 +537,16 @@ for mode in ('--non-mip-only','--oom-only'):
     print('Expected original sampler rejection:',sys.argv[2],mode)
 PY
 done
-python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/raster_submission_functions.inc" <<'PY'
+python3 - "$repo/platform/vita/gfx_vgl/gpu_api.cpp" "$out/raster_submission_functions.inc" "$repo/tools" <<'PY'
 from pathlib import Path
 import sys
+sys.path.insert(0,sys.argv[3])
+from vgl_backend_source import exported,function
 source=Path(sys.argv[1]).read_text()
 start=source.index('GLenum factor(');end=source.index('\nGLenum wrap(',start)
 parts=[source[start:end]]
-start=source.index('extern "C" void twv_vgl_begin(');end=source.index('extern "C" void twv_vgl_end(',start)
-parts.append(source[start:end])
-parts.append(source[source.index('extern "C" void twv_vgl_clear('):])
+parts.append(exported(function(source,'begin'))+'\n')
+parts.append(exported(function(source,'clear'))+'\n')
 Path(sys.argv[2]).write_text('\n'.join(parts))
 PY
 for cached in 0 1; do
@@ -546,3 +555,11 @@ for cached in 0 1; do
     "$repo/tests/raster_submission_test.cpp" -o "$out/raster_submission_test_$cached"
   "$out/raster_submission_test_$cached"
 done
+# G0: draw digest at the backend interface, GPU start-up options and capture schedule.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" -I "$work/deps/xxhash" \
+  "$repo/tests/draw_digest_test.cpp" -o "$out/draw_digest_test"
+"$out/draw_digest_test"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/gpu_options_test.cpp" -o "$out/gpu_options_test"
+"$out/gpu_options_test"

@@ -93,6 +93,11 @@ frontend, FIFO, command processor and register state run unchanged and hand fini
   `--vita-static-geometry=on`, lists and arrays that the game provably did not change skip that
   comparison (patches `aurora/0006`, `dusklight/0014`).
 - **Textures:** converted from GX formats and uploaded through vitaGL, with a conversion cache.
+- **Backend table:** `gpu_backend.h` lists one backend's entry points; `gpu_dispatch.cpp` exports the
+  `twv_vgl_*` functions the rest of the renderer calls and forwards them to the backend chosen at
+  start-up. `gpu_api.cpp` is the vitaGL backend; `gpu_common.cpp` holds the receipts every backend
+  writes. A per-frame draw digest (`draw_digest.hpp`) hashes what crosses that interface by content,
+  so two backends or two runs can be compared frame by frame.
 - **Not done yet:** off-screen passes and EFB copies (shadows, heat haze, the minimap) and some
   indirect-texture effects. `--vita-shadow-image-skip` skips the CPU work of the shadow images the
   renderer cannot draw.

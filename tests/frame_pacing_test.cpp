@@ -1,5 +1,6 @@
 #include "gfx_vgl/frame_pacing.hpp"
 #include "gfx_vgl/gpu_api.h"
+#include "gfx_vgl/gpu_backend.h"
 #include "gfx_vgl/profile_scope.hpp"
 #include "gfx_vgl/uniform_state.hpp"
 #include "gfx_vgl/shader_stage_pool.hpp"
@@ -46,6 +47,10 @@ uint64_t rasterRequests=0,rasterUpdates=0;
 unsigned samplerReceiptReports=0;
 void unit_sampler_receipts(){++samplerReceiptReports;}
 #include "profile_receipts_function.inc"
+// The shared window reports the vitaGL counters through the backend table (G0).
+TwvGpuBackend pacing_backend(){TwvGpuBackend b{};b.name="vgl";b.pacing_report=vgl_pacing_report;return b;}
+const TwvGpuBackend pacingBackend=pacing_backend();
+void profile_receipts(uint64_t now){profile_receipts(pacingBackend,now);}
 
 int main() {
     using twv::vgl::FramePacing;using twv::vgl::FramePacingStats;

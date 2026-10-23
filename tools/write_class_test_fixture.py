@@ -2,31 +2,29 @@
 """Extract actual SDK classifier/report and shutdown cache reset for host mocks."""
 import argparse
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vgl_backend_source import exported, function  # noqa: E402
 
 
 def routine(text: str, name: str) -> str:
-    match = re.search(r'extern "C"[^\n]*\b' + re.escape(name) + r'\(', text)
-    if match is None:
-        raise ValueError(f"Production routine missing: {name}")
-    # These functions are adjacent top-level C exports. Retain their complete
-    # original body, including native SDK tests and all failure handling.
-    end = text.find('\nextern "C"', match.end())
-    if end < 0:
-        raise ValueError(f"Cannot establish production boundary after {name}")
-    return text[match.start():end].rstrip() + '\n'
+    # Complete original body, including native SDK tests and all failure handling,
+    # under its exported name (the harness calls twv_vgl_*).
+    return exported(function(text, name)).rstrip() + '\n'
 
 
 def extract(source: Path, output: Path) -> None:
     text = source.read_text(encoding="utf-8")
-    shutdown = routine(text, "twv_vgl_shutdown")
+    shutdown = routine(text, "shutdown")
     reset = re.search(r'vertexWriteClassCache\.clear\(\);\s*\+\+vertexWriteOwner;', shutdown)
     if reset is None:
         raise ValueError("Production shutdown no longer resets classifier identity; review test")
     output.write_text(
         '// Generated from actual gpu_api.cpp; never edit this fixture.\n'
-        + routine(text, "twv_vgl_vertex_write_class")
-        + routine(text, "twv_vgl_vertex_write_class_report")
+        + routine(text, "vertex_write_class")
+        + routine(text, "vertex_write_class_report")
         + 'static void extracted_shutdown_cache_reset(){' + reset.group() + '}\n',
         encoding="utf-8",
     )
