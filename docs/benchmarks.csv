@@ -5,3 +5,9 @@ v54,2026-10-22,vita1000,house,every,8.19,8.55,rejected,draws were lost (uniform 
 v54,2026-10-22,vita1000,outside,every,9.65,8.31,rejected,draws were lost (uniform failures)
 v61,2026-10-22,vita1000,house,every,6.34,6.14,measured,system clocks (333 MHz); all draws
 v61,2026-10-22,vita1000,outside,every,7.39,5.95,measured,system clocks (333 MHz); all draws
+g2c-vgl,2026-10-23,vita1000,house,every,20.24,20.31,measured,444 MHz; vitaGL
+g2c-vgl,2026-10-23,vita1000,outside,every,22.94,22.93,measured,444 MHz; vitaGL
+g2c-vgl,2026-10-23,vita1000,faron,every,11.71,11.89,measured,444 MHz; vitaGL; Faron fight
+g2c-gxm,2026-10-23,vita1000,house,every,19.45,19.45,measured,444 MHz; --vita-gpu=gxm
+g2c-gxm,2026-10-23,vita1000,outside,every,27.23,27.24,measured,444 MHz; --vita-gpu=gxm
+g2c-gxm,2026-10-23,vita1000,faron,every,14.04,14.13,measured,444 MHz; --vita-gpu=gxm; Faron fight

@@ -10,18 +10,28 @@ PlayStation Vita.
 
 The original game code runs natively on the Vita's ARM CPU. This repository adds the Vita platform
 layer (a renderer that translates Aurora's GX commands to
-[vitaGL](https://github.com/Rinnegatamante/vitaGL), audio, input, memory, receipts) and a small queue
-of reviewed patches to the pinned upstreams.
+[vitaGL](https://github.com/Rinnegatamante/vitaGL), or experimentally straight to GXM, audio, input,
+memory, receipts) and a small queue of reviewed patches to the pinned upstreams.
 
 **It is not playable yet.** The aim is a stable 30 FPS; the console runs the game at a fraction of
 that today. The code is shared so others can reproduce the work and help.
 
 ## Status (measured on a PS Vita 1000)
 
-| Scene | Latest console result | Notes |
-| --- | --- | --- |
-| Link's house | **6.3 FPS** | build v61, system clocks (333 MHz), every draw rendered |
-| Ordon village, outside | **7.4 FPS** | same build |
+Frames per second, build g2c at 444 MHz:
+
+| Scene | vitaGL | GXM + G2 |
+| --- | ---: | ---: |
+| Link's house | 20.2 | 19.4 |
+| Ordon village | 22.9 | 27.2 |
+| Faron fight | 11.7 | 14.0 |
+
+The best result, 27.2 FPS, is Ordon village on GXM. Link's house runs at about 20 FPS on either
+renderer, and the Faron fight at 12 to 14. vitaGL is the default renderer. GXM + G2 is the experimental native renderer (`--vita-gpu=gxm`) with
+resident geometry, packed vertex formats and native primitives. Both columns use static geometry by
+reference, the GX worker thread, the fast pipeline lookup and a shader warm-up bundle; the switches are
+in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). For comparison, build v61 (one core, system clocks) ran
+at 6.3 FPS in the house and 7.4 in Ordon.
 
 Full speed is 30. Every figure comes from a console run, averaged over steady windows (Link in the
 scene for 10 s, no shader compiling; `tools/vita_run_report.py`); emulator numbers are only used to
@@ -30,21 +40,20 @@ check correctness. All console runs are listed in [docs/benchmarks.csv](docs/ben
 
 ![PS Vita frame rate, build by build](docs/img/progress.svg)
 
-The original game simulation takes about 12 ms of a 154 ms frame. Most of the frame is spent
-translating the game's GameCube graphics commands for vitaGL, all on one core:
+In the house, the GX worker needs about 37 ms per frame with vitaGL and 31 ms with GXM. With GXM the
+CPU work fits in a 30 FPS frame (33 ms), but frames still take about 50 ms; the GPU timing switches
+(`--vita-gxm-gpu-timing`, see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)) are there to find out why.
+Outdoors in Ordon, GXM is CPU-bound and about 3 ms short of 30 FPS. Where the GX worker's time goes
+in the house with GXM:
 
-![Where one frame goes in Link's house](docs/img/frame.svg)
-
-This code already contains the next steps: the standard 444 MHz clock by default, static models
-taken by reference instead of compared byte by byte every frame (`--vita-static-geometry`), and the
-graphics translation on its own core (`--vita-gx-thread`). They are checked on the host and in an
-emulator; their console results are not measured yet and will be added here.
+![Where the GX worker's time goes in Link's house](docs/img/frame.svg)
 
 ## What works
 
 | Area | State | Notes |
 | --- | --- | --- |
-| Link's house and Ordon village (development start) | ✅ | started with `--stage` arguments |
+| Link's house, Ordon village, the Faron fight (development starts) | ✅ | started with `--stage` arguments |
+| Native GXM renderer | ⚠️ | experimental: `--vita-gpu=gxm`; vitaGL stays the default |
 | 3D scenes (textured, lit, fog) | ⚠️ | some textures flicker |
 | Controls (both analog sticks, buttons) | ✅ | no touch or gyro |
 | Shader preparation | ⚠️ | shaders compile at first use, causing long stalls; an optional warm-up file moves this to startup |
@@ -127,9 +136,12 @@ tests do not prove GPU output or console performance.
 
 ## Help wanted
 
-- **Graphics translation cost:** command decode and vertex preparation take about 100 ms of the frame
-  (see the chart above). Profiles and patches welcome.
-- **Frame-buffer effects:** EFB copies and off-screen passes on vitaGL.
+- **Graphics translation cost:** the GX worker needs 31 to 37 ms per frame in the house (see the chart
+  above); after the draws themselves, pipeline lookup and register decode are the largest parts.
+  Profiles and patches welcome.
+- **GPU time on GXM:** the house takes about 50 ms per frame although its CPU work fits in 33 ms;
+  console runs with `--vita-gxm-gpu-timing` will show where the time goes.
+- **Frame-buffer effects:** EFB copies and off-screen passes, on vitaGL and on GXM.
 - **Texture flicker:** find the cause; a matched Dolphin capture of the same scene helps.
 - **Hardware testers:** a Vita 1000 or 2000, the scene, the build and the `runtime.jsonl` receipts.
 

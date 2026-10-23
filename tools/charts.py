@@ -13,9 +13,11 @@ FONT = "font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif'"
 INK, MUTED, GRID = '#1f2328', '#59636e', '#d1d9e0'
 BLUE, GREEN, RED, ORANGE = '#0969da', '#1a7f37', '#cf222e', '#bc4c00'
 
-# Link's house, one frame on a PS Vita 1000 (ms, build v61, 333 MHz, everything on one thread).
-FRAME = [('Game simulation', 12), ('J3D draw building', 20), ('GX command decode', 31),
-         ('Vertex preparation', 66), ('vitaGL calls', 25)]
+# Link's house, the GX worker's time per frame on a PS Vita 1000 (ms, build g2c, --vita-gpu=gxm,
+# 444 MHz, gfx_decode_probe_* receipts as printed by tools/vita_run_report.py).
+FRAME = [('Backend draws', 10.86), ('Pipeline lookup', 8.16), ('XF: matrices, lights', 6.01),
+         ('BP: TEV, blend, textures', 5.96), ('Draw parsing', 2.87), ('CP: vertex arrays', 2.29),
+         ('Draw setup', 0.81), ('Command loop, other', 0.42), ('Static lists', 0.40)]
 
 
 def runs():
@@ -69,28 +71,27 @@ def progress():
         s.append(text(lx + 18, ly + 4, label, 11))
     s.append(f"<circle cx='{left + 256}' cy='{ly}' r='5' fill='#ffffff' stroke='{MUTED}' stroke-width='2'/>")
     s.append(text(left + 268, ly + 4, 'run rejected: ' + '; '.join(f'{b}, {why}' for b, why in rejected.items()), 11))
-    s.append(text(left, h - 20, 'v61 runs at the system clocks (333 MHz); the next builds use 444 MHz.', 11, MUTED))
+    s.append(text(left, h - 20, 'v61 ran at the system clocks (333 MHz), the other builds at 444 MHz; g2c-gxm uses the experimental GXM renderer.', 11, MUTED))
     s.append('</svg>')
     return '\n'.join(s)
 
 
 def frame():
-    w, left, right, top, row = 760, 170, 70, 64, 30
+    w, left, right, top, row = 760, 200, 70, 64, 30
     h = top + row * len(FRAME) + 40
     total = sum(v for _, v in FRAME)
     vmax = max(v for _, v in FRAME)
     pw = w - left - right
     s = [f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {w} {h}' width='{w}' height='{h}'>",
          f"<rect width='{w}' height='{h}' rx='10' fill='#ffffff' stroke='{GRID}'/>",
-         text(24, 28, "Link's house — where one frame goes (ms, console)", 16, weight='600'),
-         text(24, 46, f'build v61, all on one core: {total} ms in total; the budget at 30 FPS is 33 ms', 12, MUTED)]
+         text(24, 28, "Link's house — where the GX worker's time goes (ms per frame, console, GXM)", 16, weight='600'),
+         text(24, 46, f'build g2c, decode probe on one frame in 30: {total:.1f} ms; over all frames the FIFO averages 31.5 ms', 12, MUTED)]
     for i, (name, v) in enumerate(FRAME):
         yy = top + i * row
-        color = BLUE if name in ('Game simulation', 'J3D draw building') else ORANGE
         s.append(text(left - 10, yy + 15, name, 13, INK, 'end'))
-        s.append(f"<rect x='{left}' y='{yy}' width='{pw * v / vmax:.1f}' height='20' rx='3' fill='{color}'/>")
-        s.append(text(left + pw * v / vmax + 8, yy + 15, str(v), 12, INK))
-    s.append(text(24, h - 14, 'orange: the GX translation layer (Aurora + the vitaGL backend), the main target — help wanted', 11, ORANGE))
+        s.append(f"<rect x='{left}' y='{yy}' width='{pw * v / vmax:.1f}' height='20' rx='3' fill='{ORANGE}'/>")
+        s.append(text(left + pw * v / vmax + 8, yy + 15, f'{v:.1f}', 12, INK))
+    s.append(text(24, h - 14, "all of it is the GX translation layer (Aurora's command processor + the GXM backend) — help wanted", 11, ORANGE))
     s.append('</svg>')
     return '\n'.join(s)
 
