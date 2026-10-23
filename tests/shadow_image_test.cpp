@@ -13,6 +13,7 @@ bool offscreen=false,OffscreenDrawSupported=false;
 std::map<std::string,unsigned> counters;
 void count(const char* name,unsigned amount=1){counters[name]+=amount;}
 void count(CounterId id,unsigned amount=1){count(CounterNames[size_t(id)],amount);}
+void count_game(CounterId id,unsigned amount=1){count(id,amount);}
 }
 namespace twv::gfx_vgl {
 #include "shadow_image_control.inc"
@@ -85,7 +86,8 @@ int main(){
         assert(projectionCalls==1 && lastProjection==(interp?42:13));
         n=0;for(const auto& model:models)for(const auto& packet:model.packets)assert(expected[n++]==packet.base);
         assert(shadow.mModelNum==2 && shadow.mRenderProjMtx[0][0]==13 && models[0].data.shapes[2].flags==2);
-        const bool skip=TARGET_VITA && TWV_TEST_SHADOW_COMPILED && choice==1 && off && !supported;
+        // The FIFO's offscreen flag must not matter: the GX worker may not have reached the pass yet.
+        const bool skip=TARGET_VITA && TWV_TEST_SHADOW_COMPILED && choice==1 && !supported;
         assert(preDrawCalls==(skip?0:2) && drawCalls==(skip?0:4));
         assert(counters["shadow_image_skipped_calls"]==unsigned(skip));
         assert(counters["shadow_image_skipped_models"]==(skip?2u:0u));
@@ -97,5 +99,5 @@ int main(){
     offscreen=true;OffscreenDrawSupported=false;
     assert(!twv_vita_shadow_image_skip()); // default OFF even on an unsupported pass
     assert(!twv_vita_shadow_image_skip_select(1));
-    std::printf("shadow_image_test: Vita%d compiled%d: actual patched/original bodies, backend selector, supported/onscreen/default negative controls, interpolation and packet restoration passed\n",TARGET_VITA,TWV_TEST_SHADOW_COMPILED);
+    std::printf("shadow_image_test: Vita%d compiled%d: actual patched/original bodies, backend selector, supported/default negative controls, FIFO offscreen flag ignored, interpolation and packet restoration passed\n",TARGET_VITA,TWV_TEST_SHADOW_COMPILED);
 }

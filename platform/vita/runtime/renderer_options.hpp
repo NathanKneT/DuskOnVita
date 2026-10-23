@@ -29,6 +29,8 @@ struct RendererOptions {
     int gxThread=0;
     bool staticGeometrySelected=false;
     int staticGeometry=0; // 0 off, 1 on, 2 verify (gfx_vgl/static_geometry.hpp)
+    bool pipelineFastSelected=false;
+    int pipelineFast=0; // 0 off, 1 on, 2 verify (gfx_vgl/pipeline_fast.hpp)
     bool bundleSelected=false,memorySelected=false;
     int bundle=0;
     uint32_t featureSelected=0,featureValues=0,memoryProfile=0;
@@ -37,7 +39,8 @@ struct RendererOptions {
     }
     // 0 original CLI;1..5 legacy experiments;6 bundle;7..10 overrides;11 memory;
     // 12 small direct packets;13 verified uncached-RAM staging;14 GX decode.
-    //15 lazy vertex plan;16 static geometry;17 GX worker thread;18 shader source capture;19 NEON decode. Bundle establishes the base; overrides are order-independent.
+    //15 lazy vertex plan;16 static geometry;17 GX worker thread;18 shader source capture;19 NEON decode;
+    //20 fast pipeline lookup. Bundle establishes the base; overrides are order-independent.
     int consume(const char* token) noexcept {
         if(!token)return -1;
         const int stream=toggle(token,"--vita-stream-decode",selected,streamDecode);
@@ -66,6 +69,8 @@ struct RendererOptions {
         if(gxThreadResult)return gxThreadResult==1?17:gxThreadResult;
         const int staticGeometryResult=choice(token,"--vita-static-geometry",staticGeometrySelected,staticGeometry);
         if(staticGeometryResult)return staticGeometryResult==1?16:staticGeometryResult;
+        const int pipelineFastResult=choice(token,"--vita-pipeline-fast",pipelineFastSelected,pipelineFast);
+        if(pipelineFastResult)return pipelineFastResult==1?20:pipelineFastResult;
         const int combined=toggle(token,"--vita-opt-bundle",bundleSelected,bundle);
         if(combined)return combined==1?6:combined;
         const char* names[]={"--vita-compact-st","--vita-resident-geometry","--vita-texture-upload","--vita-submit-observer"};

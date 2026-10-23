@@ -563,3 +563,9 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/gpu_options_test.cpp" -o "$out/gpu_options_test"
 "$out/gpu_options_test"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/decode_probe_test.cpp" -o "$out/decode_probe_test"
+"$out/decode_probe_test"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/pipeline_fast_test.cpp" -o "$out/pipeline_fast_test"
+"$out/pipeline_fast_test"

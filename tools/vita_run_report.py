@@ -23,6 +23,8 @@ SCENES = {'R_SP01': 'house-R_SP01', 'F_SP103': 'outside-F_SP103', 'F_SP108': 'fa
 INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusive_us': 'painter_ms',
              'prof_fifo_inclusive_us': 'fifo_ms', 'prof_shader_us': 'shader_ms',
              'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms'}
+# decode_probe.hpp; builds before draw_setup existed lack it (their texture setup counts as pipeline).
+DECODE_CLASSES = ['other', 'bp', 'xf', 'cp', 'list', 'draw_parse', 'pipeline', 'draw_setup', 'backend']
 SWITCHES = ['vertex_stream_requested', 'small_packets_requested', 'uncached_staging_requested',
             'gx_decode_requested', 'lazy_vertex_plan_requested', 'geometry_neon_requested',
             'vertex_cull_requested', 'sparse_spans_requested', 'shadow_image_skip_requested',
@@ -64,7 +66,7 @@ def summarize(boot, settle_s):
     stage, player, player_first_ms = '', 0, None
     compile_calls = None
     draws = frames_presented = None
-    reports, sims, draw_samples = [], [], []
+    reports, sims, draw_samples, probes = [], [], [], []
     report = None
     bounds = None
     for number, r in boot['records']:
@@ -106,6 +108,10 @@ def summarize(boot, settle_s):
             frames_presented = v
             if draws is not None:
                 draw_samples.append((ms, frames_presented, draws, stage))
+        elif name == 'gfx_decode_probe_frames':  # first receipt of each decode probe snapshot
+            probes.append({'ms': ms, 'frames': v})
+        elif name and name.startswith('gfx_decode_probe_') and probes:
+            probes[-1][name[len('gfx_decode_probe_'):]] = v
     out = {
         'first_line': boot['first_line'], 'label': text.get('sequence_label', ''),
         'sequence_index': value.get('sequence_index'), 'clock_mode': text.get('clock_mode'),
@@ -138,8 +144,37 @@ def summarize(boot, settle_s):
         return [out]
     results = []
     for scene_stage, steady in by_stage.items():
-        results.append(scene_result(dict(out), scene_stage, steady, bounds, sims, draw_samples))
+        result = scene_result(dict(out), scene_stage, steady, bounds, sims, draw_samples)
+        split = decode_split(probes, steady[0]['ms'], steady[-1]['ms'])
+        if split:
+            result['decode'] = split
+        results.append(result)
     return results
+
+
+def decode_split(probes, t0, t1):
+    """GX FIFO time by kind of work over the steady span: ms per timed frame, % of FIFO, calls per frame."""
+    span = [p for p in probes if t0 - 1000 <= p['ms'] <= t1 + 1000]
+    if len(span) < 2:
+        return None
+    first, last = span[0], span[-1]
+    delta = {k: last[k] - first[k] for k in last if k in first and isinstance(last[k], (int, float))}
+    sampled, frames, fifo = delta.get('sampled_frames', 0), delta.get('frames', 0), delta.get('fifo_us', 0)
+    if not sampled or not frames or not fifo:
+        return None
+    classes = {}
+    for c in DECODE_CLASSES:
+        us = delta.get(f'{c}_us')
+        if us is None:
+            continue
+        classes[c] = {'ms': round(us / sampled / 1000, 2), 'pct': round(us * 100 / fifo, 1),
+                      'calls_per_frame': round(delta.get(f'{c}_calls', 0) / frames, 1)}
+    parts = sum(delta.get(f'{c}_us', 0) for c in DECODE_CLASSES)
+    return {'sampled_frames': sampled, 'fifo_ms': round(fifo / sampled / 1000, 2),
+            'parts_pct_of_fifo': round(parts * 100 / fifo, 1), 'classes': classes,
+            'static_list_ms': round(delta.get('static_list_us', 0) / sampled / 1000, 2),
+            'clock_switches_per_timed_frame': round(delta.get('switches', 0) / sampled),
+            'clock_read_ns': last.get('clock_ns')}
 
 
 def scene_result(out, scene_stage, steady, bounds, sims, draw_samples):
@@ -192,6 +227,9 @@ def ledger_rows(runs, args, receipt_sha):
         details['over_33ms'] = run.get('over_33ms')
         for key in ('shader_warmup_prepared', 'shader_play_compiles', 'shader_play_slow_compiles', 'shader_play_compile_max_us'):
             details[key] = run.get(key)
+        if run.get('decode'):
+            details['decode_fifo_ms'] = run['decode']['fifo_ms']
+            details.update({f'decode_{c}_ms': v['ms'] for c, v in run['decode']['classes'].items()})
         rows.append({
             'recorded_utc': now, 'owner': '', 'platform': 'vita', 'environment': 'hardware',
             'version': args.version, 'commit': args.commit, 'config': ';'.join(config),
@@ -227,6 +265,12 @@ def main():
         print(f"{run['first_line']:>7} {run['label'] or '-':<22} {run.get('scene', ''):<16} {run['status']:<11} "
               f"fps={run.get('fps', '')} ticks/s={run.get('ticks_per_s', '')} windows={run.get('windows', 0)} "
               f"clocks={run['clocks_observed']} {run.get('costs_ms', '')}")
+        d = run.get('decode')
+        if d:
+            parts = ' '.join(f"{c}={v['ms']}ms({v['pct']}%)" for c, v in d['classes'].items())
+            print(f"        decode per timed frame: fifo={d['fifo_ms']}ms {parts} | parts={d['parts_pct_of_fifo']}% "
+                  f"of fifo, {d['sampled_frames']} timed frames, {d['clock_switches_per_timed_frame']} clock reads "
+                  f"x {d['clock_read_ns']}ns each")
     if args.ledger:
         if not args.version or not args.commit or not args.receipt_path:
             sys.exit('--ledger needs --version, --commit and --receipt-path')

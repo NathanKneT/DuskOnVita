@@ -41,6 +41,9 @@
 #if TWV_VITA_SCENE_PROBE
 extern "C" void twv_vita_scene_probe(unsigned frame);
 #endif
+#if TWV_VITA_DECODE_PROBE
+extern "C" void twv_decode_probe_frame_end() noexcept; // gfx_vgl/profile_hooks.cpp
+#endif
 
 namespace aurora {
 AuroraConfig g_config;
@@ -183,6 +186,9 @@ void end_frame() noexcept {
   twv::gfx_vgl::end_frame();
 #else
   twv::gfx_null::end_frame();
+#endif
+#if TWV_VITA_DECODE_PROBE
+  twv_decode_probe_frame_end();
 #endif
 #if TWV_VITA_SCENE_PROBE
   static unsigned frame = 0;

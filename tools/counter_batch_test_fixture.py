@@ -83,6 +83,14 @@ def main():
         if expected.count(old) != 1:
             raise SystemExit('Ambiguous V59 counter name: ' + old)
         expected = expected.replace(old, new, 1)
+    # Off-screen skip: the shadow query runs on the game thread, so it
+    # counts into the game-thread batch and no longer reads the FIFO's offscreen flag.
+    for old, new, times in (('vgl::count(vgl::CounterId::ShadowImage', 'vgl::count_game(vgl::CounterId::ShadowImage', 4),
+                            ('.enabled() && vgl::offscreen && !vgl::OffscreenDrawSupported',
+                             '.enabled() && !vgl::OffscreenDrawSupported', 1)):
+        if expected.count(old) != times:
+            raise SystemExit('Unexpected V59 shadow counter text: ' + old)
+        expected = expected.replace(old, new)
     if source != expected:
         # Root may add independent backend work after this agent's freeze. Keep
         # this local audit strict for the producer blocks owned by this fixture.

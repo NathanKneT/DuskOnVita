@@ -36,6 +36,6 @@ for signature in ['extern "C" int twv_vita_shadow_image_skip_select(',
                   'extern "C" int twv_vita_shadow_image_skip(',
                   'extern "C" void twv_vita_shadow_image_skipped(']:
     parts.append(function(backend,signature))
-assert 'if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");return;}' in backend
+assert 'if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}' in backend
 assert 'constexpr bool OffscreenDrawSupported=false;' in backend
 (out/'shadow_image_control.inc').write_text('\n'.join(parts))

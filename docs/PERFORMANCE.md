@@ -31,7 +31,8 @@ bytes compared per 1,020 frames in the house from 3.07 GB to 2.37 MB.
   optional renderer paths below compiled out.
 - `bash tools/vita_perf_build.sh` (`build-vita-perf/`): the measurement build. Every start-up renderer
   path compiled in and off unless selected; per-draw timers, the vertex work probe and the cache
-  re-decode oracle compiled out; frame, inclusive and scene receipts kept. Use it on the console.
+  re-decode oracle compiled out; frame, inclusive and scene receipts and the decode probe
+  (`TWV_VITA_DECODE_PROBE`) kept. Use it on the console.
 
 ## Run-time files
 
@@ -58,6 +59,7 @@ Available in every build:
 | `--vita-exit-after=SECONDS` | off | 10-3600: the run ends itself that long after Link first appears, with the receipts written |
 | `--vita-static-geometry=off\|on\|verify` | `off` | J3D display lists and their arrays by reference (aurora 0006, dusklight 0014); certified cache hits skip the byte comparison; `verify` compares every certified hit and counts differences |
 | `--vita-gx-thread=off\|on` | `off` | Aurora's GX FIFO, and every vitaGL draw, on a worker thread on core 1 (aurora 0007); the game thread keeps core 0 |
+| `--vita-pipeline-fast=off\|on\|verify` | `off` | fill the GX pipeline config in place and look it up by a compact key, instead of rebuilding, hashing and comparing the whole ~2.7 KB config at every state change; `verify` runs both and counts differences (`gfx_pipeline_fast_*_mismatch`) |
 | `--vita-gpu-digest=off\|on\|draws:A-B` | `off` | one `gfx_digest` receipt per frame: a hash of what the frame hands to the renderer; `draws:A-B` also writes each draw's hash for frames A to B to `digest_draws.txt` |
 | `--vita-capture=A-B/S` | off | PNG captures of frames A, A+S, ... up to B (at most 48) in `ux0:data/twilight-vita/captures/` |
 | `--vita-capture-match=on\|off` | `off` | with the digest on, also capture the first frame whose digest is listed in `capture_match.txt` |
@@ -78,7 +80,7 @@ In the performance build, or with the matching `-D` option:
 | `--vita-neon-compare=on\|off` | `TWV_VITA_NEON_COMPARE` | exact NEON comparisons in the geometry cache |
 | `--vita-vertex-cull=on\|off` | `TWV_VITA_VERTEX_CULL` | conservative rejection of draws wholly outside the screen |
 | `--vita-sparse-spans=on\|off` | `TWV_VITA_SPARSE_SPANS` | compare only the source intervals the indices reference |
-| `--vita-shadow-image-skip=on\|off` | `TWV_VITA_SHADOW_IMAGE_SKIP` | skip CPU work for shadow images the renderer cannot draw yet (dusklight 0013) |
+| `--vita-shadow-image-skip=on\|off` | `TWV_VITA_SHADOW_IMAGE_SKIP` | skip CPU work for shadow images the renderer cannot draw yet (dusklight 0013); safe with `--vita-gx-thread=on` |
 | `--vita-neon-decode=off\|on\|verify` | `TWV_VITA_NEON_DECODE` | NEON conversion of integer positions, normals and texture coordinates in the stream decoder, bit-identical to the scalar loops; `verify` recomputes every vertex with them and counts differences (`gfx_neon_decode_mismatches`). Not measured on the console |
 | `--vita-shader-capture=on\|off` | `TWV_VITA_SHADER_SOURCE_CAPTURE` | record every Cg stage the session compiles, for a warm-up bundle |
 | `--vita-benchmark=C1-FIGHT` | `TWV_VITA_BENCHMARK` | a scripted 450-frame fight in Faron (`--stage=F_SP108,6,1,0`, fresh start) |
@@ -124,6 +126,10 @@ Buffered lines are written by a low-priority thread on core 2, and drained at a 
   present and audio (`prof_*_us`), draws and compiled shader stages (`gfx_*`), shader stages
   prepared by the warm-up and compiled in play (`shader_warmup_*`, `gfx_shader_play_*`).
 - Scene probe (performance build): stage, room and whether Link exists, after each FIFO drain.
+- Decode probe (performance build): on one frame in 30, the GX worker's FIFO time split exactly into
+  kinds of work (`gfx_decode_probe_*`: BP, XF and CP register decode, static lists, draw parsing,
+  pipeline lookup, draw setup, backend draws, the rest); `tools/vita_run_report.py` prints it per run.
+- Off-screen draws the renderer drops, per target size (`gfx_offscreen_discard_<w>x<h>`).
 - Stops: `stub_trap` (an unimplemented symbol), `abort`, `terminate`, the end of a timed run.
 
 ## Measuring on the console

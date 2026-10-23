@@ -21,6 +21,56 @@ NEW = '''  if(!twv_vgl_texture_sampler_unit(i,obj.min_filter(),obj.mag_filter()=
    twv::vita::telemetryFlush();std::abort();
   }'''
 DRAW = 'twv_vgl_draw(&state,vertices,data.vtxCount,indices,data.indexCount);'
+# Later audited backend change (the off-screen skip): game-thread shadow query and counters,
+# discarded off-screen draws tallied per target size. Applied after the C03 replacement.
+OFFSCREEN = [
+    ('VertexDecoderControl shadowImageSkipControl{bool(TWV_VITA_SHADOW_IMAGE_SKIP)};\n',
+     'VertexDecoderControl shadowImageSkipControl{bool(TWV_VITA_SHADOW_IMAGE_SKIP)};\n'
+     "// Counted by the game thread's skip queries, merged at end_frame after the FIFO drain:\n"
+     '// with the GX worker on, hotCounters belong to the worker.\n'
+     'CounterBatch gameThreadCounters;\n'),
+    ('uint32_t frame_count=0, off_w=0, off_h=0;\n',
+     'uint32_t frame_count=0, off_w=0, off_h=0;\n'
+     '// Draws dropped because their off-screen target cannot be drawn, by target size (one size\n'
+     '// per pass: shadow, bloom, depth of field, minimap), so a run shows what each pass costs.\n'
+     'struct OffscreenDiscards {uint32_t w,h,draws;};\n'
+     'std::array<OffscreenDiscards,8> offscreenDiscards{};\n'
+     'void tally_offscreen_discard() noexcept {\n'
+     ' for(auto& t:offscreenDiscards) if(!t.draws || (t.w==off_w && t.h==off_h)) {t.w=off_w;t.h=off_h;++t.draws;return;}\n'
+     '}\n'),
+    ('void flush_hot_counters() noexcept {\n#if TWV_VITA_BATCH_COUNTERS\n'
+     ' hotCounters.flush([](const char* name,uint64_t delta) {\n'
+     '  const auto it=counters.find(name);\n  if(it!=counters.end())it->second+=delta;\n'
+     '  else counters.emplace(name,delta);\n });\n#endif\n}\n',
+     'void count_game(CounterId id,uint32_t amount) noexcept {gameThreadCounters.add(id,amount);}\n'
+     'void flush_hot_counters() noexcept {\n const auto merge=[](const char* name,uint64_t delta) {\n'
+     '  const auto it=counters.find(name);\n  if(it!=counters.end())it->second+=delta;\n'
+     '  else counters.emplace(name,delta);\n };\n#if TWV_VITA_BATCH_COUNTERS\n'
+     ' hotCounters.flush(merge);\n#endif\n gameThreadCounters.flush(merge);\n}\n'),
+    ('extern "C" int twv_vita_shadow_image_skip() {\n vgl::shadowImageSkipControl.begin();\n'
+     ' vgl::count(vgl::CounterId::ShadowImageCalls);\n'
+     ' return vgl::shadowImageSkipControl.enabled() && vgl::offscreen && !vgl::OffscreenDrawSupported;\n}\n'
+     'extern "C" void twv_vita_shadow_image_skipped(unsigned models,unsigned shapes) {\n'
+     ' vgl::count(vgl::CounterId::ShadowImageSkippedCalls);\n'
+     ' vgl::count(vgl::CounterId::ShadowImageSkippedModels,models);\n'
+     ' vgl::count(vgl::CounterId::ShadowImageRestoredPackets,shapes);\n}\n',
+     '// Game thread. Reads only start-up state, never vgl::offscreen: with the GX worker on, the\n'
+     "// worker may not have processed the pass's BEGIN_OFFSCREEN yet. dDlst_shadowReal_c::imageDraw\n"
+     "// is only called inside the shadow pass's GXCreateFrameBuffer (TARGET_PC), so it is off-screen.\n"
+     'extern "C" int twv_vita_shadow_image_skip() {\n vgl::shadowImageSkipControl.begin();\n'
+     ' vgl::count_game(vgl::CounterId::ShadowImageCalls);\n'
+     ' return vgl::shadowImageSkipControl.enabled() && !vgl::OffscreenDrawSupported;\n}\n'
+     'extern "C" void twv_vita_shadow_image_skipped(unsigned models,unsigned shapes) {\n'
+     ' vgl::count_game(vgl::CounterId::ShadowImageSkippedCalls);\n'
+     ' vgl::count_game(vgl::CounterId::ShadowImageSkippedModels,models);\n'
+     ' vgl::count_game(vgl::CounterId::ShadowImageRestoredPackets,shapes);\n}\n'),
+    ('  for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);\n',
+     '  for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);\n'
+     '  for(const auto& t:vgl::offscreenDiscards) if(t.draws)\n'
+     '   twv::vita::telemetryEvent(("gfx_offscreen_discard_"+std::to_string(t.w)+"x"+std::to_string(t.h)).c_str(),t.draws);\n'),
+    ('{count("unsupported_offscreen_draw");return;}',
+     '{count("unsupported_offscreen_draw");tally_offscreen_discard();return;}'),
+]
 TEXTURE_PIN = '8ba4b22ab4a4ba1db58f77a7c0bd04994624ae63ae58c12d3b545bf30083f9fc'
 
 def sha(data):
@@ -64,8 +114,13 @@ def main():
     original = baseline_bytes.decode()
     candidate_path = args.candidate_source or args.repo_root / RELATIVE
     candidate = candidate_path.read_text()
-    if original.count(OLD) != 1 or candidate != original.replace(OLD, NEW, 1):
-        raise SystemExit('Candidate differs from the audited single-call C03 replacement')
+    expected = original.replace(OLD, NEW, 1)
+    for old, new in OFFSCREEN:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited off-screen edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    if original.count(OLD) != 1 or candidate != expected:
+        raise SystemExit('Candidate differs from the audited C03 replacement and off-screen edits')
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
     candidate_wrapper, candidate_body, candidate_loop = loop_and_draw(candidate, 'dispatch_candidate')

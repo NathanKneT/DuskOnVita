@@ -301,7 +301,17 @@ bool ready=false, in_frame=false, offscreen=false;
 // Implementing FBO drawing must change it here; supported passes cannot be skipped.
 constexpr bool OffscreenDrawSupported=false;
 VertexDecoderControl shadowImageSkipControl{bool(TWV_VITA_SHADOW_IMAGE_SKIP)};
+// Counted by the game thread's skip queries, merged at end_frame after the FIFO drain:
+// with the GX worker on, hotCounters belong to the worker.
+CounterBatch gameThreadCounters;
 uint32_t frame_count=0, off_w=0, off_h=0;
+// Draws dropped because their off-screen target cannot be drawn, by target size (one size
+// per pass: shadow, bloom, depth of field, minimap), so a run shows what each pass costs.
+struct OffscreenDiscards {uint32_t w,h,draws;};
+std::array<OffscreenDiscards,8> offscreenDiscards{};
+void tally_offscreen_discard() noexcept {
+ for(auto& t:offscreenDiscards) if(!t.draws || (t.w==off_w && t.h==off_h)) {t.w=off_w;t.h=off_h;++t.draws;return;}
+}
 unsigned light_sample_batches=0;
 aurora::gfx::Viewport viewport{0,0,724,544,0,1};
 aurora::gfx::ClipRect scissor{0,0,724,544};
@@ -321,14 +331,17 @@ void count(CounterId id,uint32_t amount) noexcept {
  count(CounterNames[slot],amount);
 #endif
 }
+void count_game(CounterId id,uint32_t amount) noexcept {gameThreadCounters.add(id,amount);}
 void flush_hot_counters() noexcept {
-#if TWV_VITA_BATCH_COUNTERS
- hotCounters.flush([](const char* name,uint64_t delta) {
+ const auto merge=[](const char* name,uint64_t delta) {
   const auto it=counters.find(name);
   if(it!=counters.end())it->second+=delta;
   else counters.emplace(name,delta);
- });
+ };
+#if TWV_VITA_BATCH_COUNTERS
+ hotCounters.flush(merge);
 #endif
+ gameThreadCounters.flush(merge);
 }
 }
 namespace twv::gfx_vgl {
@@ -336,15 +349,18 @@ namespace twv::gfx_vgl {
 extern "C" int twv_vita_shadow_image_skip_select(int enabled) {
  return vgl::shadowImageSkipControl.select(enabled);
 }
+// Game thread. Reads only start-up state, never vgl::offscreen: with the GX worker on, the
+// worker may not have processed the pass's BEGIN_OFFSCREEN yet. dDlst_shadowReal_c::imageDraw
+// is only called inside the shadow pass's GXCreateFrameBuffer (TARGET_PC), so it is off-screen.
 extern "C" int twv_vita_shadow_image_skip() {
  vgl::shadowImageSkipControl.begin();
- vgl::count(vgl::CounterId::ShadowImageCalls);
- return vgl::shadowImageSkipControl.enabled() && vgl::offscreen && !vgl::OffscreenDrawSupported;
+ vgl::count_game(vgl::CounterId::ShadowImageCalls);
+ return vgl::shadowImageSkipControl.enabled() && !vgl::OffscreenDrawSupported;
 }
 extern "C" void twv_vita_shadow_image_skipped(unsigned models,unsigned shapes) {
- vgl::count(vgl::CounterId::ShadowImageSkippedCalls);
- vgl::count(vgl::CounterId::ShadowImageSkippedModels,models);
- vgl::count(vgl::CounterId::ShadowImageRestoredPackets,shapes);
+ vgl::count_game(vgl::CounterId::ShadowImageSkippedCalls);
+ vgl::count_game(vgl::CounterId::ShadowImageSkippedModels,models);
+ vgl::count_game(vgl::CounterId::ShadowImageRestoredPackets,shapes);
 }
 void init() noexcept {
  vgl::ready=twv_vgl_init()!=0;
@@ -385,6 +401,8 @@ void end_frame() noexcept {
   twv::vita::telemetryEvent("gfx_shader_info_invalid",sPipelineInfoReuse.invalid);
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
+  for(const auto& t:vgl::offscreenDiscards) if(t.draws)
+   twv::vita::telemetryEvent(("gfx_offscreen_discard_"+std::to_string(t.w)+"x"+std::to_string(t.h)).c_str(),t.draws);
   twv::vita::telemetryEvent("game_frames",vgl::frame_count);
   twv::vita::telemetryFlush();
  }
@@ -514,7 +532,7 @@ template<> gx::DrawData* get_last_draw_command<gx::DrawData>() { return nullptr;
 template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  using namespace twv::vgl;
  if(!in_frame) {count("draw_outside_frame");return;}
- if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");return;}
+ if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}
  if(data.pipeline>=pipelines.size()) {count("invalid_pipeline");return;}
  auto& p=pipelines[data.pipeline]; const auto& c=p.config;
  if(c.cullMode==GX_CULL_ALL) return;

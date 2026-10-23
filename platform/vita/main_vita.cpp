@@ -33,6 +33,7 @@ extern "C" int twv_vita_static_geometry_select(int mode) __attribute__((weak));
 extern "C" int twv_vita_gx_thread_select(int enabled) __attribute__((weak));
 extern "C" int twv_vita_shader_capture_select(int enabled) __attribute__((weak));
 extern "C" int twv_vita_neon_decode_select(int mode) __attribute__((weak));
+extern "C" int twv_vita_pipeline_fast_select(int mode) __attribute__((weak));
 // Strong on purpose: it pulls runtime/gx_thread.o (and the worker's core hook) into the link.
 extern "C" int twv_vita_gx_thread_pin_main(void);
 // G0/G1 (gfx_vgl/gpu_dispatch.cpp): backend, draw digest and frame capture. Absent in null-graphics builds.
@@ -238,7 +239,9 @@ int main(int, char**) {
                 (rendererOption==18 && (!twv_vita_shader_capture_select ||
                     !twv_vita_shader_capture_select(rendererOptions.shaderCapture))) ||
                 (rendererOption==19 && (!twv_vita_neon_decode_select ||
-                    !twv_vita_neon_decode_select(rendererOptions.neonDecode)));
+                    !twv_vita_neon_decode_select(rendererOptions.neonDecode))) ||
+                (rendererOption==20 && (!twv_vita_pipeline_fast_select ||
+                    !twv_vita_pipeline_fast_select(rendererOptions.pipelineFast)));
             if(rendererOption<0 || unavailable) {
                 twv::vita::telemetryText("args_error","renderer option unavailable, invalid or selected more than once");
                 twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
@@ -279,6 +282,11 @@ int main(int, char**) {
             if(rendererOption==19) {
                 const char* names[]={"off","on","verify"};
                 twv::vita::telemetryText("neon_decode_requested",names[rendererOptions.neonDecode]);
+                continue;
+            }
+            if(rendererOption==20) {
+                const char* names[]={"off","on","verify"};
+                twv::vita::telemetryText("pipeline_fast_requested",names[rendererOptions.pipelineFast]);
                 continue;
             }
             if(rendererOption==18) {
@@ -345,6 +353,7 @@ int main(int, char**) {
     if(!rendererOptions.lazyPlanSelected)twv::vita::telemetryText("lazy_vertex_plan_requested","default off");
     if(!rendererOptions.staticGeometrySelected)twv::vita::telemetryText("static_geometry_requested","default off");
     if(!rendererOptions.gxThreadSelected)twv::vita::telemetryText("gx_thread_requested","default off");
+    if(!rendererOptions.pipelineFastSelected)twv::vita::telemetryText("pipeline_fast_requested","default off");
 
     // All port-owned options and selection failures have been checked. The
     // original game's CLI validation remains game_main's responsibility.

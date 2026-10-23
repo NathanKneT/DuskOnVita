@@ -195,6 +195,7 @@ if(TWV_VITA_GFX_VGL)
     option(TWV_VITA_BATCH_COUNTERS "Batch hot diagnostic counter updates before the unchanged ordered receipt export" ON)
     option(TWV_VITA_DRAW_TIMERS "Detailed per-draw diagnostic timers (retain frame/shader/inclusive timers when OFF)" ON)
     option(TWV_VITA_VERTEX_WORK_PROBE "Sample one changing vertex packet per64 for CPU work attribution (diagnostic overhead)" OFF)
+    option(TWV_VITA_DECODE_PROBE "Split GX FIFO time into draws, static lists and the rest on one frame in 30" OFF)
     option(TWV_VITA_WORD_COMPARE "Compare validated cache spans in exact bounded word blocks, including unaligned data" ON)
     option(TWV_VITA_NEON_COMPARE "Compile exact ARMv7 NEON cache comparisons; activate with --vita-neon-compare=on" OFF)
     option(TWV_VITA_NEON_DECODE "Compile NEON integer attribute kernels; activate with --vita-neon-decode=on|verify" OFF)
@@ -215,7 +216,7 @@ if(TWV_VITA_GFX_VGL)
     target_sources(twv_aurora PRIVATE
         platform/vita/gfx_vgl/backend.cpp platform/vita/gfx_vgl/vertex.cpp
         platform/vita/gfx_vgl/shaders.cpp platform/vita/gfx_vgl/gpu_vertex_shader.cpp
-        platform/vita/gfx_vgl/profile_hooks.cpp
+        platform/vita/gfx_vgl/profile_hooks.cpp platform/vita/gfx_vgl/pipeline_fast.cpp
         platform/vita/gfx_vgl/textures.cpp
         ${AURORA_ROOT}/lib/gx/shader_info.cpp ${AURORA_ROOT}/lib/gx/texture.cpp
         ${AURORA_ROOT}/lib/gfx/texture_convert.cpp)
@@ -258,6 +259,22 @@ if(TWV_VITA_GFX_VGL)
         COMPILE_DEFINITIONS TWV_VITA_DRAW_TIMERS=$<BOOL:${TWV_VITA_DRAW_TIMERS}>)
     set_property(SOURCE platform/vita/aurora/aurora_vita.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_GFX_VGL=1)
+    set_property(SOURCE platform/vita/gfx_vgl/profile_hooks.cpp
+                        platform/vita/aurora/aurora_vita.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS TWV_VITA_DECODE_PROBE=$<BOOL:${TWV_VITA_DECODE_PROBE}>)
+    if(TWV_VITA_DECODE_PROBE)
+        target_link_options(twv_aurora INTERFACE
+            -Wl,--wrap=_ZN6aurora3gfx17push_draw_commandINS_2gx8DrawDataEEEvT_ -Wl,--wrap=twv_gfx_static_dl
+            -Wl,--wrap=_ZN6aurora2gx4fifo9handle_bpEj -Wl,--wrap=_ZN6aurora2gx4fifo9handle_cpEhj
+            -Wl,--wrap=_ZN6aurora2gx4fifo9handle_xfEtSt4spanIKhLj4294967295EE
+            -Wl,--wrap=_ZN6aurora2gx4fifo12copy_xf_dataEjPKhjSt6endian -Wl,--wrap=twv_gfx_array_base
+            -Wl,--wrap=_ZN6aurora3gfx10push_vertsEPKhjj -Wl,--wrap=_ZN6aurora3gfx12push_indicesEPKhjj
+            -Wl,--wrap=_ZN6aurora2gx7texture23current_bind_generationEv)
+    endif()
+    # --vita-pipeline-fast (gfx_vgl/pipeline_fast.cpp); it also marks these two for the decode probe.
+    target_link_options(twv_aurora INTERFACE
+        -Wl,--wrap=_ZN6aurora2gx24populate_pipeline_configERNS0_14PipelineConfigE11GXPrimitive8GXVtxFmt
+        -Wl,--wrap=_ZN6aurora3gfx12pipeline_refINS_2gx14PipelineConfigEEEjRKT_)
     set_property(SOURCE ${AURORA_ROOT}/lib/gx/fifo.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_GFX_VGL=1)
     target_link_options(twv_aurora INTERFACE -Wl,--wrap=_ZN6aurora2gx13build_uniformERKNS0_10ShaderInfoE)

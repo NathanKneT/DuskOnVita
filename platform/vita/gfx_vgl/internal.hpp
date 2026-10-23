@@ -32,6 +32,7 @@ struct Texture : aurora::gfx::TextureRef {
 };
 void count(const char* name, uint32_t amount=1) noexcept;
 void count(CounterId id,uint32_t amount=1) noexcept;
+void count_game(CounterId id,uint32_t amount=1) noexcept; // game thread only, see backend.cpp
 TwvVitaVertex* build_vertices(const Pipeline&,const aurora::gx::DrawData&) noexcept;
 bool gpu_vertex_supported(const Pipeline&) noexcept;
 void* build_gpu_vertices(const Pipeline&,const aurora::gx::DrawData&,unsigned& pnSlots,bool& culled) noexcept;

@@ -156,6 +156,7 @@ extern "C" int twv_vita_gx_thread_select(int value) { return selectRenderer("gx_
 extern "C" int twv_vita_gx_thread_pin_main() { state.calls.emplace_back("pin_main"); return 0; }
 extern "C" int twv_vita_shader_capture_select(int value) { return selectRenderer("capture", value); }
 extern "C" int twv_vita_neon_decode_select(int value) { return selectRenderer("neon_decode", value); }
+extern "C" int twv_vita_pipeline_fast_select(int value) { return selectRenderer("pipeline_fast", value); }
 extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memory) {
     state.calls.emplace_back("bundle"); ++state.bundleCalls;
     state.bundleFeatures = features; state.memoryProfile = memory; return state.bundleAvailable;
@@ -277,6 +278,12 @@ int main() {
     assert(run("--vita-neon-decode=verify") == 7 && state.selections.at("neon_decode") == 2);
     assert(state.text.at("neon_decode_requested") == "verify" && state.gameArgs.size() == 5);
     checkRejected(run("--vita-neon-decode=fast"));
+    // Fast pipeline lookup: three-way renderer choice.
+    assert(run("--vita-pipeline-fast=verify") == 7 && state.selections.at("pipeline_fast") == 2);
+    assert(state.text.at("pipeline_fast_requested") == "verify" && state.gameArgs.size() == 5);
+    assert(run("") == 7 && state.text.at("pipeline_fast_requested") == "default off");
+    for (const char* bad : {"--vita-pipeline-fast=1", "--vita-pipeline-fast=on --vita-pipeline-fast=off"})
+        checkRejected(run(bad));
     // Exit timer: consumed by the port, never passed to the game.
     assert(run("--vita-exit-after=90 --stage R_SP01,4,2,0") == 7); checkClocks(true, false);
     assert(state.exitAfter == 90 && state.events.at("run_exit_after_requested_s") == 90);

@@ -8,13 +8,15 @@
 #include <string>
 using namespace twv::vgl;
 std::map<std::string,uint64_t,std::less<>> counters,reference;
-CounterBatch hotCounters;
+CounterBatch hotCounters,gameThreadCounters;
 void count(const char*,uint32_t=1) noexcept;
 void count(CounterId,uint32_t=1) noexcept;
+void count_game(CounterId,uint32_t=1) noexcept;
 void reference_count(const char* name,uint32_t amount=1) noexcept {reference[name]+=amount;}
 #include "counter_functions.inc"
 namespace twv::vgl {
 using ::count;
+using ::count_game;
 VertexDecoderControl shadowImageSkipControl{true};
 bool offscreen=false,OffscreenDrawSupported=false;
 }
@@ -42,7 +44,8 @@ void actual_shadow_counts(bool enabled,bool offscreen,bool supported,unsigned mo
     twv::vgl::offscreen=offscreen;twv::vgl::OffscreenDrawSupported=supported;
     const bool actual=twv::gfx_vgl::twv_vita_shadow_image_skip();
     const bool expected=twv::gfx_vgl::shadow_image_skip_reference();
-    assert(actual==expected && actual==(enabled && offscreen && !supported));
+    // The game-thread query ignores the FIFO's offscreen flag; V59 read it.
+    assert(actual==(enabled && !supported) && expected==(actual && offscreen));
     if(actual) {
         twv::gfx_vgl::twv_vita_shadow_image_skipped(models,shapes);
         twv::gfx_vgl::shadow_image_skipped_reference(models,shapes);
