@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/NathanKneT/DuskOnVita/discussions
+    about: Setup and usage questions go to Discussions. Issues are for bugs, features and console measurements.
