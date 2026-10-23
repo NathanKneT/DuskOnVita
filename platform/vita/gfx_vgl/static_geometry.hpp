@@ -37,6 +37,10 @@ struct StaticGeometryState {
     void array_base(uint32_t index) noexcept {
         if (index < arrayLists.size()) arrayLists[index] = listId;
     }
+    // Whether [raw, raw+bytes) lies in the static list being processed (G2 resident geometry).
+    bool contains(const uint8_t* raw, size_t bytes) const noexcept {
+        return mode != StaticGeometryMode::Off && listId && raw && raw >= listBegin && size_t(listEnd - raw) >= bytes;
+    }
     // isDynamic(array, gen&): whether the array was named dynamic, and the generation that answer
     // holds for. `gen` is the dynamic-array generation read before this call.
     template<class Dynamic>

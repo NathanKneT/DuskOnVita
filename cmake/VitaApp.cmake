@@ -126,6 +126,13 @@ if(TWV_VITA_GFX_VGL)
         platform/vita/gfx_vgl/resident_geometry.cpp)
     set_property(SOURCE platform/vita/gfx_vgl/gpu_common.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_DRAW_TIMERS=$<BOOL:${TWV_VITA_DRAW_TIMERS}>)
+    # G1: the direct GXM backend, selected at start-up with --vita-gpu=gxm (vitaGL stays default).
+    option(TWV_VITA_GFX_GXM "Compile the start-up selectable direct GXM backend" ON)
+    if(TWV_VITA_GFX_GXM)
+        target_sources(twv_vita_runtime PRIVATE platform/vita/gfx_gxm/gxm_backend.cpp)
+    endif()
+    set_property(SOURCE platform/vita/gfx_vgl/gpu_dispatch.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS TWV_VITA_GFX_GXM=$<BOOL:${TWV_VITA_GFX_GXM}>)
     set_property(SOURCE platform/vita/gfx_vgl/shader_preparation.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_SHADER_WARMUP=$<BOOL:${TWV_VITA_SHADER_WARMUP}>
                             TWV_VITA_SHADER_SOURCE_CAPTURE=$<BOOL:${TWV_VITA_SHADER_SOURCE_CAPTURE}>)

@@ -475,6 +475,9 @@ Range push_storage(const uint8_t* data,size_t size) {
 }
 Range push_indices(const uint8_t* data,size_t size,size_t alignment) {
  (void)alignment; sFrameStats.lastIndexSize+=size;
+ // G2 (--vita-gxm-resident): indices inside the static list being processed stay in GPU memory.
+ if(const void* resident=twv::vgl::static_resident_indices(data,size))
+  return {.offset=uint32_t(reinterpret_cast<uintptr_t>(resident)),.size=uint32_t(size)};
  // Aurora generated/read these indices before entry. Primitive eligibility and
  // generation time cannot be inferred here; all real allocation/copy calls count.
  twv::vgl::CpuIndexScope cpuCost(sCpuCostProbe,size);
@@ -541,6 +544,8 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  if(c.shaderConfig.fogRangeEnabled) count(CounterId::FallbackFogRangeDraw);
  if(c.blendMode==GX_BM_LOGIC && c.blendOp!=GX_LO_COPY) count(CounterId::FallbackLogicBlendDraw);
  const auto lights=gpu_light_plan(p);
+ // G2 (GXM, --vita-gxm-compact): packed formats are fixed before the first decode and shader.
+ if(!p.packedConfigured) configure_packed_formats(p);
  const unsigned variant=lights.count;
  if(!p.attempted[variant]) {
   ProfileScope timer(TWV_PROFILE_SHADER);
@@ -587,6 +592,12 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  TwvVitaDrawState state{};state.program=p.programs[variant];
  state.gpu_vertex=p.gpuVertex;
  state.vertex_layout=p.vertexLayout;
+ // G2: native primitive (patches/aurora/0008, only when the GXM backend draws them) and packed formats.
+ state.primitive=data.primitive==GX_TRIANGLESTRIP?TwvPrimitiveStrip:data.primitive==GX_TRIANGLEFAN?TwvPrimitiveFan:
+     data.primitive==GX_QUADS?TwvPrimitiveQuads:TwvPrimitiveTriangles;
+ std::memcpy(state.vertex_formats,p.packed.format.data(),TwvVertexAttributeCount);
+ std::memcpy(state.vertex_counts,p.packed.count.data(),TwvVertexAttributeCount);
+ std::memcpy(state.vertex_fracs,p.packed.frac.data(),TwvVertexAttributeCount);
  if(p.gpuVertex)gpu_vertex_uniforms(state,p,pnSlots,lights);
  state.viewport[0]=GameLeft+int(vp.left);state.viewport[1]=544-int(vp.top+vp.height);
  state.viewport[2]=int(vp.width);state.viewport[3]=int(vp.height);

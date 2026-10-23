@@ -3,14 +3,16 @@
 # (selected per run in args.txt / sequence.txt, default OFF), diagnostics that
 # cost per draw compiled out, frame/inclusive receipts and scene probe kept.
 #
-#   tools/vita_perf_build.sh [build-dir]      (default build-vita-perf)
+#   tools/vita_perf_build.sh [build-dir [extra -D overrides...]]   (default build-vita-perf)
 #
+# Extra arguments come last, so they override the defaults below (for example
+# -DTWV_VITA_CACHE_VALIDATE=ON for an oracle build in its own build directory).
 # Uses its own work tree (TWV_WORK, default ~/twilight-vita-perf-work), so it never
 # shares object files with another checkout's build.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 export TWV_WORK=${TWV_WORK:-$HOME/twilight-vita-perf-work}
-build=${1:-build-vita-perf}
+build=${1:-build-vita-perf}; shift || true
 exec bash "$repo/tools/vita_build.sh" "$build" \
   -DTWV_VITA_GFX_VGL=ON -DTWV_VITA_RENDER_BUNDLE=ON -DTWV_VITA_GX_FAST_DECODE=ON \
   -DTWV_VITA_LAZY_VERTEX_PLAN=ON -DTWV_VITA_STREAM_DECODE=ON -DTWV_VITA_SMALL_PACKET_CACHE=ON \
@@ -19,4 +21,4 @@ exec bash "$repo/tools/vita_build.sh" "$build" \
   -DTWV_VITA_SCENE_PROBE=ON -DTWV_VITA_DECODE_PROBE=ON \
   -DTWV_VITA_DRAW_TIMERS=OFF -DTWV_VITA_VERTEX_WORK_PROBE=OFF -DTWV_VITA_CACHE_VALIDATE=OFF \
   -DTWV_VITA_SHADER_SOURCE_CAPTURE=ON -DTWV_VITA_PLANNED_FETCH=OFF \
-  -DTWV_VITA_BENCHMARK=OFF
+  -DTWV_VITA_BENCHMARK=OFF "$@"

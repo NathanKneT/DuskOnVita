@@ -36,6 +36,20 @@ int main() {
         assert(m.consume("--vita-capture-match=on")==1 && !m.consistent()); // matching needs the digest
     }
     {
+        // G2 features: GXM only, each once.
+        GpuOptions o;
+        assert(o.consume("--vita-gxm-primitives=on")==1 && o.consume("--vita-gxm-primitives=off")==-1);
+        assert(o.consume("--vita-gxm-compact=colors")==1 && o.consume("--vita-gxm-resident=on")==1);
+        assert(o.features==(GpuOptions::FeaturePrimitives|GpuOptions::FeatureCompact|GpuOptions::FeatureCompactColors|
+                            GpuOptions::FeatureResident));
+        assert(o.any() && !o.consistent()); // still vgl
+        assert(o.consume("--vita-gpu=gxm")==1 && o.consistent());
+        GpuOptions c;
+        assert(c.consume("--vita-gxm-compact=on")==1 && c.features==GpuOptions::FeatureCompact);
+        assert(GpuOptions{}.consume("--vita-gxm-compact=all")==-1 && GpuOptions{}.consume("--vita-gxm-resident=1")==-1);
+        assert(!GpuOptions{}.any());
+    }
+    {
         twv::gpu::CaptureSchedule s;s.first=10;s.last=30;s.step=10;
         assert(s.active() && !s.wants(9,0) && s.wants(10,0) && !s.wants(15,0) && s.wants(20,0) && s.wants(30,0) && !s.wants(40,0));
         assert(s.load_match("# comment\r\n00000000000000aa\r\n\n00000000000000BB\n")==false);

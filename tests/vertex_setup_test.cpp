@@ -76,6 +76,13 @@ int twv_vita_bundle_feature(uint32_t){return 0;}
 int twv_vgl_resident_available(){return 0;}
 void* twv_vgl_resident_alloc(size_t){std::abort();}
 void twv_vgl_resident_release(void*){std::abort();}
+// G2 (GXM features): off here, so no resident memory, no small-packet floor exception, no packing.
+uint32_t twv_gpu_features(){return 0;}
+int twv_gpu_resident_available(){return 0;}
+void* twv_gpu_resident_alloc(size_t){std::abort();}
+void twv_gpu_resident_release(void*){std::abort();}
+struct {bool contains(const uint8_t*,size_t)const{return false;}} staticGeometry;
+void resident_index_clear(){}
 // Collision pressure is deliberate; neither cache may trust pointer/hash alone.
 uint32_t XXH32(const void*,size_t,uint32_t){return 0;}
 // T3 static geometry is off in these builder tests: no certificate, no verify mode.

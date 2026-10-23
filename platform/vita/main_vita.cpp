@@ -39,7 +39,7 @@ extern "C" int twv_vita_gx_thread_pin_main(void);
 // G0/G1 (gfx_vgl/gpu_dispatch.cpp): backend, draw digest and frame capture. Absent in null-graphics builds.
 extern "C" int twv_vita_gpu_select(int backend, int digest, uint32_t digest_first, uint32_t digest_last,
                                    uint32_t capture_first, uint32_t capture_last, uint32_t capture_step,
-                                   int capture_match) __attribute__((weak));
+                                   int capture_match, uint32_t features) __attribute__((weak));
 #if TWV_VITA_BENCHMARK
 extern "C" int twv_vita_benchmark_enable(const char*);
 #endif
@@ -327,13 +327,12 @@ int main(int, char**) {
         twv::vita::telemetryText("args_error","render bundle unavailable or selected after first use");
         twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
     }
-    if (gpuOptions.backendSelected || gpuOptions.digestSelected || gpuOptions.captureSelected ||
-        gpuOptions.matchSelected) {
+    if (gpuOptions.any()) {
         if (!gpuOptions.consistent() || !twv_vita_gpu_select ||
             !twv_vita_gpu_select(gpuOptions.backend, gpuOptions.digest, gpuOptions.digestFirst,
                                  gpuOptions.digestLast, gpuOptions.captureFirst, gpuOptions.captureLast,
-                                 gpuOptions.captureStep, gpuOptions.captureMatch)) {
-            twv::vita::telemetryText("args_error", "GPU backend not in this build, or capture-match without digest");
+                                 gpuOptions.captureStep, gpuOptions.captureMatch, gpuOptions.features)) {
+            twv::vita::telemetryText("args_error", "GPU backend not in this build, capture-match without digest, or a GXM feature without --vita-gpu=gxm");
             twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
         }
     }

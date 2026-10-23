@@ -823,7 +823,8 @@ const TwvGpuBackend vglBackend{
     "vgl",vgl_init,vgl_shutdown,vgl_begin,vgl_end,vgl_pacing_report,vgl_report,vgl_alloc,
     vgl_vertex_is_vram,vgl_vertex_write_class,vgl_vertex_write_class_report,
     vgl_program,vgl_program_delete,vgl_draw,vgl_texture,vgl_texture_static_rgba,
-    vgl_texture_write,vgl_texture_delete,vgl_texture_sampler,vgl_texture_sampler_unit,vgl_clear};
+    vgl_texture_write,vgl_texture_delete,vgl_texture_sampler,vgl_texture_sampler_unit,vgl_clear,
+    twv_vgl_resident_available,twv_vgl_resident_alloc,twv_vgl_resident_release,0u};
 } // namespace
 // resident_geometry.cpp (vitaGL only) orders its waits after observed submissions.
 extern "C" void twv_vgl_submit_barrier(void){submit_barrier();}

@@ -3,7 +3,7 @@
 
 Backend ABI/dispatch test only: no substitute GPU, actor, or game decoder.
 The full candidate must equal the SHA-bound baseline plus the one audited call
-replacement. Generated wrappers omit unrelated push_draw setup, retain its
+replacement and the three audited G2 insertions outside the loop. Generated wrappers omit unrelated push_draw setup, retain its
 sampled-texture loop verbatim, and execute its exact draw statement afterward.
 """
 import argparse
@@ -72,6 +72,38 @@ OFFSCREEN = [
      '{count("unsupported_offscreen_draw");tally_offscreen_discard();return;}'),
 ]
 TEXTURE_PIN = '8ba4b22ab4a4ba1db58f77a7c0bd04994624ae63ae58c12d3b545bf30083f9fc'
+# GXM G2 (docs/ARCHITECTURE.md): the only other audited backend changes, three insertions outside
+# the sampled-texture loop (resident static indices, packed formats, native primitive).
+G2_INSERTIONS = [
+    (' (void)alignment; sFrameStats.lastIndexSize+=size;\n',
+     ' // G2 (--vita-gxm-resident): indices inside the static list being processed stay in GPU memory.\n'
+     ' if(const void* resident=twv::vgl::static_resident_indices(data,size))\n'
+     '  return {.offset=uint32_t(reinterpret_cast<uintptr_t>(resident)),.size=uint32_t(size)};\n'),
+    (' const auto lights=gpu_light_plan(p);\n',
+     ' // G2 (GXM, --vita-gxm-compact): packed formats are fixed before the first decode and shader.\n'
+     ' if(!p.packedConfigured) configure_packed_formats(p);\n'),
+    (' state.vertex_layout=p.vertexLayout;\n',
+     ' // G2: native primitive (patches/aurora/0008, only when the GXM backend draws them) and packed formats.\n'
+     ' state.primitive=data.primitive==GX_TRIANGLESTRIP?TwvPrimitiveStrip:data.primitive==GX_TRIANGLEFAN?TwvPrimitiveFan:\n'
+     '     data.primitive==GX_QUADS?TwvPrimitiveQuads:TwvPrimitiveTriangles;\n'
+     ' std::memcpy(state.vertex_formats,p.packed.format.data(),TwvVertexAttributeCount);\n'
+     ' std::memcpy(state.vertex_counts,p.packed.count.data(),TwvVertexAttributeCount);\n'
+     ' std::memcpy(state.vertex_fracs,p.packed.frac.data(),TwvVertexAttributeCount);\n'),
+]
+
+def audited(original):
+    """The baseline with the C03 replacement, the G2 insertions (each after its anchor line) and the
+    off-screen edits."""
+    expected = original.replace(OLD, NEW, 1)
+    for anchor, inserted in G2_INSERTIONS:
+        if expected.count(anchor) != 1:
+            raise SystemExit('G2 anchor not unique in the baseline; re-audit: ' + anchor.strip())
+        expected = expected.replace(anchor, anchor + inserted, 1)
+    for old, new in OFFSCREEN:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited off-screen edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    return expected
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -114,13 +146,8 @@ def main():
     original = baseline_bytes.decode()
     candidate_path = args.candidate_source or args.repo_root / RELATIVE
     candidate = candidate_path.read_text()
-    expected = original.replace(OLD, NEW, 1)
-    for old, new in OFFSCREEN:
-        if expected.count(old) != 1:
-            raise SystemExit('Audited off-screen edit no longer matches the baseline: ' + old[:60])
-        expected = expected.replace(old, new, 1)
-    if original.count(OLD) != 1 or candidate != expected:
-        raise SystemExit('Candidate differs from the audited C03 replacement and off-screen edits')
+    if original.count(OLD) != 1 or candidate != audited(original):
+        raise SystemExit('Candidate differs from the audited C03 replacement, G2 insertions and off-screen edits')
     output = args.output_dir
     output.mkdir(parents=True, exist_ok=True)
     candidate_wrapper, candidate_body, candidate_loop = loop_and_draw(candidate, 'dispatch_candidate')

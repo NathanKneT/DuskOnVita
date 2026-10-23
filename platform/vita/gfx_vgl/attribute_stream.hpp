@@ -311,6 +311,57 @@ void pack_color_attribute(const AttributeStream<Attr>& in,uint8_t* out,
     default:ordered_attribute_stream<GX_RGBA8,true>(in,out,stride,vertices,4,0);break;
     }
 }
+// G2 packed formats (GXM backend): the attribute's own integers byte-swapped to little endian,
+// or its F32 bits, with no conversion. The vertex shader applies the GX shift (an exact power of
+// two); RGBA8 colour bytes go to the GPU as U8N.
+// Each attribute slot is 4-byte aligned; its padding is written as zeros, so a packed vertex is
+// fully determined by the packet (the caches compare outputs byte for byte).
+template<int Type,int Index,bool Little,class Attr>
+void packed_attribute_stream(const AttributeStream<Attr>& in,uint8_t* out,uint32_t outputStride,
+        uint32_t vertices,unsigned components) noexcept {
+    constexpr unsigned size=Type==GX_U8 || Type==GX_S8 ? 1 : Type==GX_F32 ? 4 : 2;
+    const unsigned used=components*size,slot=(used+3u)&~3u;
+    for(uint32_t v=0;v<vertices;++v,out+=outputStride) {
+        const auto* p=in.template at<Index>(v);
+        for(unsigned i=0;i<components;++i) {
+            if constexpr(Type==GX_U8 || Type==GX_S8)out[i]=p[i];
+            else if constexpr(Type==GX_U16 || Type==GX_S16) {
+                const uint16_t r=stream_u16<Little>(p+2*i);std::memcpy(out+2*i,&r,2);
+            } else {const uint32_t r=stream_u32<Little>(p+4*i);std::memcpy(out+4*i,&r,4);}
+        }
+        for(unsigned i=used;i<slot;++i)out[i]=0;
+    }
+}
+template<int Type,class Attr>
+void packed_attribute_indexed(const AttributeStream<Attr>& in,uint8_t* out,uint32_t stride,uint32_t vertices,
+        unsigned components) noexcept {
+    if(in.attr.attrType==GX_DIRECT)packed_attribute_stream<Type,GX_DIRECT,false>(in,out,stride,vertices,components);
+    else if(in.attr.attrType==GX_INDEX8) {
+        if(in.attr.le)packed_attribute_stream<Type,GX_INDEX8,true>(in,out,stride,vertices,components);
+        else packed_attribute_stream<Type,GX_INDEX8,false>(in,out,stride,vertices,components);
+    } else {
+        if(in.attr.le)packed_attribute_stream<Type,GX_INDEX16,true>(in,out,stride,vertices,components);
+        else packed_attribute_stream<Type,GX_INDEX16,false>(in,out,stride,vertices,components);
+    }
+}
+template<class Attr>
+void pack_packed_numeric(const AttributeStream<Attr>& in,uint8_t* out,uint32_t stride,uint32_t vertices,
+        unsigned components) noexcept {
+    count_stream_vertices(0,unsigned(in.attr.compType),in.attr.attrType,vertices);
+    switch(in.attr.compType) {
+    case GX_U8:packed_attribute_indexed<GX_U8>(in,out,stride,vertices,components);break;
+    case GX_S8:packed_attribute_indexed<GX_S8>(in,out,stride,vertices,components);break;
+    case GX_U16:packed_attribute_indexed<GX_U16>(in,out,stride,vertices,components);break;
+    case GX_S16:packed_attribute_indexed<GX_S16>(in,out,stride,vertices,components);break;
+    default:packed_attribute_indexed<GX_F32>(in,out,stride,vertices,components);break;
+    }
+}
+// RGBA8 only (the packed colour format): four bytes R, G, B, A, as the GX stores them.
+template<class Attr>
+void pack_packed_color(const AttributeStream<Attr>& in,uint8_t* out,uint32_t stride,uint32_t vertices) noexcept {
+    count_stream_vertices(2,unsigned(in.attr.compType),in.attr.attrType,vertices);
+    packed_attribute_indexed<GX_U8>(in,out,stride,vertices,4);
+}
 inline void default_attribute_stream(uint8_t* out,uint32_t stride,uint32_t vertices,
         const float* value,unsigned bytes) noexcept {
     for(uint32_t v=0;v<vertices;++v,out+=stride) {

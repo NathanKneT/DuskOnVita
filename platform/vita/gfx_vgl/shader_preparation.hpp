@@ -1,5 +1,6 @@
 #pragma once
-// Generated Cg source only. Native GXP ownership/serialization stays in vitaGL.
+// Generated Cg source only. Native GXP ownership/serialization stays in the backend
+// (vitaGL's cache for --vita-gpu=vgl, gfx_gxm's GXP cache for --vita-gpu=gxm).
 #include <array>
 #include <cstddef>
 #include <cstdint>

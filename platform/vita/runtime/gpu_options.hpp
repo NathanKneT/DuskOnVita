@@ -7,6 +7,11 @@
 //   --vita-capture=A-B/S                    PNG of frames A, A+S, ... <= B (max 48)
 //   --vita-capture-match=on|off             also capture the first frame whose digest
 //                                           is listed in capture_match.txt
+// G2, GXM backend only (each default off):
+//   --vita-gxm-primitives=on|off            native strips/fans and a quad index table
+//   --vita-gxm-compact=off|on|colors        packed integer attributes; colors adds RGBA8 as U8N
+//   --vita-gxm-resident=on|off              certified geometry (no 32-vertex floor) and static-list
+//                                           indices in a CDRAM arena retired by frame fence
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -20,9 +25,22 @@ struct GpuOptions {
     uint32_t digestFirst=0,digestLast=0;
     uint32_t captureFirst=0,captureLast=0,captureStep=0;
     int captureMatch=0;
+    bool primitivesSelected=false,compactSelected=false,residentSelected=false;
+    uint32_t features=0; // TwvGpuFeature* bits (gfx_vgl/gpu_api.h)
+    static constexpr uint32_t FeaturePrimitives=1u,FeatureCompact=2u,FeatureCompactColors=4u,FeatureResident=8u;
     // 0 not a GPU option, -1 invalid or repeated, 1 accepted.
     int consume(const char* token) noexcept {
         if(!token)return -1;
+        if(const char* v=value(token,"--vita-gxm-primitives"))return toggle(v,primitivesSelected,FeaturePrimitives);
+        if(const char* v=value(token,"--vita-gxm-resident"))return toggle(v,residentSelected,FeatureResident);
+        if(const char* v=value(token,"--vita-gxm-compact")) {
+            if(compactSelected)return -1;
+            if(std::strcmp(v,"off")==0){}
+            else if(std::strcmp(v,"on")==0)features|=FeatureCompact;
+            else if(std::strcmp(v,"colors")==0)features|=FeatureCompact|FeatureCompactColors;
+            else return -1;
+            compactSelected=true;return 1;
+        }
         if(const char* v=value(token,"--vita-gpu")) {
             if(backendSelected)return -1;
             if(std::strcmp(v,"vgl")==0)backend=0;
@@ -57,9 +75,20 @@ struct GpuOptions {
         }
         return 0;
     }
-    // Matching needs the digest; the caller reports this as an invalid combination.
-    bool consistent()const noexcept {return !captureMatch || digest;}
+    // Matching needs the digest and G2 features need the GXM backend; the caller reports
+    // either as an invalid combination.
+    bool consistent()const noexcept {return (!captureMatch || digest) && (!features || backend==1);}
+    bool any()const noexcept {
+        return backendSelected || digestSelected || captureSelected || matchSelected ||
+               primitivesSelected || compactSelected || residentSelected;
+    }
 private:
+    int toggle(const char* v,bool& selected,uint32_t bit) noexcept {
+        if(selected)return -1;
+        if(std::strcmp(v,"on")==0)features|=bit;
+        else if(std::strcmp(v,"off")!=0)return -1;
+        selected=true;return 1;
+    }
     // "name=value" -> value; anything else (including "name" alone or a longer name) -> null.
     static const char* value(const char* token,const char* name) noexcept {
         const size_t n=std::strlen(name);

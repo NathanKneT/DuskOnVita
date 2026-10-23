@@ -51,6 +51,7 @@ struct Pipeline {
  struct {std::bitset<8> sampledTexCoords;} info;
  TwvVitaVertexLayout vertexLayout{};
  bool gpuTexgen=true,usesCurrentPn=true;uint32_t sourceArrayMask=0;
+ PackedFormats packed{}; // G2: F32 only here (twv_gpu_features()==0)
 };
 using aurora::gx::AttrConfig;
 template<class T>void count(T,uint32_t=1){}
@@ -65,9 +66,14 @@ static uint32_t twv_vgl_vertex_write_class(const void*ptr,size_t bytes){
 static uint32_t twv_vgl_vertex_is_vram(const void*){return memoryClass==uint32_t(VertexWriteClass::Vram);}
 static uint64_t twv_vgl_time_us(){return 0;}
 static int twv_vita_bundle_feature(uint32_t){return 0;}
-static int twv_vgl_resident_available(){return 0;}
-static void* twv_vgl_resident_alloc(size_t){std::abort();}
-static void twv_vgl_resident_release(void*){std::abort();}
+// G2 (GXM features): off here, so no resident memory, no small-packet floor exception, no packing.
+// The builder reaches either backend's resident arena through twv_gpu_resident_*.
+static uint32_t twv_gpu_features(){return 0;}
+static int twv_gpu_resident_available(){return 0;}
+static void* twv_gpu_resident_alloc(size_t){std::abort();}
+static void twv_gpu_resident_release(void*){std::abort();}
+static struct {bool contains(const uint8_t*,size_t)const{return false;}} staticGeometry;
+static void resident_index_clear(){}
 // Bundled xxHash header is absent here. Constant output intentionally stresses
 // exact source/key checks; this test makes no assertion about hash distribution.
 static uint32_t XXH32(const void*,size_t,uint32_t){return 0;}

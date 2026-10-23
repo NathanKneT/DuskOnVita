@@ -8,6 +8,7 @@
 #include <aurora/math.hpp>
 #pragma GCC diagnostic pop
 #include "gfx_vgl/gpu_api.h"
+#include "gfx_vgl/vertex_contract.hpp" // PackedFormats in the extracted Pipeline (G2)
 #include <fmt/format.h>
 #include <array>
 #include <bit>

@@ -1,0 +1,53 @@
+Vita: draw GX quads, strips and fans natively (start-up choice of the GXM backend).
+Without the hook, or with it returning 0, every draw is exactly as before.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -233,6 +233,9 @@
+ // The same backend: an array base load (GX_VA_POS-based attribute), before the unchanged-array check,
+ // so it learns where every load came from (a static list's or not).
+ extern "C" void twv_gfx_array_base(u32 attr) noexcept __attribute__((weak));
++// patches/aurora/0008: the backend draws GX quads, strips and fans itself (start-up choice);
++// those draws then carry their primitive instead of a generated triangle index list.
++extern "C" int twv_gx_native_primitives() noexcept __attribute__((weak));
+ #endif
+ 
+ // The original command switch, shared by the persistent ByteReader reference path
+@@ -629,6 +632,9 @@
+       .indexCount = numIndices,
+       .instanceCount = instanceCount,
+       .dstAlpha = state.dstAlpha,
++#if defined(__vita__)
++      .primitive = numIndices != 0 ? GX_TRIANGLES : prim,
++#endif
+   });
+ }
+ 
+@@ -638,6 +644,13 @@
+   gfx::Range idxRange;
+ 
+   if (prim != GX_TRIANGLES) {
++#if defined(__vita__)
++    if ((prim == GX_QUADS || prim == GX_TRIANGLESTRIP || prim == GX_TRIANGLEFAN) && twv_gx_native_primitives &&
++        twv_gx_native_primitives()) {
++      push_gx_draw(prim, fmt, vtxCount, vertRange, {}, 0);
++      return;
++    }
++#endif
+     ZoneScopedN("build idx buffer");
+     static ByteBuffer idxBuf;
+     numIndices = prepare_idx_buffer(idxBuf, prim, 0, vtxCount);
+--- a/lib/gx/pipeline.hpp
++++ b/lib/gx/pipeline.hpp
+@@ -15,6 +15,11 @@
+   uint32_t indexCount;
+   uint32_t instanceCount;
+   uint32_t dstAlpha;
++#if defined(__vita__)
++  // Vita (patches/aurora/0008): the GX primitive when the draw has no index list because the
++  // backend draws quads, strips and fans natively; GX_TRIANGLES otherwise.
++  GXPrimitive primitive = GX_TRIANGLES;
++#endif
+ };
+ 
+ constexpr uint32_t GXPipelineConfigVersion = 13;

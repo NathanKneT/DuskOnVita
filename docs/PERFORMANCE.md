@@ -45,6 +45,7 @@ In `ux0:data/twilight-vita/`:
 | `sequence.txt` | one run per line (`label: options`), one per launch, in order, then `args.txt` again; the position is kept in `sequence_state.txt` (delete it to start over) |
 | `shader_warmup.bin` | optional: Cg sources to compile before gameplay (below) |
 | `runtime.jsonl` | written by the port: the receipts |
+| `gxp_cache/` | written by the GXM backend: compiled shaders, checked before use |
 
 ## Start-up switches
 
@@ -59,6 +60,10 @@ Available in every build:
 | `--vita-exit-after=SECONDS` | off | 10-3600: the run ends itself that long after Link first appears, with the receipts written |
 | `--vita-static-geometry=off\|on\|verify` | `off` | J3D display lists and their arrays by reference (aurora 0006, dusklight 0014); certified cache hits skip the byte comparison; `verify` compares every certified hit and counts differences |
 | `--vita-gx-thread=off\|on` | `off` | Aurora's GX FIFO, and every vitaGL draw, on a worker thread on core 1 (aurora 0007); the game thread keeps core 0 |
+| `--vita-gpu=vgl\|gxm` | `vgl` | the renderer: vitaGL, or the experimental direct GXM backend ([ARCHITECTURE.md](ARCHITECTURE.md)); if it fails to start, the run writes `gfx_init_failure` and exits |
+| `--vita-gxm-resident=on\|off` | `off` | GXM only: certified geometry and static-list indices stay in a GPU memory arena instead of being copied every frame |
+| `--vita-gxm-compact=off\|on\|colors` | `off` | GXM only: integer positions, normals and texture coordinates keep their GX format (exact); `colors` also sends RGBA8 colours as bytes |
+| `--vita-gxm-primitives=on\|off` | `off` | GXM only: quads, strips and fans drawn natively, without index lists (aurora 0008) |
 | `--vita-pipeline-fast=off\|on\|verify` | `off` | fill the GX pipeline config in place and look it up by a compact key, instead of rebuilding, hashing and comparing the whole ~2.7 KB config at every state change; `verify` runs both and counts differences (`gfx_pipeline_fast_*_mismatch`) |
 | `--vita-gpu-digest=off\|on\|draws:A-B` | `off` | one `gfx_digest` receipt per frame: a hash of what the frame hands to the renderer; `draws:A-B` also writes each draw's hash for frames A to B to `digest_draws.txt` |
 | `--vita-capture=A-B/S` | off | PNG captures of frames A, A+S, ... up to B (at most 48) in `ux0:data/twilight-vita/captures/` |

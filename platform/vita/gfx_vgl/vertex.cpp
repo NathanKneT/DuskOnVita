@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <unordered_map>
 #ifndef TWV_VITA_PLANNED_FETCH
 #define TWV_VITA_PLANNED_FETCH 0
 #endif
@@ -54,6 +55,10 @@ bool geometryCacheEnabled=true;
 bool residentAllocatorConfigured=false;
 uint64_t residentReplayPackets=0,residentReplayBytes=0;
 uint64_t cacheValidationSerial=0;
+// G2 (GXM backend, start-up features): resident certified geometry and indices, packed formats.
+bool gxm_resident() {return (twv_gpu_features()&TwvGpuFeatureResident)!=0;}
+uint64_t residentSmallPackets=0,packedPipelines=0,residentIndexHits=0,residentIndexStores=0,
+    residentIndexVerified=0,residentIndexMismatches=0,residentIndexFallbacks=0,residentIndexReleases=0;
 VertexStaging vertexStaging;
 VertexWorkProbe vertexWorkProbe;
 VertexDecoderControl streamDecodeControl{bool(TWV_VITA_STREAM_DECODE)};
@@ -257,6 +262,19 @@ struct Decoded {
   uint8_t texmtx[8]{};
 };
 
+// One attribute of a reference-decoded vertex: F32 as before, or a G2 packed format through the
+// exact inverse (false when the value is not representable: counted as a validation failure).
+uint64_t packedInexact=0;
+bool store_attribute(void* vertex,const TwvVitaVertexLayout& layout,const PackedFormats& f,unsigned attr,const float* values) {
+  if(layout.offsets[attr]==TwvVertexAttributeAbsent)return true;
+  auto* dst=static_cast<uint8_t*>(vertex)+layout.offsets[attr];
+  if(f.format[attr]==TwvFormatF32){std::memcpy(dst,values,layout.components[attr]*sizeof(float));return true;}
+  const unsigned used=f.count[attr]*packed_format_bytes(f.format[attr]),slot=(used+3u)&~3u;
+  for(unsigned i=used;i<slot;++i)dst[i]=0; // same zero padding as the stream packers
+  if(pack_attribute(dst,f.format[attr],f.count[attr],f.frac[attr],values))return true;
+  ++packedInexact;return false;
+}
+
 // What the draw needs from each vertex.
 struct Needs {
   bool normal = false, nbt = false, color[2] = {false, false};
@@ -387,6 +405,9 @@ public:
     return true;
   }
 
+  // G2: whether the packet supplies this attribute (else the packers write the F32 default).
+  bool provides(unsigned attr) const {return wanted[attr] && cfg.attrs[attr].attrType!=GX_NONE;}
+
   bool pack_raw_streams(const TwvVitaVertexLayout& layout,uint8_t* output,unsigned& pnSlots) const {
     pnSlots=1;if(!draw.vtxCount)return true;
     const auto pnOffset=layout.offsets[12];const auto& pn=cfg.attrs[GX_VA_PNMTXIDX];
@@ -450,6 +471,61 @@ public:
       if(std::memcmp(expected.data(),packed+size_t(v)*layout.stride,layout.stride))return false;
     }
     return slots==pnSlots;
+  }
+
+  // G2 (GXM, --vita-gxm-compact): the slots with a packed format, after pack_raw_streams wrote the
+  // F32 slots of the same layout (packed_slots_absent). The matrix index becomes a byte, integers
+  // keep their GX format and shift, RGBA8 colours their bytes, each slot zero-padded to 4 bytes
+  // (gfx_vgl/vertex_contract.hpp). pack_raw_streams has already rejected bad matrix indices.
+  void pack_packed_slots(const TwvVitaVertexLayout& layout,uint8_t* output,const PackedFormats& packed) const {
+    if(!draw.vtxCount)return;
+    const auto pnOffset=layout.offsets[12];const auto& pn=cfg.attrs[GX_VA_PNMTXIDX];
+    if(pnOffset!=TwvVertexAttributeAbsent && packed.format[12]==TwvFormatU8) {
+      for(uint32_t v=0;v<draw.vtxCount;++v) {
+        const uint32_t word=pn.attrType==GX_DIRECT?uint32_t(vtxBase[size_t(v)*cfg.vtxStride+pn.offset]/3u)
+                                                   :uint32_t(draw.immediateData.currentPnMtx);
+        std::memcpy(output+size_t(v)*layout.stride+pnOffset,&word,4); // byte + zero padding
+      }
+    }
+    const auto numeric=[&](unsigned attr,unsigned slot) {
+      const auto offset=layout.offsets[slot];
+      if(offset==TwvVertexAttributeAbsent || packed.format[slot]==TwvFormatF32)return;
+      pack_packed_numeric(AttributeStream<AttrConfig>{cfg.attrs[attr],vtxBase,arrays[attr-GX_VA_POS],cfg.vtxStride},
+          output+offset,layout.stride,draw.vtxCount,packed.count[slot]);
+    };
+    numeric(GX_VA_POS,0);
+    numeric(GX_VA_NRM,11);
+    for(unsigned tc=0;tc<8;++tc)if(layout.offsets[3+tc]!=TwvVertexAttributeAbsent)
+      numeric(GX_VA_TEX0+(cfg.tcgs[tc].src-GX_TG_TEX0),3+tc);
+    for(unsigned ch=0;ch<2;++ch)if(layout.offsets[1+ch]!=TwvVertexAttributeAbsent && packed.format[1+ch]==TwvFormatU8N) {
+      const unsigned attr=GX_VA_CLR0+ch;
+      pack_packed_color(AttributeStream<AttrConfig>{cfg.attrs[attr],vtxBase,arrays[attr-GX_VA_POS],cfg.vtxStride},
+          output+layout.offsets[1+ch],layout.stride,draw.vtxCount);
+    }
+  }
+  // G2 oracle: validate_raw_streams' independent reference decoder, each value stored through the
+  // exact inverse of its packed format (a value the format cannot hold exactly fails).
+  bool validate_packed_streams(const TwvVitaVertexLayout& layout,const uint8_t* packed,unsigned pnSlots,
+                               const PackedFormats& formats) const {
+    std::array<uint8_t,sizeof(TwvVitaVertex)> expected{};Decoded d{};unsigned slots=1;
+    for(uint32_t v=0;v<draw.vtxCount;++v) {
+      decode_reference(v,d);if(d.pnmtx>=aurora::gx::MaxPnMtx)return false;
+      slots=std::max(slots,unsigned(d.pnmtx)+1);
+      if(!store_reference_vertex(expected.data(),layout,formats,d))return false;
+      if(std::memcmp(expected.data(),packed+size_t(v)*layout.stride,layout.stride))return false;
+    }
+    return slots==pnSlots;
+  }
+  // One reference-decoded vertex in the layout (F32, or G2 packed through the exact inverse).
+  bool store_reference_vertex(uint8_t* vertex,const TwvVitaVertexLayout& layout,const PackedFormats& f,const Decoded& d) const {
+    bool exact=store_attribute(vertex,layout,f,0,&d.pos.x) && store_attribute(vertex,layout,f,11,&d.nrm.x);
+    const float index=float(d.pnmtx);exact=store_attribute(vertex,layout,f,12,&index) && exact;
+    for(unsigned ch=0;ch<2;++ch)exact=store_attribute(vertex,layout,f,1+ch,&d.clr[ch].x) && exact;
+    for(unsigned tc=0;tc<8;++tc)if(layout.offsets[3+tc]!=TwvVertexAttributeAbsent) {
+      const auto src=cfg.tcgs[tc].src-GX_TG_TEX0;
+      const float t[3]={d.tex[src][0],d.tex[src][1],1.f};exact=store_attribute(vertex,layout,f,3+tc,t) && exact;
+    }
+    return exact;
   }
 
   // GX lighting_func for one channel config; alpha selects the ALPHA0/1 state.
@@ -904,12 +980,111 @@ StaticCert static_packet_cert(const Pipeline& p,const aurora::gx::DrawData& d,si
 }
 bool static_verify() noexcept {return staticGeometry.mode==StaticGeometryMode::Verify;}
 
+// G2 packed formats (--vita-gxm-compact, GXM backend). Once per pipeline, before its first decode
+// and shader: integer positions, normals and texture coordinates keep their GX format and shift
+// (the vertex shader multiplies by the exact power of two), the matrix index becomes a byte, and
+// with "colors" RGBA8 colours go as U8N. Only pipelines the stream packer handles (GPU texgen,
+// direct or no matrix index, no binormals) are packed; attributes the packet does not supply,
+// F32 data and other colour formats stay F32.
+void configure_packed_formats(Pipeline& p) noexcept {
+  p.packedConfigured=true;
+  const uint32_t features=twv_gpu_features();
+  if(!(features&TwvGpuFeatureCompact) || !p.gpuVertex || !p.gpuTexgen)return;
+  const aurora::gx::DrawData empty{};
+#if TWV_VITA_LAZY_VERTEX_PLAN
+  const VertexStage stage(p,empty,false);
+#else
+  const VertexStage stage(p,empty);
+#endif
+  const auto& layout=p.vertexLayout;
+  if(!stage.can_pack_raw_streams(layout))return;
+  const auto& cfg=p.config.shaderConfig;
+  PackedFormats f{};
+  const auto numeric=[&](unsigned slot,unsigned attr,unsigned count) {
+    if(layout.offsets[slot]==TwvVertexAttributeAbsent || !stage.provides(attr))return;
+    const auto& a=cfg.attrs[attr];
+    uint8_t format;
+    switch(a.compType) {
+    case GX_U8:format=TwvFormatU8;break;
+    case GX_S8:format=TwvFormatS8;break;
+    case GX_U16:format=TwvFormatU16;break;
+    case GX_S16:format=TwvFormatS16;break;
+    default:return; // F32 stays F32
+    }
+    if(a.frac>=32)return;
+    f.format[slot]=format;f.count[slot]=uint8_t(count);f.frac[slot]=int8_t(a.frac);
+  };
+  numeric(0,GX_VA_POS,cfg.attrs[GX_VA_POS].cnt==2?2:3);
+  numeric(11,GX_VA_NRM,3);
+  for(unsigned tc=0;tc<8;++tc)if(layout.offsets[3+tc]!=TwvVertexAttributeAbsent) {
+    const unsigned attr=GX_VA_TEX0+(cfg.tcgs[tc].src-GX_TG_TEX0);
+    numeric(3+tc,attr,cfg.attrs[attr].cnt==1?1:2);
+  }
+  if(layout.offsets[12]!=TwvVertexAttributeAbsent){f.format[12]=TwvFormatU8;f.count[12]=1;}
+  if(features&TwvGpuFeatureCompactColors)for(unsigned ch=0;ch<2;++ch) {
+    const unsigned attr=GX_VA_CLR0+ch;
+    if(layout.offsets[1+ch]!=TwvVertexAttributeAbsent && stage.provides(attr) && cfg.attrs[attr].compType==GX_RGBA8)
+      {f.format[1+ch]=TwvFormatU8N;f.count[1+ch]=4;}
+  }
+  if(!f.any())return;
+  p.packed=f;p.vertexLayout=packed_layout_of(layout,f);++packedPipelines;
+}
+
+// G2 resident indices (--vita-gxm-resident): an index list that lies in the static list being
+// processed is certified with that list (its id changes when the list is invalidated), so it is
+// copied once into GPU memory and drawn from there; entries unused for 120 frames are released
+// (the backend retires them by fence). Verify mode compares every hit with the list's bytes.
+namespace {
+struct IndexKey {
+  uint32_t list,offset,bytes;
+  bool operator==(const IndexKey& o)const noexcept {return list==o.list && offset==o.offset && bytes==o.bytes;}
+};
+struct IndexKeyHash {
+  size_t operator()(const IndexKey& k)const noexcept {return size_t(k.list)*0x9E3779B1u^size_t(k.offset)*0x85EBCA77u^k.bytes;}
+};
+struct IndexEntry {void* gpu;uint64_t lastFrame;};
+std::unordered_map<IndexKey,IndexEntry,IndexKeyHash> residentIndices;
+uint64_t indexFrame=0;
+}
+const void* static_resident_indices(const uint8_t* data,size_t size) noexcept {
+  if(!size || size>UINT32_MAX || !gxm_resident() || !staticGeometry.contains(data,size))return nullptr;
+  const IndexKey key{staticGeometry.listId,uint32_t(data-staticGeometry.listBegin),uint32_t(size)};
+  if(auto found=residentIndices.find(key);found!=residentIndices.end()) {
+    if(static_verify()) {
+      ++residentIndexVerified;
+      if(std::memcmp(found->second.gpu,data,size)!=0) {
+        ++residentIndexMismatches;twv_gpu_resident_release(found->second.gpu);++residentIndexReleases;
+        residentIndices.erase(found);return nullptr;
+      }
+    }
+    found->second.lastFrame=indexFrame;++residentIndexHits;return found->second.gpu;
+  }
+  void* gpu=twv_gpu_resident_alloc(size);
+  if(!gpu){++residentIndexFallbacks;return nullptr;}
+  std::memcpy(gpu,data,size);
+  residentIndices.emplace(key,IndexEntry{gpu,indexFrame});++residentIndexStores;
+  return gpu;
+}
+void resident_index_clear() noexcept {
+  for(auto& entry:residentIndices){twv_gpu_resident_release(entry.second.gpu);++residentIndexReleases;}
+  residentIndices.clear();
+}
+void resident_index_end_frame() noexcept {
+  if(++indexFrame%60)return;
+  for(auto it=residentIndices.begin();it!=residentIndices.end();) {
+    if(it->second.lastFrame+120<indexFrame){twv_gpu_resident_release(it->second.gpu);++residentIndexReleases;it=residentIndices.erase(it);}
+    else ++it;
+  }
+}
+
 void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& data,unsigned& pnSlots,bool& culled) noexcept {
   lazyVertexPlanControl.begin();
   smallPacketControl.begin();uncachedStagingControl.begin();
   if(!residentAllocatorConfigured){
-    if(twv_vita_bundle_feature(TWV_BUNDLE_RESIDENT_GEOMETRY) && twv_vgl_resident_available())
-      geometryCache.set_output_allocator(twv_vgl_resident_alloc,twv_vgl_resident_release);
+    // The backend's resident memory: vitaGL's arena (--vita-resident-geometry), or GXM's CDRAM
+    // arena retired by frame fence (that switch, or G2 --vita-gxm-resident).
+    if((twv_vita_bundle_feature(TWV_BUNDLE_RESIDENT_GEOMETRY) || gxm_resident()) && twv_gpu_resident_available())
+      geometryCache.set_output_allocator(twv_gpu_resident_alloc,twv_gpu_resident_release);
     residentAllocatorConfigured=true;
   }
   streamDecodeControl.begin();
@@ -921,7 +1096,14 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
   const size_t outputBytes=size_t(data.vtxCount)*layout.stride;
   VertexWorkSample sample(vertexWorkProbe,data.vtxCount,uint32_t(outputBytes),twv_vgl_time_us);
   unsigned char* out=nullptr;
-  const bool cacheable=TWV_VITA_GEOMETRY_CACHE && geometryCacheEnabled && geometryCache.budget() && pipeline.gpuTexgen && data.vtxCount>=32;
+  // G2 (--vita-gxm-resident): a packet inside a static list may be certified and then drawn from
+  // resident memory with no per-frame copy at all, so the 32-vertex floor does not apply to it.
+  const bool residentSmall=data.vtxCount<32 && gxm_resident() &&
+      staticGeometry.contains(reinterpret_cast<const uint8_t*>(uintptr_t(data.immediateData.vtxStart)),
+                              size_t(data.vtxCount)*pipeline.config.shaderConfig.vtxStride);
+  const bool cacheable=TWV_VITA_GEOMETRY_CACHE && geometryCacheEnabled && geometryCache.budget() && pipeline.gpuTexgen &&
+      (data.vtxCount>=32 || residentSmall);
+  if(residentSmall && cacheable)++residentSmallPackets;
   GeometryKey key{};uint32_t hash=0;
   StaticCert staticCert{};
   GeometryCache::Lookup cached{nullptr,0,false};
@@ -930,7 +1112,8 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
   uint32_t smallHash=0;
   const auto* smallSource=reinterpret_cast<const void*>(uintptr_t(data.immediateData.vtxStart));
   const auto& config=pipeline.config.shaderConfig;
-  const bool smallCacheable=smallPacketControl.enabled() && small_packet_eligible(config,data.vtxCount,smallSource,layout,pipeline.gpuTexgen);
+  const bool smallCacheable=!(residentSmall && cacheable) && smallPacketControl.enabled() &&
+      small_packet_eligible(config,data.vtxCount,smallSource,layout,pipeline.gpuTexgen);
   const size_t smallSourceBytes=smallCacheable?size_t(data.vtxCount)*config.vtxStride:0;
   SmallPacketCache::Lookup smallHit;
   bool validateSmall=false;
@@ -1036,12 +1219,18 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
 #endif
   sample.mark(VertexWorkPhase::Setup);
   bool streamed=false;
+  const bool packed=pipeline.packed.any(); // G2 packed formats (configure_packed_formats)
 #if TWV_VITA_STREAM_DECODE
-  if(streamDecodeControl.enabled() && !validateCached && !validateSmall && pipeline.gpuTexgen && stage.can_pack_raw_streams(layout)) {
-    if(!stage.pack_raw_streams(layout,decoded,pnSlots)){count("invalid_position_matrix");return nullptr;}
+  if(streamDecodeControl.enabled() && !validateCached && !validateSmall && pipeline.gpuTexgen &&
+     stage.can_pack_raw_streams(packed?float_layout_of(layout):layout)) {
+    // G2 packed pipelines: the unchanged F32 packer writes the F32 slots, then the packed slots.
+    if(!stage.pack_raw_streams(packed?packed_slots_absent(layout,pipeline.packed):layout,decoded,pnSlots))
+      {count("invalid_position_matrix");return nullptr;}
+    if(packed)stage.pack_packed_slots(layout,decoded,pipeline.packed);
     ++streamPackets;streamVertices+=data.vtxCount;streamed=true;
     if(TWV_VITA_CACHE_VALIDATE && ++streamValidationSerial%128==0) {
-      if(stage.validate_raw_streams(layout,decoded,pnSlots))++streamValidationPass;
+      if(packed?stage.validate_packed_streams(layout,decoded,pnSlots,pipeline.packed)
+               :stage.validate_raw_streams(layout,decoded,pnSlots))++streamValidationPass;
       else {
         ++streamValidationFailure;streamDecodeControl.fail();geometryCache.clear();smallPacketCache.clear();
         twv::vita::telemetryEvent("vertex_stream_validation_failure",streamValidationFailure);
@@ -1064,6 +1253,13 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
     if(d.pnmtx>=aurora::gx::MaxPnMtx) {count("invalid_position_matrix");return nullptr;}
     pnSlots=std::max(pnSlots,unsigned(d.pnmtx)+1);
     auto* vertex=decoded+size_t(v)*layout.stride;
+    if(packed) {
+      // G2 packed pipelines are GPU-texgen only (configure_packed_formats): raw texcoords.
+      if(!stage.store_reference_vertex(vertex,layout,pipeline.packed,d)) {
+        count("packed_attribute_inexact");return nullptr;
+      }
+      continue;
+    }
     store_vertex_attribute(vertex,layout,0,&d.pos);
     store_vertex_attribute(vertex,layout,11,&d.nrm);
     const float matrixIndex=float(d.pnmtx);
@@ -1112,7 +1308,8 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
     const unsigned n=stage.source_spans(spans,sparseSpansControl.enabled(),sparseSpansControl.enabled()?&broadBytes:nullptr);
     PositionBounds bounds{};
 #if TWV_VITA_VERTEX_CULL
-    if(vertexCullControl.enabled())bounds=position_bounds(decoded,outputBytes,data.vtxCount,layout.stride,layout.offsets[0],pnSlots);
+    // Bounds read F32 positions; packed pipelines (G2) are never culled this way.
+    if(vertexCullControl.enabled() && !packed)bounds=position_bounds(decoded,outputBytes,data.vtxCount,layout.stride,layout.offsets[0],pnSlots);
 #endif
     if(n){
       const bool stored=geometryCache.store(hash,key,spans.data(),n,decoded,outputBytes,pnSlots,bounds,staticCert);
@@ -1132,6 +1329,7 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
 
 void geometry_cache_end_frame() noexcept {
   geometryCache.end_frame();
+  resident_index_end_frame();
 #if TWV_VITA_GEOMETRY_CACHE
   // Resident entries retire through their captured provider; trimming cannot
   // recycle GPU storage until explicit completion. CPU entries keep ring replay.
@@ -1139,7 +1337,7 @@ void geometry_cache_end_frame() noexcept {
   if(!geometryCache.budget())vertexStaging.clear();
 #endif
 }
-void geometry_cache_clear() noexcept {geometryCache.clear();smallPacketCache.clear();vertexStaging.clear();}
+void geometry_cache_clear() noexcept {geometryCache.clear();smallPacketCache.clear();vertexStaging.clear();resident_index_clear();}
 void geometry_cache_report() noexcept {
   twv::vita::telemetryEvent("gfx_lazy_vertex_plan_compiled",lazyVertexPlanControl.compiled());
   twv::vita::telemetryEvent("gfx_lazy_vertex_plan_explicit",lazyVertexPlanControl.selected());
@@ -1237,6 +1435,17 @@ void geometry_cache_report() noexcept {
   twv::vita::telemetryEvent("gfx_geometry_static_mismatches",s.staticMismatches);
   twv::vita::telemetryEvent("gfx_geometry_static_certified",s.staticCertified);
   twv::vita::telemetryEvent("gfx_geometry_static_stores",s.staticStores);
+  twv::vita::telemetryEvent("gfx_gpu_features",twv_gpu_features());
+  twv::vita::telemetryEvent("gfx_resident_small_packets",residentSmallPackets);
+  twv::vita::telemetryEvent("gfx_packed_pipelines",packedPipelines);
+  twv::vita::telemetryEvent("gfx_packed_attribute_inexact",packedInexact);
+  twv::vita::telemetryEvent("gfx_resident_index_hits",residentIndexHits);
+  twv::vita::telemetryEvent("gfx_resident_index_stores",residentIndexStores);
+  twv::vita::telemetryEvent("gfx_resident_index_verified",residentIndexVerified);
+  twv::vita::telemetryEvent("gfx_resident_index_mismatches",residentIndexMismatches);
+  twv::vita::telemetryEvent("gfx_resident_index_fallbacks",residentIndexFallbacks);
+  twv::vita::telemetryEvent("gfx_resident_index_releases",residentIndexReleases);
+  twv::vita::telemetryEvent("gfx_resident_index_live",residentIndices.size());
   const auto& stream=stream_decode_stats();
   twv::vita::telemetryEvent("gfx_neon_decode_mode",int(stream.mode));
   twv::vita::telemetryEvent("gfx_neon_decode_selected",stream.selected);

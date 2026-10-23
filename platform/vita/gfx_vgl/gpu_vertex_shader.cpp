@@ -2,6 +2,7 @@
 // Palette/emboss/resource-limit texgens retain the explicitly counted CPU path.
 #include "internal.hpp"
 #include <fmt/format.h>
+#include <cmath>
 
 namespace twv::vgl {
 namespace {
@@ -108,8 +109,21 @@ std::string gpu_vertex_shader(const Pipeline& p,unsigned lightCount) {
        "uniform float4 light_color[{0}],uniform float4 light_cos[{0}],uniform float4 light_dist[{0}],"
        "uniform float4 light_masks[8]",lightCount);
     if(p.gpuTexgen && p.texgenVectors)s+=fmt::format(",uniform float4 texgen_rows[{}]",p.texgenVectors);
-    s+=") {Out o;"
-       "int m=int(pn_index)*3;float4 v=float4(position,1.0);"
+    s+=") {Out o;";
+    // G2 packed formats (GXM): integer inputs arrive unscaled; multiply by the GX shift, an exact
+    // power of two written with all its digits, so every value equals the F32 path's exactly.
+    // The statements sit between /*G2{*/ and /*}G2*/: the draw digest hashes the source without
+    // them (the G1 text of the same program).
+    std::string scales;
+    const auto scale=[&](unsigned slot,const std::string& name) {
+        const auto format=p.packed.format[slot];
+        if(format==TwvFormatF32 || format==TwvFormatU8N || p.packed.frac[slot]<=0)return;
+        scales+=fmt::format("{0}={0}*{1:.17g};",name,std::ldexp(1.0,-int(p.packed.frac[slot])));
+    };
+    scale(0,"position");scale(11,"normal");
+    for(unsigned tc=0;tc<8;++tc) if(p.info.sampledTexCoords.test(tc))scale(3+tc,fmt::format("tc{}",tc));
+    if(!scales.empty())s+="/*G2{*/"+scales+"/*}G2*/";
+    s+="int m=int(pn_index)*3;float4 v=float4(position,1.0);"
        "float3 mv=float3(dot(pn_pos[m],v),dot(pn_pos[m+1],v),dot(pn_pos[m+2],v));"
        "float4 view=float4(mv,1.0);"
        "o.pos=float4(dot(proj_rows[0],view),dot(proj_rows[1],view),"

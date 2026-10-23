@@ -35,15 +35,20 @@ struct TwvGpuBackend {
     int (*texture_sampler_unit)(uint32_t unit, int min_filter, int mag_filter, int wrap_s, int wrap_t);
     void (*clear)(float r, float g, float b, float a, float depth, unsigned mask,
                   int x, int y, int width, int height);
+    // G2: resident geometry memory and the features the backend can draw.
+    int (*resident_available)(void);
+    void* (*resident_alloc)(size_t bytes);
+    void (*resident_release)(void* ptr);
+    uint32_t features; // TwvGpuFeature* this backend supports
 };
 
 extern "C" {
 const TwvGpuBackend* twv_gpu_backend_vgl(void);
-// Present only in builds with the GXM backend (G1 and later).
-const TwvGpuBackend* twv_gpu_backend_gxm(void) __attribute__((weak));
+// gfx_gxm/gxm_backend.cpp, in builds with TWV_VITA_GFX_GXM (gpu_dispatch.cpp checks the flag).
+const TwvGpuBackend* twv_gpu_backend_gxm(void);
 // Start-up selection from main_vita.cpp (runtime/gpu_options.hpp). Returns 0 when
 // the backend is not compiled in, or when called twice or after init.
 int twv_vita_gpu_select(int backend, int digest, uint32_t digest_first, uint32_t digest_last,
                         uint32_t capture_first, uint32_t capture_last, uint32_t capture_step,
-                        int capture_match);
+                        int capture_match, uint32_t features);
 }

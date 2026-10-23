@@ -7,6 +7,7 @@
 #include "draw_digest.hpp"
 #include "frame_capture.hpp"
 #include "runtime/telemetry.hpp"
+#include <psp2/kernel/processmgr.h>
 #include <sys/stat.h>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 namespace {
 const TwvGpuBackend* backend=nullptr; // chosen once, before init
 bool selected=false,initialised=false;
+uint32_t requestedFeatures=0;          // G2 TwvGpuFeature* bits, a subset of backend->features
 int digestMode=0; // 0 off, 1 per-frame, 2 per-frame + per-draw hashes in a frame window
 uint32_t digestFirst=0,digestLast=0,frameIndex=0; // frameIndex: twv_vgl_end calls so far
 std::unique_ptr<twv::gpu::DrawDigest> digest;
@@ -46,21 +48,33 @@ void load_capture_match() {
 
 extern "C" int twv_vita_gpu_select(int which,int digestOption,uint32_t first,uint32_t last,
                                    uint32_t captureFirst,uint32_t captureLast,uint32_t captureStep,
-                                   int captureMatch) {
+                                   int captureMatch,uint32_t features) {
     if(selected || initialised || which<0 || which>1 || digestOption<0 || digestOption>2)return 0;
-    const TwvGpuBackend* chosen=which==0?twv_gpu_backend_vgl():(twv_gpu_backend_gxm?twv_gpu_backend_gxm():nullptr);
-    if(!chosen)return 0;
-    backend=chosen;selected=true;
+#if TWV_VITA_GFX_GXM
+    const TwvGpuBackend* chosen=which==0?twv_gpu_backend_vgl():twv_gpu_backend_gxm();
+#else
+    const TwvGpuBackend* chosen=which==0?twv_gpu_backend_vgl():nullptr;
+#endif
+    if(!chosen || (features & ~chosen->features))return 0;
+    backend=chosen;selected=true;requestedFeatures=features;
     digestMode=digestOption;digestFirst=first;digestLast=last;
     capture.first=captureFirst;capture.last=captureLast;capture.step=captureStep;
     if(captureMatch && digestMode)load_capture_match();
     return 1;
 }
 
+extern "C" uint32_t twv_gpu_features(void) {return requestedFeatures;}
+// patches/aurora/0008: whether quads, strips and fans reach the backend without index lists.
+extern "C" int twv_gx_native_primitives(void) noexcept {return (requestedFeatures&TwvGpuFeaturePrimitives)!=0;}
+extern "C" int twv_gpu_resident_available(void) {return gpu().resident_available();}
+extern "C" void* twv_gpu_resident_alloc(size_t bytes) {return gpu().resident_alloc(bytes);}
+extern "C" void twv_gpu_resident_release(void* ptr) {gpu().resident_release(ptr);}
+
 extern "C" int twv_vgl_init(void) {
     initialised=true;
     twv::gpu::common_init();
     twv::vita::telemetryText("gpu_backend",gpu().name);
+    twv::vita::telemetryEvent("gpu_features",requestedFeatures);
     twv::vita::telemetryEvent("gpu_digest_mode",digestMode);
     if(digestMode)digest=std::make_unique<twv::gpu::DrawDigest>();
     if(digestMode==2) {
@@ -74,7 +88,16 @@ extern "C" int twv_vgl_init(void) {
         twv::vita::telemetryEvent("capture_last",capture.last);
         twv::vita::telemetryEvent("capture_step",capture.step);
     }
-    return gpu().init();
+    if(gpu().init())return 1;
+    // Fail closed: the backend's own receipts name the failing call and its error code (gxm_error,
+    // gfx_init_failure); this one names the backend, and the run ends here with exit code 3 instead
+    // of an abort dialog or a black screen.
+    char text[96];
+    std::snprintf(text,sizeof text,"%s backend initialization failed; exiting",gpu().name);
+    twv::vita::telemetryText("gfx_init_failure",text);
+    twv::vita::telemetrySync();
+    sceKernelExitProcess(3);
+    return 0;
 }
 extern "C" void twv_vgl_shutdown(void) {
     gpu().shutdown();

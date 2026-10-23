@@ -3,6 +3,7 @@
 #include "gx/gx.hpp"
 #include "gx/pipeline.hpp"
 #include "gpu_api.h"
+#include "vertex_contract.hpp"
 #include "light_plan.hpp"
 #include "counter_batch.hpp"
 #include <string>
@@ -23,6 +24,9 @@ struct Pipeline {
     uint32_t sourceArrayMask = 0;
     bool usesCurrentPn = true;
     TwvVitaVertexLayout vertexLayout{};
+    // G2 packed formats (GXM backend): set once, before the pipeline's first decode and shader.
+    PackedFormats packed{};
+    bool packedConfigured = false;
 };
 struct Texture : aurora::gfx::TextureRef {
     uint32_t gpu = 0;
@@ -42,6 +46,8 @@ void geometry_cache_clear() noexcept;
 void geometry_cache_report() noexcept;
 void configure_gpu_texgen(Pipeline&) noexcept;
 void configure_gpu_cache_dependencies(Pipeline&) noexcept;
+void configure_packed_formats(Pipeline&) noexcept;
+const void* static_resident_indices(const uint8_t* data,size_t size) noexcept;
 LightPlan gpu_light_plan(const Pipeline&) noexcept;
 void gpu_vertex_uniforms(TwvVitaDrawState&,const Pipeline&,unsigned pnSlots,const LightPlan&) noexcept;
 std::string gpu_vertex_shader(const Pipeline&,unsigned lightCount);

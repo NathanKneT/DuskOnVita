@@ -36,7 +36,19 @@ struct TwvVitaDrawState {
     float channel_mat[4*4], channel_amb[4*4], light_masks[8*4];
     uint32_t texgen_vectors;
     float texgen_rows[48*4];
+    // G2 (GXM backend features; zero keeps the G1 meaning: triangles from the index list,
+    // or listed when there is none, and F32 attributes). The draw digest hashes the
+    // canonical G1 form, so these fields never change a digest by themselves.
+    uint32_t primitive;          // TwvPrimitive*
+    uint8_t vertex_formats[13];  // TwvFormat* per attribute (gpu_api attribute order)
+    uint8_t vertex_counts[13];   // stored components of a packed attribute
+    int8_t vertex_fracs[13];     // integer formats: value = raw * 2^-frac
+    uint8_t g2_reserved;
 };
+constexpr uint32_t TwvPrimitiveTriangles=0, TwvPrimitiveStrip=1, TwvPrimitiveFan=2, TwvPrimitiveQuads=3;
+constexpr uint8_t TwvFormatF32=0, TwvFormatS16=1, TwvFormatU16=2, TwvFormatS8=3, TwvFormatU8=4,
+    TwvFormatU8N=5; // U8N: colour bytes normalised by the GPU (c/255)
+static_assert(offsetof(TwvVitaDrawState,primitive)%4==0 && sizeof(TwvVitaDrawState)%4==0);
 static_assert(sizeof(TwvVitaVertex)==156 && offsetof(TwvVitaVertex,texcoord)==44 &&
               offsetof(TwvVitaVertex,normal)==140 && offsetof(TwvVitaVertex,pn_index)==152,
               "Game/SDK vertex layout must agree across enum ABI domains");
@@ -80,4 +92,16 @@ void twv_vgl_texture_sampler(uint32_t texture, int min_filter, int mag_filter, i
 int twv_vgl_texture_sampler_unit(uint32_t unit,int min_filter,int mag_filter,int wrap_s,int wrap_t);
 void twv_vgl_clear(float r, float g, float b, float a, float depth, unsigned mask,
                    int x, int y, int width, int height);
+// G2: backend features chosen at start-up (gpu_dispatch.cpp). Only the GXM backend offers
+// them; with vitaGL every bit reads 0 and the front end keeps its G1 behaviour.
+constexpr uint32_t TwvGpuFeaturePrimitives=1u;     // TwvVitaDrawState.primitive may be non-zero
+constexpr uint32_t TwvGpuFeatureCompact=2u;        // packed integer attributes (positions, normals, UVs)
+constexpr uint32_t TwvGpuFeatureCompactColors=4u;  // RGBA8 colours as U8N
+constexpr uint32_t TwvGpuFeatureResident=8u;      // certified geometry and static-list indices in GPU memory
+uint32_t twv_gpu_features(void);
+// GPU memory for cached geometry that the backend retires only after the GPU is done with it
+// (vitaGL: its resident arena; GXM: a CDRAM arena retired by frame fence).
+int twv_gpu_resident_available(void);
+void* twv_gpu_resident_alloc(size_t bytes);
+void twv_gpu_resident_release(void* ptr);
 }

@@ -100,6 +100,8 @@ uint32_t gpu_vertex_layout(const Pipeline& pipeline){tick+=11;return pipeline.in
 uint32_t legacy_vertex_layout(){tick+=11;return 156;}
 void configure_gpu_cache_dependencies(Pipeline& pipeline){tick+=13;pipeline.dependencies=pipeline.texgen+3;}
 void count(const char* name){assert(std::strcmp(name,"index_allocation_failure")==0);++allocationFailures;}
+// G2 resident indices exist only with the GXM backend; this probe measures the copy path.
+const void* static_resident_indices(const uint8_t*,size_t){return nullptr;}
 }
 
 #include "cpu_cost_backend_fixture.inc"

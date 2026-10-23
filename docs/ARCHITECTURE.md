@@ -12,6 +12,7 @@ DVD, CARD), and [Borealis](https://github.com/encounter/borealis) (logging, file
  Borealis                      log, io, data, cli, task; net reports "unavailable"
  Aurora                        OS, VI, PAD, SI, CARD, THP, DVD; GX frontend -> FIFO -> command processor
  platform/vita/gfx_vgl         Aurora's gfx contract on vitaGL (GXM): Cg shaders, vertices, textures
+ platform/vita/gfx_gxm         the same contract straight on SceGxm (experimental, --vita-gpu=gxm)
  platform/vita                 entry point, clocks, receipts, audio output, input defaults, run control
  VitaSDK, vitaGL, SDL3         system libraries, the GL layer over GXM, SDL's Vita input and events
 ```
@@ -37,7 +38,7 @@ DVD, CARD), and [Borealis](https://github.com/encounter/borealis) (logging, file
 
 | Path | Content |
 | --- | --- |
-| `platform/vita/` | entry point (`main_vita.cpp`), `runtime/` (receipts, clocks, run control, GX thread, probes), `gfx_vgl/` (renderer), `audio/`, `aurora/` (Aurora's application glue), `disc/` (disc reader), `benchmark/` (opt-in fixture), `compat/`, `probes/` |
+| `platform/vita/` | entry point (`main_vita.cpp`), `runtime/` (receipts, clocks, run control, GX thread, probes), `gfx_vgl/` (renderer and its vitaGL backend), `gfx_gxm/` (GXM backend), `audio/`, `aurora/` (Aurora's application glue), `disc/` (disc reader), `benchmark/` (opt-in fixture), `compat/`, `probes/` |
 | `patches/<module>/` | diffs applied to the build mirror: `dusklight`, `aurora`, `borealis`, `deps/<name>` |
 | `cmake/` | upstream file lists, dependencies, vitaGL, platform libraries, the VPK link |
 | `tools/` | build scripts, dependency fetcher, stub generator, enum-ABI audit, receipt reports, test fixtures, charts |
@@ -63,7 +64,7 @@ SDL3, the psp2 stubs) use it. Rules:
 ## Memory
 
 The newlib heap is 160 MiB (`_newlib_heap_size_user`, `main_vita.cpp`); GPU memory comes from vitaGL's
-own pools, split between RAM and CDRAM by `--vita-memory-pools`. The game's heaps are bounded for a
+own pools, split between RAM and CDRAM by `--vita-memory-pools` (the GXM backend has its own). The game's heaps are bounded for a
 handheld (patch `dusklight/0009`): 64 MiB MEM1 and 16 MiB ARAM, twice the original archive and J2D
 heaps and six times the original game heap, instead of Dusklight's desktop reserves. These are initial
 capacities, not a validated full-game budget.
@@ -101,6 +102,32 @@ frontend, FIFO, command processor and register state run unchanged and hand fini
 - **Not done yet:** off-screen passes and EFB copies (shadows, heat haze, the minimap) and some
   indirect-texture effects. `--vita-shadow-image-skip` skips the CPU work of the shadow images the
   renderer cannot draw.
+
+### GXM backend (experimental)
+
+`--vita-gpu=gxm` selects `platform/vita/gfx_gxm/gxm_backend.cpp`, which implements the same backend
+table directly on SceGxm; everything above it (Aurora, the caches, the digest, the receipts) is
+unchanged. It was built in three steps: G0 the backend table and digest, G1 the backend, G2 the
+switches below.
+
+- **Display and memory:** three 960x544 display buffers; textures in a CDRAM pool, vertices and
+  indices in an uncached ring of three frame slots. Memory is reused only after the GPU's fragment
+  notification for the frame that last used it; the frame loop never calls `sceGxmFinish`.
+- **Shaders:** the same generated Cg, compiled with the console's own `libshacccg` and vitaGL's
+  settings, cached as GXP files in `ux0:data/twilight-vita/gxp_cache/` (keyed by source, options and
+  compiler, checked with `sceGxmProgramCheck` before use). The warm-up bundle fills the same cache.
+- **Programs, textures, state:** the shader patcher builds a vertex program per vertex layout and a
+  fragment program per blend state. Textures are RGBA8; a texture a frame in flight may read is never
+  rewritten in place. Clears are drawn as rectangles that honour GX's colour mask.
+- **G2 switches:** resident geometry (`--vita-gxm-resident`) keeps certified geometry and static-list
+  indices in a GPU arena; packed formats (`--vita-gxm-compact`) keep 8- and 16-bit integer attributes,
+  scaled exactly in the vertex shader; native primitives (`--vita-gxm-primitives`, patch
+  `aurora/0008`) draw quads, strips and fans without index lists.
+- **Checks:** in the emulator, GXM and vitaGL runs of the house, Ordon and the Faron fight give equal
+  draw digests frame by frame and identical pixels on the compared captures. If the backend cannot
+  start, the run writes `gfx_init_failure` (after the backend's own `gxm_error`) and exits.
+- **Known limits:** on the console the scissor works per tile, so a scissor smaller than the viewport
+  may spill into a tile; the pool and ring sizes are first estimates.
 
 ## Audio
 

@@ -563,6 +563,11 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/gpu_options_test.cpp" -o "$out/gpu_options_test"
 "$out/gpu_options_test"
+# G1: GXM state mappings, memory bookkeeping and the GXP cache format.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" -I "$work/deps/xxhash" \
+  "$repo/tests/gxm_state_test.cpp" -o "$out/gxm_state_test"
+"$out/gxm_state_test"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/decode_probe_test.cpp" -o "$out/decode_probe_test"
 "$out/decode_probe_test"

@@ -24,11 +24,14 @@ INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusiv
              'prof_fifo_inclusive_us': 'fifo_ms', 'prof_shader_us': 'shader_ms',
              'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms'}
 # decode_probe.hpp; builds before draw_setup existed lack it (their texture setup counts as pipeline).
+# Shader stages compiled so far: vitaGL's counter, or the GXM backend's (G1). A run has one of them.
+COMPILE_COUNTERS = ('gfx_shader_stage_compile_calls', 'gxm_stage_compiles')
 DECODE_CLASSES = ['other', 'bp', 'xf', 'cp', 'list', 'draw_parse', 'pipeline', 'draw_setup', 'backend']
 SWITCHES = ['vertex_stream_requested', 'small_packets_requested', 'uncached_staging_requested',
             'gx_decode_requested', 'lazy_vertex_plan_requested', 'geometry_neon_requested',
             'vertex_cull_requested', 'sparse_spans_requested', 'shadow_image_skip_requested',
-            'static_geometry_requested', 'gx_thread_requested', 'neon_decode_requested']
+            'static_geometry_requested', 'gx_thread_requested', 'neon_decode_requested',
+            'pipeline_fast_requested']
 
 
 def split_boots(lines):
@@ -96,10 +99,14 @@ def summarize(boot, settle_s):
             report[name] = v
         elif report is not None and name in INCLUSIVE:
             report['costs'][name] = v
-        elif name == 'gfx_shader_stage_compile_calls':
+        elif name in COMPILE_COUNTERS:
             compile_calls = v
-            if report is not None and 'compile_after' not in report:
-                report['compile_after'] = v
+            # GXM before 317609e reported gxm_stage_compiles every 60 frames, so two 30-frame windows can
+            # wait for one value; from 317609e it also reports gfx_shader_stage_compile_calls every 30.
+            for pending in reversed(reports):
+                if 'compile_after' in pending:
+                    break
+                pending['compile_after'] = v
         elif name == 'simulation_execute_calls':
             sims.append((ms, v, stage, player))
         elif name == 'gfx_draws':
@@ -117,6 +124,8 @@ def summarize(boot, settle_s):
         'sequence_index': value.get('sequence_index'), 'clock_mode': text.get('clock_mode'),
         'clocks_observed': [value.get(f'clock_observed_{a}_mhz_result') for a in ('arm', 'bus', 'gpu', 'gpu_xbar')],
         'switches': {k.replace('_requested', ''): text.get(k) for k in SWITCHES},
+        'gpu': text.get('gpu_backend_requested'),  # --vita-gpu: vgl or gxm (G0/G1)
+        'gfx_init_failure': text.get('gfx_init_failure'),
         'telemetry_async': value.get('telemetry_async_writer'),
         'player_first_ms': player_first_ms, 'exit_after_s': value.get('run_exit_after_requested_s'),
         'run_exit_seen': any(r.get('event') == 'run_exit_after_s' for _, r in boot['records']),
@@ -215,7 +224,7 @@ def ledger_rows(runs, args, receipt_sha):
     for run in runs:
         if not run.get('label'):
             continue
-        config = [f'clocks={run["clock_mode"]}']
+        config = [f'clocks={run["clock_mode"]}', f'gpu={run.get("gpu") or ""}']
         config += [f'{k}={v.split()[-1] if v else ""}' for k, v in run['switches'].items() if v]
         config.append(f'telemetry_async={run["telemetry_async"]}')
         details = {f'clock_{a}_mhz': c for a, c in zip(('arm', 'bus', 'gpu', 'xbar'), run['clocks_observed'])}
@@ -263,8 +272,10 @@ def main():
         Path(args.json).write_text(json.dumps(result, indent=1) + '\n')
     for run in runs:
         print(f"{run['first_line']:>7} {run['label'] or '-':<22} {run.get('scene', ''):<16} {run['status']:<11} "
-              f"fps={run.get('fps', '')} ticks/s={run.get('ticks_per_s', '')} windows={run.get('windows', 0)} "
-              f"clocks={run['clocks_observed']} {run.get('costs_ms', '')}")
+              f"gpu={run.get('gpu') or '-'} fps={run.get('fps', '')} ticks/s={run.get('ticks_per_s', '')} "
+              f"windows={run.get('windows', 0)} clocks={run['clocks_observed']} {run.get('costs_ms', '')}")
+        if run.get('gfx_init_failure'):
+            print(f"        gfx_init_failure: {run['gfx_init_failure']}")
         d = run.get('decode')
         if d:
             parts = ' '.join(f"{c}={v['ms']}ms({v['pct']}%)" for c, v in d['classes'].items())
