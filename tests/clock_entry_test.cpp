@@ -154,6 +154,8 @@ extern "C" int twv_vita_lazy_vertex_plan_select(int value) { return selectRender
 extern "C" int twv_vita_static_geometry_select(int value) { return selectRenderer("static", value); }
 extern "C" int twv_vita_gx_thread_select(int value) { return selectRenderer("gx_thread", value); }
 extern "C" int twv_vita_gx_thread_pin_main() { state.calls.emplace_back("pin_main"); return 0; }
+extern "C" int twv_vita_shader_capture_select(int value) { return selectRenderer("capture", value); }
+extern "C" int twv_vita_neon_decode_select(int value) { return selectRenderer("neon_decode", value); }
 extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memory) {
     state.calls.emplace_back("bundle"); ++state.bundleCalls;
     state.bundleFeatures = features; state.memoryProfile = memory; return state.bundleAvailable;
@@ -267,6 +269,14 @@ int main() {
     assert(run("") == 7 && state.text.at("gx_thread_requested") == "default off");
     for (const char* bad : {"--vita-gx-thread=1", "--vita-gx-thread=on --vita-gx-thread=on"}) checkRejected(run(bad));
     checkRejected(run("--vita-gx-thread=on", true, true, false));
+    // Shader source capture: a renderer start-up choice, never passed to the game.
+    assert(run("--vita-shader-capture=on") == 7 && state.selections.at("capture") == 1);
+    assert(state.text.at("shader_capture_requested") == "on" && state.gameArgs.size() == 5);
+    checkRejected(run("--vita-shader-capture=yes"));
+    // NEON decode: three-way renderer choice.
+    assert(run("--vita-neon-decode=verify") == 7 && state.selections.at("neon_decode") == 2);
+    assert(state.text.at("neon_decode_requested") == "verify" && state.gameArgs.size() == 5);
+    checkRejected(run("--vita-neon-decode=fast"));
     // Exit timer: consumed by the port, never passed to the game.
     assert(run("--vita-exit-after=90 --stage R_SP01,4,2,0") == 7); checkClocks(true, false);
     assert(state.exitAfter == 90 && state.events.at("run_exit_after_requested_s") == 90);

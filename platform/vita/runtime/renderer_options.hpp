@@ -21,6 +21,10 @@ struct RendererOptions {
     int gxDecode=0;
     bool lazyPlanSelected=false;
     int lazyVertexPlan=0;
+    bool neonDecodeSelected=false;
+    int neonDecode=0; // 0 off, 1 on, 2 verify (gfx_vgl/attribute_stream.hpp)
+    bool shaderCaptureSelected=false;
+    int shaderCapture=0;
     bool gxThreadSelected=false;
     int gxThread=0;
     bool staticGeometrySelected=false;
@@ -33,7 +37,7 @@ struct RendererOptions {
     }
     // 0 original CLI;1..5 legacy experiments;6 bundle;7..10 overrides;11 memory;
     // 12 small direct packets;13 verified uncached-RAM staging;14 GX decode.
-    //15 lazy vertex plan;16 static geometry;17 GX worker thread. Bundle establishes the base; overrides are order-independent.
+    //15 lazy vertex plan;16 static geometry;17 GX worker thread;18 shader source capture;19 NEON decode. Bundle establishes the base; overrides are order-independent.
     int consume(const char* token) noexcept {
         if(!token)return -1;
         const int stream=toggle(token,"--vita-stream-decode",selected,streamDecode);
@@ -54,6 +58,10 @@ struct RendererOptions {
         if(gx)return gx==1?14:gx;
         const int lazy=toggle(token,"--vita-lazy-vertex-plan",lazyPlanSelected,lazyVertexPlan);
         if(lazy)return lazy==1?15:lazy;
+        const int neonDecodeResult=choice(token,"--vita-neon-decode",neonDecodeSelected,neonDecode);
+        if(neonDecodeResult)return neonDecodeResult==1?19:neonDecodeResult;
+        const int captureResult=toggle(token,"--vita-shader-capture",shaderCaptureSelected,shaderCapture);
+        if(captureResult)return captureResult==1?18:captureResult;
         const int gxThreadResult=toggle(token,"--vita-gx-thread",gxThreadSelected,gxThread);
         if(gxThreadResult)return gxThreadResult==1?17:gxThreadResult;
         const int staticGeometryResult=choice(token,"--vita-static-geometry",staticGeometrySelected,staticGeometry);

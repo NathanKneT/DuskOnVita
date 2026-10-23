@@ -4,11 +4,39 @@
 #include "color_lut.hpp"
 #include "fixed_scale.hpp"
 #include <dolphin/gx/GXEnum.h>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#ifndef TWV_VITA_NEON_DECODE
+#define TWV_VITA_NEON_DECODE 0
+#endif
+#if TWV_VITA_NEON_DECODE && defined(__ARM_NEON)
+#include <arm_neon.h>
+#define TWV_STREAM_NEON 1
+#else
+#define TWV_STREAM_NEON 0
+#endif
 
 namespace twv::vgl {
+// NEON kernels for the integer numeric formats (positions, normals, texture coordinates), chosen
+// at start-up. GX scales are exact powers of two (fixed_scale.hpp) and every 8/16-bit value is
+// exact in binary32, so the converted and scaled values are bit-identical to the scalar loops
+// (no product is subnormal for frac < 32). Verify recomputes every NEON vertex with the scalar
+// loop, counts any difference and keeps the scalar bytes. The counters cover every packed vertex.
+enum class StreamNeonMode : int { Off = 0, On = 1, Verify = 2 };
+struct StreamDecodeStats {
+    StreamNeonMode mode = StreamNeonMode::Off;
+    bool selected = false;
+    uint64_t neonVertices = 0, verifiedVertices = 0, mismatches = 0;
+    // Vertices packed per kernel: [0 numeric 3F, 1 numeric ST, 2 colour][compType 0..5][direct, i8, i16].
+    std::array<uint64_t, 3 * 6 * 3> vertices{};
+};
+inline StreamDecodeStats& stream_decode_stats() noexcept { static StreamDecodeStats s; return s; }
+inline void count_stream_vertices(unsigned kind, unsigned compType, int attrType, uint32_t vertices) noexcept {
+    const unsigned index = attrType == GX_DIRECT ? 0 : attrType == GX_INDEX8 ? 1 : 2;
+    stream_decode_stats().vertices[(kind * 6 + (compType < 6 ? compType : 5)) * 3 + index] += vertices;
+}
 template<bool Little> inline uint16_t stream_u16(const uint8_t* p) noexcept {
     uint16_t v;std::memcpy(&v,p,2);
     if constexpr(Little!=(std::endian::native==std::endian::little))v=__builtin_bswap16(v);
@@ -35,7 +63,7 @@ template<class Attr> struct AttributeStream {
 };
 
 template<int Type,int Index,bool Little,class Attr>
-void numeric_attribute_stream(const AttributeStream<Attr>& in,uint8_t* out,
+void numeric_attribute_stream_scalar(const AttributeStream<Attr>& in,uint8_t* out,
         uint32_t outputStride,uint32_t vertices,unsigned components,float third) noexcept {
     float scale=1.f;
     if constexpr(Type!=GX_F32)scale=fixed_point_scale(in.attr.frac);
@@ -68,7 +96,7 @@ inline uint32_t numeric_st_component(const uint8_t* source,float scale) noexcept
 }
 
 template<int Type,int Index,bool Little,unsigned Components,class Attr>
-void numeric_attribute_st_stream(const AttributeStream<Attr>& in,uint8_t* out,
+void numeric_attribute_st_stream_scalar(const AttributeStream<Attr>& in,uint8_t* out,
         uint32_t outputStride,uint32_t vertices) noexcept {
     constexpr unsigned width=Type==GX_U8 || Type==GX_S8 ? 1 : Type==GX_F32 ? 4 : 2;
     float scale=1.f;
@@ -80,6 +108,96 @@ void numeric_attribute_st_stream(const AttributeStream<Attr>& in,uint8_t* out,
         if constexpr(Components==2)t=numeric_st_component<Type,Little>(source+width,scale);
         std::memcpy(out,&s,4);std::memcpy(out+4,&t,4);
     }
+}
+
+template<int Type,bool Little>
+inline int32_t stream_int(const uint8_t* source,unsigned component) noexcept {
+    if constexpr(Type==GX_U8)return source[component];
+    else if constexpr(Type==GX_S8)return int8_t(source[component]);
+    else if constexpr(Type==GX_U16)return stream_u16<Little>(source+2*component);
+    else return int16_t(stream_u16<Little>(source+2*component));
+}
+#if TWV_STREAM_NEON
+// Four vertices per step: their integers are gathered as before, then converted and scaled in
+// NEON lanes; the stores write the scalar loop's bytes. Returns how many vertices it packed.
+template<int Type,int Index,bool Little,unsigned Components,class Attr>
+uint32_t numeric_neon(const AttributeStream<Attr>& in,uint8_t* out,uint32_t outputStride,
+        uint32_t vertices,float scale) noexcept {
+    const float32x4_t s=vdupq_n_f32(scale);
+    uint32_t v=0;
+    for(;v+4<=vertices;v+=4) {
+        alignas(16) int32_t raw[4*Components];
+        for(unsigned k=0;k<4;++k) {
+            const auto* p=in.template at<Index>(v+k);
+            for(unsigned i=0;i<Components;++i)raw[k*Components+i]=stream_int<Type,Little>(p,i);
+        }
+        alignas(16) float value[4*Components];
+        for(unsigned q=0;q<Components;++q)
+            vst1q_f32(value+4*q,vmulq_f32(vcvtq_f32_s32(vld1q_s32(raw+4*q)),s));
+        for(unsigned k=0;k<4;++k)std::memcpy(out+size_t(v+k)*outputStride,value+k*Components,4*Components);
+    }
+    return v;
+}
+#endif
+template<int Type,int Index,bool Little,class Attr>
+void numeric_attribute_stream(const AttributeStream<Attr>& in,uint8_t* out,
+        uint32_t outputStride,uint32_t vertices,unsigned components,float third) noexcept {
+#if TWV_STREAM_NEON
+    if constexpr(Type!=GX_F32) {
+        auto& stats=stream_decode_stats();
+        if(stats.mode!=StreamNeonMode::Off && components==3 && in.attr.frac<32) {
+            const uint32_t done=numeric_neon<Type,Index,Little,3>(in,out,outputStride,vertices,
+                fixed_point_scale(in.attr.frac));
+            stats.neonVertices+=done;
+            if(stats.mode==StreamNeonMode::Verify) {
+                for(uint32_t v=0;v<done;++v) {
+                    uint8_t expected[12];
+                    const AttributeStream<Attr> one{in.attr,in.packet+size_t(v)*in.packetStride,in.array,in.packetStride};
+                    numeric_attribute_stream_scalar<Type,Index,Little>(one,expected,12,1,components,third);
+                    ++stats.verifiedVertices;
+                    if(std::memcmp(expected,out+size_t(v)*outputStride,12)) {
+                        ++stats.mismatches;std::memcpy(out+size_t(v)*outputStride,expected,12);
+                    }
+                }
+            }
+            const AttributeStream<Attr> rest{in.attr,in.packet+size_t(done)*in.packetStride,in.array,in.packetStride};
+            numeric_attribute_stream_scalar<Type,Index,Little>(rest,out+size_t(done)*outputStride,outputStride,
+                vertices-done,components,third);
+            return;
+        }
+    }
+#endif
+    numeric_attribute_stream_scalar<Type,Index,Little>(in,out,outputStride,vertices,components,third);
+}
+template<int Type,int Index,bool Little,unsigned Components,class Attr>
+void numeric_attribute_st_stream(const AttributeStream<Attr>& in,uint8_t* out,
+        uint32_t outputStride,uint32_t vertices) noexcept {
+#if TWV_STREAM_NEON
+    if constexpr(Type!=GX_F32 && Components==2) {
+        auto& stats=stream_decode_stats();
+        if(stats.mode!=StreamNeonMode::Off && in.attr.frac<32) {
+            const uint32_t done=numeric_neon<Type,Index,Little,2>(in,out,outputStride,vertices,
+                fixed_point_scale(in.attr.frac));
+            stats.neonVertices+=done;
+            if(stats.mode==StreamNeonMode::Verify) {
+                for(uint32_t v=0;v<done;++v) {
+                    uint8_t expected[8];
+                    const AttributeStream<Attr> one{in.attr,in.packet+size_t(v)*in.packetStride,in.array,in.packetStride};
+                    numeric_attribute_st_stream_scalar<Type,Index,Little,Components>(one,expected,8,1);
+                    ++stats.verifiedVertices;
+                    if(std::memcmp(expected,out+size_t(v)*outputStride,8)) {
+                        ++stats.mismatches;std::memcpy(out+size_t(v)*outputStride,expected,8);
+                    }
+                }
+            }
+            const AttributeStream<Attr> rest{in.attr,in.packet+size_t(done)*in.packetStride,in.array,in.packetStride};
+            numeric_attribute_st_stream_scalar<Type,Index,Little,Components>(rest,out+size_t(done)*outputStride,
+                outputStride,vertices-done);
+            return;
+        }
+    }
+#endif
+    numeric_attribute_st_stream_scalar<Type,Index,Little,Components>(in,out,outputStride,vertices);
 }
 
 template<int Type,bool Little,unsigned Components,class Attr>
@@ -118,6 +236,7 @@ void typed_attribute_st_stream(const AttributeStream<Attr>& in,uint8_t* out,
 template<class Attr>
 void pack_numeric_attribute_st(const AttributeStream<Attr>& in,uint8_t* out,
         uint32_t stride,uint32_t vertices,unsigned components) noexcept {
+    count_stream_vertices(1,unsigned(in.attr.compType),in.attr.attrType,vertices);
     if(components==1)typed_attribute_st_stream<1>(in,out,stride,vertices);
     else typed_attribute_st_stream<2>(in,out,stride,vertices);
 }
@@ -170,6 +289,7 @@ void ordered_attribute_stream(const AttributeStream<Attr>& in,uint8_t* out,
 template<class Attr>
 void pack_numeric_attribute(const AttributeStream<Attr>& in,uint8_t* out,
         uint32_t stride,uint32_t vertices,unsigned components,float third=0.f) noexcept {
+    count_stream_vertices(0,unsigned(in.attr.compType),in.attr.attrType,vertices);
     switch(in.attr.compType) {
     case GX_U8:ordered_attribute_stream<GX_U8,false>(in,out,stride,vertices,components,third);break;
     case GX_S8:ordered_attribute_stream<GX_S8,false>(in,out,stride,vertices,components,third);break;
@@ -181,6 +301,7 @@ void pack_numeric_attribute(const AttributeStream<Attr>& in,uint8_t* out,
 template<class Attr>
 void pack_color_attribute(const AttributeStream<Attr>& in,uint8_t* out,
         uint32_t stride,uint32_t vertices) noexcept {
+    count_stream_vertices(2,unsigned(in.attr.compType),in.attr.attrType,vertices);
     switch(in.attr.compType) {
     case GX_RGB565:ordered_attribute_stream<GX_RGB565,true>(in,out,stride,vertices,4,0);break;
     case GX_RGB8:ordered_attribute_stream<GX_RGB8,true>(in,out,stride,vertices,4,0);break;

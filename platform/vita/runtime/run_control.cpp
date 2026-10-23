@@ -16,6 +16,7 @@ constexpr std::uint64_t NoPlayerGraceS = 240;
 
 namespace twv::vita {
 void runControlExitAfter(unsigned seconds) { gExitAfterS = seconds; }
+bool runControlPlayerSeen() { return gPlayerSeen.load(std::memory_order_relaxed) != 0; }
 
 void runControlFrame() {
     if (!gExitAfterS) return;

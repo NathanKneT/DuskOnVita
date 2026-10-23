@@ -30,6 +30,8 @@ extern "C" int twv_vita_lazy_vertex_plan_select(int enabled) __attribute__((weak
 extern "C" int twv_vita_static_geometry_select(int mode) __attribute__((weak));
 // T2 (patches/aurora/0007): FIFO processing on its own worker; the game thread then keeps core 0.
 extern "C" int twv_vita_gx_thread_select(int enabled) __attribute__((weak));
+extern "C" int twv_vita_shader_capture_select(int enabled) __attribute__((weak));
+extern "C" int twv_vita_neon_decode_select(int mode) __attribute__((weak));
 // Strong on purpose: it pulls runtime/gx_thread.o (and the worker's core hook) into the link.
 extern "C" int twv_vita_gx_thread_pin_main(void);
 #if TWV_VITA_BENCHMARK
@@ -217,7 +219,11 @@ int main(int, char**) {
                 (rendererOption==16 && (!twv_vita_static_geometry_select ||
                     !twv_vita_static_geometry_select(rendererOptions.staticGeometry))) ||
                 (rendererOption==17 && (!twv_vita_gx_thread_select ||
-                    !twv_vita_gx_thread_select(rendererOptions.gxThread)));
+                    !twv_vita_gx_thread_select(rendererOptions.gxThread))) ||
+                (rendererOption==18 && (!twv_vita_shader_capture_select ||
+                    !twv_vita_shader_capture_select(rendererOptions.shaderCapture))) ||
+                (rendererOption==19 && (!twv_vita_neon_decode_select ||
+                    !twv_vita_neon_decode_select(rendererOptions.neonDecode)));
             if(rendererOption<0 || unavailable) {
                 twv::vita::telemetryText("args_error","renderer option unavailable, invalid or selected more than once");
                 twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
@@ -253,6 +259,15 @@ int main(int, char**) {
             }
             if(rendererOption==15) {
                 twv::vita::telemetryText("lazy_vertex_plan_requested",rendererOptions.lazyVertexPlan?"on":"off");
+                continue;
+            }
+            if(rendererOption==19) {
+                const char* names[]={"off","on","verify"};
+                twv::vita::telemetryText("neon_decode_requested",names[rendererOptions.neonDecode]);
+                continue;
+            }
+            if(rendererOption==18) {
+                twv::vita::telemetryText("shader_capture_requested",rendererOptions.shaderCapture?"on":"off");
                 continue;
             }
             if(rendererOption==17) {

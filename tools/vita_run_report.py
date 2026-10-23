@@ -25,7 +25,8 @@ INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusiv
              'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms'}
 SWITCHES = ['vertex_stream_requested', 'small_packets_requested', 'uncached_staging_requested',
             'gx_decode_requested', 'lazy_vertex_plan_requested', 'geometry_neon_requested',
-            'vertex_cull_requested', 'sparse_spans_requested', 'shadow_image_skip_requested']
+            'vertex_cull_requested', 'sparse_spans_requested', 'shadow_image_skip_requested',
+            'static_geometry_requested', 'gx_thread_requested', 'neon_decode_requested']
 
 
 def split_boots(lines):
@@ -59,7 +60,7 @@ def hist_p95(bounds, counts):
 
 
 def summarize(boot, settle_s):
-    text, value = {}, {}
+    text, value, value_last = {}, {}, {}
     stage, player, player_first_ms = '', 0, None
     compile_calls = None
     draws = frames_presented = None
@@ -79,6 +80,7 @@ def summarize(boot, settle_s):
             continue
         v = r.get('value')
         value.setdefault(name, v)
+        value_last[name] = v
         if name == 'player_exists':
             player = v
             if v and player_first_ms is None:
@@ -114,6 +116,10 @@ def summarize(boot, settle_s):
         'run_exit_seen': any(r.get('event') == 'run_exit_after_s' for _, r in boot['records']),
         'last_ms': boot['records'][-1][1].get('ms', 0) if boot['records'] else 0,
         'reports': len(reports),
+        'shader_play_compiles': value_last.get('gfx_shader_play_compiles'),
+        'shader_play_slow_compiles': value_last.get('gfx_shader_play_slow_compiles'),
+        'shader_play_compile_max_us': value_last.get('gfx_shader_play_compile_max_us'),
+        'shader_warmup_prepared': value.get('shader_warmup_prepared'),
     }
     by_stage = {}
     for rep in reports:
@@ -184,6 +190,8 @@ def ledger_rows(runs, args, receipt_sha):
         if run.get('frame_ms_p95_bin') is not None:
             details['p95_hist_bin_ms'] = run['frame_ms_p95_bin']
         details['over_33ms'] = run.get('over_33ms')
+        for key in ('shader_warmup_prepared', 'shader_play_compiles', 'shader_play_slow_compiles', 'shader_play_compile_max_us'):
+            details[key] = run.get(key)
         rows.append({
             'recorded_utc': now, 'owner': '', 'platform': 'vita', 'environment': 'hardware',
             'version': args.version, 'commit': args.commit, 'config': ';'.join(config),

@@ -7,7 +7,8 @@
 #include <span>
 
 namespace twv::vgl {
-constexpr size_t ShaderSourceLimit=512*1024,ShaderStageLimit=128;
+// A whole session's stages: V61 compiled 51-95 per scene, distinct across scenes.
+constexpr size_t ShaderSourceLimit=4*1024*1024,ShaderStageLimit=1024;
 constexpr size_t ShaderBundleLimit=24+ShaderSourceLimit+ShaderStageLimit*9;
 constexpr uint32_t VertexSourceTag=1,FragmentSourceTag=2;
 inline uint32_t source_crc32(std::span<const uint8_t> bytes) {
@@ -48,6 +49,11 @@ using PrepareCompile=uint32_t(*)(uint32_t stage,const char* source);
 using PrepareRelease=void(*)(uint32_t shader);
 // SDK-domain file operations; called once before the first original game frame.
 void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release);
+// Recording happens only when --vita-shader-capture=on chose it (and the build compiled it in).
 void begin_shader_source_capture(const char* root);
 void capture_shader_source(uint32_t stage,const char* source);
+// Every native stage compile (vitaGL loads cached GXP or runs the Cg compiler), timed. Those after
+// Link first appears are play-time compiles: the stalls the warm-up bundle exists to remove.
+void observe_shader_compile(uint64_t microseconds);
+void shader_compile_report();
 }

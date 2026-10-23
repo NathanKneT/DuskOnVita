@@ -76,6 +76,8 @@ In the performance build, or with the matching `-D` option:
 | `--vita-vertex-cull=on\|off` | `TWV_VITA_VERTEX_CULL` | conservative rejection of draws wholly outside the screen |
 | `--vita-sparse-spans=on\|off` | `TWV_VITA_SPARSE_SPANS` | compare only the source intervals the indices reference |
 | `--vita-shadow-image-skip=on\|off` | `TWV_VITA_SHADOW_IMAGE_SKIP` | skip CPU work for shadow images the renderer cannot draw yet (dusklight 0013) |
+| `--vita-neon-decode=off\|on\|verify` | `TWV_VITA_NEON_DECODE` | NEON conversion of integer positions, normals and texture coordinates in the stream decoder, bit-identical to the scalar loops; `verify` recomputes every vertex with them and counts differences (`gfx_neon_decode_mismatches`). Not measured on the console |
+| `--vita-shader-capture=on\|off` | `TWV_VITA_SHADER_SOURCE_CAPTURE` | record every Cg stage the session compiles, for a warm-up bundle |
 | `--vita-benchmark=C1-FIGHT` | `TWV_VITA_BENCHMARK` | a scripted 450-frame fight in Faron (`--stage=F_SP108,6,1,0`, fresh start) |
 
 Every selected switch is written to the receipts at start-up (`*_requested`).
@@ -83,10 +85,20 @@ Every selected switch is written to the receipts at start-up (`*_requested`).
 ## Shader warm-up
 
 Shaders are generated from the game's GX state and compiled on the console by `libshacccg` at first
-use, which stalls. A build with `-DTWV_VITA_SHADER_SOURCE_CAPTURE=ON` records the generated Cg sources
-in `ux0:data/twilight-vita/shader_sources/`; `python3 tools/vita_shader_warmup.py` packs them into
-`shader_warmup.bin`, which the port compiles at start-up. The bundle is made on your console for your
-own use; do not share it.
+use, which stalls for up to several seconds. vitaGL keeps every compiled stage in its cache, so a stage
+is slow only once. To move that cost to start-up:
+
+1. Run the scenes you play with `--vita-shader-capture=on` (performance VPK). The generated Cg stages
+   go to `ux0:data/twilight-vita/shader_sources/`.
+2. Pack them: `python3 tools/vita_shader_warmup.py build --sources DIR --output shader_warmup.bin ...`
+   (at most 1024 stages and 4 MiB; `inspect` checks a bundle).
+3. Copy `shader_warmup.bin` to `ux0:data/twilight-vita/`. The first launch compiles it before the
+   first game frame; later launches load the stages from the cache.
+
+Stages outside the bundle still compile when first met; `gfx_shader_play_compiles` and
+`gfx_shader_play_slow_compiles` (50 ms or more) count them after Link first appears. The bundle
+encodes the game's material configurations: make it on your console for your own use, and do not
+share or commit it.
 
 ## Receipts
 
@@ -96,7 +108,8 @@ Buffered lines are written by a low-priority thread on core 2, and drained at a 
 - At boot: clocks requested and read, memory, the build's compiled options and every switch.
 - Profile windows of 30 frames: frame time mean, maximum, 95th percentile and histogram
   (`prof_frame_*`, `prof_interval_*`), inclusive costs of the game execute, painter, FIFO, shaders,
-  present and audio (`prof_*_us`), draws and compiled shader stages (`gfx_*`).
+  present and audio (`prof_*_us`), draws and compiled shader stages (`gfx_*`), shader stages
+  prepared by the warm-up and compiled in play (`shader_warmup_*`, `gfx_shader_play_*`).
 - Scene probe (performance build): stage, room and whether Link exists, after each FIFO drain.
 - Stops: `stub_trap` (an unimplemented symbol), `abort`, `terminate`, the end of a timed run.
 

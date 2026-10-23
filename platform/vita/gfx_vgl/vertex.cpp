@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #ifndef TWV_VITA_PLANNED_FETCH
@@ -738,6 +739,13 @@ extern "C" int twv_vita_vertex_cull_select(int enabled) {
 extern "C" int twv_vita_sparse_spans_select(int enabled) {
   return sparseSpansControl.select(enabled);
 }
+// --vita-neon-decode=off|on|verify (start-up). Unavailable in builds without the NEON kernels.
+extern "C" int twv_vita_neon_decode_select(int mode) {
+  auto& stats=stream_decode_stats();
+  if(stats.selected || mode<0 || mode>2 || (mode && !TWV_STREAM_NEON))return 0;
+  stats.mode=StreamNeonMode(mode);stats.selected=true;
+  return 1;
+}
 extern "C" int twv_vita_neon_compare_select(int enabled) {
   if(!neonCompareControl.select(enabled))return 0;
   geometryCache.set_neon_compare(bool(enabled));
@@ -1229,6 +1237,23 @@ void geometry_cache_report() noexcept {
   twv::vita::telemetryEvent("gfx_geometry_static_mismatches",s.staticMismatches);
   twv::vita::telemetryEvent("gfx_geometry_static_certified",s.staticCertified);
   twv::vita::telemetryEvent("gfx_geometry_static_stores",s.staticStores);
+  const auto& stream=stream_decode_stats();
+  twv::vita::telemetryEvent("gfx_neon_decode_mode",int(stream.mode));
+  twv::vita::telemetryEvent("gfx_neon_decode_selected",stream.selected);
+  twv::vita::telemetryEvent("gfx_neon_decode_vertices",stream.neonVertices);
+  twv::vita::telemetryEvent("gfx_neon_decode_verified",stream.verifiedVertices);
+  twv::vita::telemetryEvent("gfx_neon_decode_mismatches",stream.mismatches);
+  {
+    // Vertices packed per kernel since boot: kind(n3 numeric 3F, st texcoord, c colour)
+    // _compType_index(d direct, 8 index8, 16 index16), non-zero entries only.
+    char text[512];size_t used=0;
+    const char* kinds[]={"n3","st","c"};const char* indices[]={"d","8","16"};
+    for(unsigned i=0;i<stream.vertices.size() && used<sizeof text-48;++i)if(stream.vertices[i])
+      used+=size_t(std::snprintf(text+used,sizeof text-used,"%s%s_%u_%s=%llu",used?";":"",kinds[i/18],(i/3)%6,
+          indices[i%3],static_cast<unsigned long long>(stream.vertices[i])));
+    text[used]=0;
+    twv::vita::telemetryText("gfx_stream_format_vertices",text);
+  }
   twv::vita::telemetryEvent("gfx_vertex_cpu_staging_capacity",vertexStaging.bytes());
 #if TWV_VITA_VERTEX_WORK_PROBE
   vertexWorkProbe.report([](const char* name,uint64_t value){twv::vita::telemetryEvent(name,value);});

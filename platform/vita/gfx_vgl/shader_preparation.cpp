@@ -1,5 +1,6 @@
 #include "shader_preparation.hpp"
 #include "runtime/telemetry.hpp"
+#include "runtime/run_control.hpp"
 #include <cstdio>
 #include <memory>
 #include <new>
@@ -14,10 +15,14 @@
 namespace twv::vgl {
 namespace {
 #if TWV_VITA_SHADER_SOURCE_CAPTURE
+bool captureSelected=false;
 char captureRoot[256]{};
 uint32_t captured=0;
 size_t capturedBytes=0;
 #endif
+uint64_t compiles=0,compileUs=0,playCompiles=0,playCompileUs=0,playCompileMaxUs=0,playSlowCompiles=0;
+// A cached GXP loads in about 10 ms on a Vita; a real Cg compile takes hundreds.
+constexpr uint64_t SlowCompileUs=50000;
 }
 void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release) {
 #if TWV_VITA_SHADER_WARMUP
@@ -34,7 +39,9 @@ void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease
     if(!bytes) {std::fclose(file);twv::vita::telemetryText("shader_warmup_rejected","bounded allocation unavailable");return;}
     const bool complete=std::fread(bytes.get(),1,size,file)==size_t(size) && std::fgetc(file)==EOF;
     std::fclose(file);
-    ShaderBundleView view;
+    std::unique_ptr<ShaderBundleView> held(new(std::nothrow) ShaderBundleView);
+    if(!held) {twv::vita::telemetryText("shader_warmup_rejected","bounded allocation unavailable");return;}
+    ShaderBundleView& view=*held;
     if(!complete || !parse_shader_bundle({bytes.get(),size_t(size)},view)) {
         twv::vita::telemetryText("shader_warmup_rejected","incomplete/invalid source bundle");return;
     }
@@ -60,6 +67,7 @@ void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease
 void begin_shader_source_capture(const char* root) {
 #if TWV_VITA_SHADER_SOURCE_CAPTURE
     captureRoot[0]=0;captured=0;capturedBytes=0;
+    if(!captureSelected)return;
     ::mkdir(root,0777);
     const auto stamp=twv::vita::processTimeUs();
     for(unsigned attempt=0;attempt<16;++attempt) {
@@ -84,7 +92,7 @@ void capture_shader_source(uint32_t stage,const char* source) {
        captured>=ShaderStageLimit || size>ShaderSourceLimit-capturedBytes) {
         captureRoot[0]=0;twv::vita::telemetryText("shader_source_capture_error","source capture bounds");return;
     }
-    char path[288];std::snprintf(path,sizeof path,"%s/%03lu-%c.cg",captureRoot,
+    char path[288];std::snprintf(path,sizeof path,"%s/%04lu-%c.cg",captureRoot,
         static_cast<unsigned long>(captured),stage==VertexSourceTag?'v':'f');
     FILE* file=std::fopen(path,"wb");
     if(!file) {captureRoot[0]=0;twv::vita::telemetryText("shader_source_capture_error","create file");return;}
@@ -100,4 +108,30 @@ void capture_shader_source(uint32_t stage,const char* source) {
     (void)stage;(void)source;
 #endif
 }
+void observe_shader_compile(uint64_t microseconds) {
+    ++compiles;compileUs+=microseconds;
+    if(!twv::vita::runControlPlayerSeen())return;
+    ++playCompiles;playCompileUs+=microseconds;
+    if(microseconds>playCompileMaxUs)playCompileMaxUs=microseconds;
+    if(microseconds>=SlowCompileUs)++playSlowCompiles;
+}
+void shader_compile_report() {
+    twv::vita::telemetryEvent("gfx_shader_native_compiles",compiles);
+    twv::vita::telemetryEvent("gfx_shader_native_compile_us",compileUs);
+    twv::vita::telemetryEvent("gfx_shader_play_compiles",playCompiles);
+    twv::vita::telemetryEvent("gfx_shader_play_compile_us",playCompileUs);
+    twv::vita::telemetryEvent("gfx_shader_play_compile_max_us",playCompileMaxUs);
+    twv::vita::telemetryEvent("gfx_shader_play_slow_compiles",playSlowCompiles);
+}
+}
+
+// --vita-shader-capture=on|off (main_vita.cpp, start-up only): record every generated stage the
+// session compiles, for tools/vita_shader_warmup.py. Unavailable when the build compiled it out.
+extern "C" int twv_vita_shader_capture_select(int enabled) {
+#if TWV_VITA_SHADER_SOURCE_CAPTURE
+    twv::vgl::captureSelected=enabled!=0;
+    return 1;
+#else
+    return enabled==0;
+#endif
 }

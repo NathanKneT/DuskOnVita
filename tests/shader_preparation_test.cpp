@@ -17,7 +17,10 @@ void telemetryEvent(const char* key,long long value){events[key]=value;}
 void telemetryText(const char* key,const char* text){texts.emplace_back(key,text);}
 void telemetryFlush(){}
 uint64_t processTimeUs(){return 123;} // Repeat stamp: capture must create a new directory.
+bool playerSeen=false;
+bool runControlPlayerSeen(){return playerSeen;}
 }
+extern "C" int twv_vita_shader_capture_select(int enabled);
 unsigned calls=0,releases=0,live=0,peak=0;
 bool failFirst=false;
 uint32_t compile(uint32_t stage,const char* source) {
@@ -56,7 +59,7 @@ int main(int argc,char** argv) {
         auto corrupt=valid;corrupt[i]^=1;assert(!parse_shader_bundle(corrupt,view));
     }
     std::vector<Bytes> invalid;
-    for(auto [offset,value]:std::vector<std::pair<size_t,uint32_t>>{{8,2},{12,0},{12,129},{24,0},{24,3},{28,0},{28,65537},{28,UINT32_MAX}}) {
+    for(auto [offset,value]:std::vector<std::pair<size_t,uint32_t>>{{8,2},{12,0},{12,uint32_t(ShaderStageLimit+1)},{24,0},{24,3},{28,0},{28,65537},{28,UINT32_MAX}}) {
         auto bytes=valid;put(bytes,offset,value);seal(bytes);invalid.push_back(bytes);
         assert(!parse_shader_bundle(bytes,view));
     }
@@ -85,22 +88,36 @@ int main(int argc,char** argv) {
     prepare_shader_cache(input.c_str(),compile,release);assert(calls==before);
     prepare_shader_cache((directory/"absent").c_str(),compile,release);assert(calls==before);
     const auto capture=directory/"capture";
+    // Not selected at start-up: nothing is recorded, in either build.
+    begin_shader_source_capture(capture.c_str());capture_shader_source(1,"vertex_source");
+    assert(!std::filesystem::exists(capture));
+    assert(twv_vita_shader_capture_select(1)==TWV_VITA_SHADER_SOURCE_CAPTURE && twv_vita_shader_capture_select(0)==1);
+    assert(twv_vita_shader_capture_select(1)==TWV_VITA_SHADER_SOURCE_CAPTURE);
     begin_shader_source_capture(capture.c_str());capture_shader_source(1,"vertex_source");capture_shader_source(2,"fragment_source");
 #if TWV_VITA_SHADER_SOURCE_CAPTURE
     const auto first=capture/"run-000000000000007B-00";
-    const auto firstFile=first/"000-v.cg";const auto original=read(firstFile);
+    const auto firstFile=first/"0000-v.cg";const auto original=read(firstFile);
     assert(std::string(original.begin(),original.end())=="vertex_source");
-    assert(read(first/"001-f.cg").size()==15);
+    assert(read(first/"0001-f.cg").size()==15);
     begin_shader_source_capture(capture.c_str());
     const auto second=capture/"run-000000000000007B-01";
-    for(unsigned i=0;i<129;++i)capture_shader_source(1,"v");
-    assert(read(firstFile)==original && !std::filesystem::exists(second/"128-v.cg"));
-    assert(std::distance(std::filesystem::directory_iterator(second),std::filesystem::directory_iterator{})==128);
+    for(unsigned i=0;i<=ShaderStageLimit;++i)capture_shader_source(1,"v");
+    assert(read(firstFile)==original && !std::filesystem::exists(second/"1024-v.cg"));
+    assert(std::distance(std::filesystem::directory_iterator(second),std::filesystem::directory_iterator{})==long(ShaderStageLimit));
     begin_shader_source_capture(capture.c_str());
     std::string huge(65537,'x');capture_shader_source(1,huge.c_str());
-    assert(!std::filesystem::exists(capture/"run-000000000000007B-02/000-v.cg"));
+    assert(!std::filesystem::exists(capture/"run-000000000000007B-02/0000-v.cg"));
 #else
     assert(!std::filesystem::exists(capture));
 #endif
+    // Compile timing: only compiles after the player appeared count as play-time stalls.
+    events.clear();
+    observe_shader_compile(9000);
+    twv::vita::playerSeen=true;
+    observe_shader_compile(12000);observe_shader_compile(400000);
+    shader_compile_report();
+    assert(events.at("gfx_shader_native_compiles")==3 && events.at("gfx_shader_native_compile_us")==421000);
+    assert(events.at("gfx_shader_play_compiles")==2 && events.at("gfx_shader_play_compile_us")==412000);
+    assert(events.at("gfx_shader_play_compile_max_us")==400000 && events.at("gfx_shader_play_slow_compiles")==1);
     std::printf("shader_preparation_test: warmup%d capture%d, Python bundle interoperability, all-before-native validation, bounds/fuzz, failure cleanup, one live shader and exclusive capture paths passed\n",TWV_VITA_SHADER_WARMUP,TWV_VITA_SHADER_SOURCE_CAPTURE);
 }

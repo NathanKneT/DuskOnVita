@@ -9,8 +9,8 @@ import struct
 import zlib
 
 MAGIC = b'TWVCGB01'
-MAX_SOURCE_BYTES = 512 * 1024
-MAX_STAGES = 128
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
+MAX_STAGES = 1024
 MAX_BUNDLE_BYTES = 24 + MAX_SOURCE_BYTES + MAX_STAGES * 9
 
 
@@ -47,9 +47,9 @@ def encode_bundle(sources: list[tuple[int, bytes]]) -> bytes:
         raise ValueError('invalid source input')
     unique = sorted(set(sources), key=lambda item: (item[0], hashlib.sha256(item[1]).hexdigest()))
     if not 1 <= len(unique) <= MAX_STAGES:
-        raise ValueError('bundle requires 1–128 unique stages')
+        raise ValueError(f'bundle requires 1-{MAX_STAGES} unique stages')
     if sum(len(source) for _, source in unique) > MAX_SOURCE_BYTES:
-        raise ValueError('source budget exceeds 512KiB')
+        raise ValueError(f'source budget exceeds {MAX_SOURCE_BYTES} bytes')
     payload = b''.join(struct.pack('<II', stage, len(source))+source+b'\0' for stage, source in unique)
     data = struct.pack('<8sIIII', MAGIC, 1, len(unique), len(payload), zlib.crc32(payload))+payload
     assert validate_bundle(data) == unique
@@ -66,9 +66,9 @@ def collect_sources(roots: list[Path]) -> tuple[list[tuple[int, bytes]], list[di
         root = root.resolve()
         files = sorted(root.glob('*.cg'))
         if not 1 <= len(files) <= MAX_STAGES:
-            raise ValueError('each capture must have 1–128 source files')
+            raise ValueError(f'each capture must have 1-{MAX_STAGES} source files')
         for path in files:
-            match = re.fullmatch(r'[0-9]{3}-([vf])\.cg', path.name)
+            match = re.fullmatch(r'[0-9]{3,4}-([vf])\.cg', path.name)
             if not match or path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
                 raise ValueError('invalid source capture member')
             if not 1 <= path.stat().st_size <= 65536:

@@ -197,6 +197,7 @@ if(TWV_VITA_GFX_VGL)
     option(TWV_VITA_VERTEX_WORK_PROBE "Sample one changing vertex packet per64 for CPU work attribution (diagnostic overhead)" OFF)
     option(TWV_VITA_WORD_COMPARE "Compare validated cache spans in exact bounded word blocks, including unaligned data" ON)
     option(TWV_VITA_NEON_COMPARE "Compile exact ARMv7 NEON cache comparisons; activate with --vita-neon-compare=on" OFF)
+    option(TWV_VITA_NEON_DECODE "Compile NEON integer attribute kernels; activate with --vita-neon-decode=on|verify" OFF)
     option(TWV_VITA_SHADOW_IMAGE_SKIP "Compile unsupported shadow-image CPU skip; activate with --vita-shadow-image-skip=on" OFF)
     option(TWV_VITA_VERTEX_CULL "Compile conservative cached single-PN X/Y clip rejection; activate with --vita-vertex-cull=on" OFF)
     option(TWV_VITA_SPARSE_SPANS "Compile bounded referenced-index source intervals; activate with --vita-sparse-spans=on" OFF)
@@ -235,6 +236,7 @@ if(TWV_VITA_GFX_VGL)
                             TWV_VITA_VERTEX_WORK_PROBE=$<BOOL:${TWV_VITA_VERTEX_WORK_PROBE}>
                             TWV_VITA_WORD_COMPARE=$<BOOL:${TWV_VITA_WORD_COMPARE}>
                             TWV_VITA_NEON_COMPARE=$<BOOL:${TWV_VITA_NEON_COMPARE}>
+                            TWV_VITA_NEON_DECODE=$<BOOL:${TWV_VITA_NEON_DECODE}>
                             TWV_VITA_VERTEX_CULL=$<BOOL:${TWV_VITA_VERTEX_CULL}>
                             TWV_VITA_SPARSE_SPANS=$<BOOL:${TWV_VITA_SPARSE_SPANS}>
                             TWV_VITA_COLOR_LOOKUP=$<BOOL:${TWV_VITA_COLOR_LOOKUP}>

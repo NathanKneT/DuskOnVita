@@ -440,7 +440,10 @@ GLuint compile(GLenum type,const char* source) {
     ++shaderCompileCalls;
     twv::vgl::capture_shader_source(type==GL_CG_VERTEX_SHADER_EXT?
         twv::vgl::VertexSourceTag:twv::vgl::FragmentSourceTag,source);
-    return compile_native(type,source);
+    const uint64_t start=twv_vgl_time_us();
+    const GLuint shader=compile_native(type,source);
+    twv::vgl::observe_shader_compile(twv_vgl_time_us()-start);
+    return shader;
 }
 uint32_t prepare_compile(uint32_t stage,const char* source) {
     return compile_native(stage==twv::vgl::VertexSourceTag?
@@ -650,6 +653,7 @@ extern "C" void twv_vgl_end() {
             twv::vita::telemetryEvent("gfx_submit_array_proposals",s.array_proposal_pairs);
             twv::vita::telemetryEvent("gfx_submit_longest_run",s.longest_run);
         }
+        twv::vgl::shader_compile_report();
         twv::vita::telemetryEvent("gfx_frames_presented", frames);
         twv::vita::telemetryEvent("gfx_draws", draws);
         twv::vita::telemetryEvent("gfx_errors", errors);

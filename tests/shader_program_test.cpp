@@ -47,7 +47,10 @@ namespace twv::vgl {
 void capture_shader_source(uint32_t stage,const char* source) {
     assert((stage==VertexSourceTag || stage==FragmentSourceTag) && source);
 }
+unsigned observedCompiles=0;
+void observe_shader_compile(uint64_t){++observedCompiles;}
 }
+uint64_t twv_vgl_time_us(){return 0;}
 GLuint allocate(GLuint& next,std::vector<GLuint>& free) {
     if(free.empty())return next++;
     const auto id=free.back();free.pop_back();return id;
