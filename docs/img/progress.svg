@@ -1,0 +1,43 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 820 420' width='820' height='420'>
+<rect width='820' height='420' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='60.0' y='28.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='16' fill='#1f2328' text-anchor='start' font-weight='600'>PS Vita 1000 — frames per second, measured on the console</text>
+<text x='60.0' y='46.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#59636e' text-anchor='start' font-weight='normal'>every point is a hardware run (docs/benchmarks.csv); emulator numbers are not shown</text>
+<line x1='60' x2='780' y1='316.0' y2='316.0' stroke='#d1d9e0'/>
+<text x='52.0' y='320.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>0</text>
+<line x1='60' x2='780' y1='275.4' y2='275.4' stroke='#d1d9e0'/>
+<text x='52.0' y='279.4' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>5</text>
+<line x1='60' x2='780' y1='234.8' y2='234.8' stroke='#d1d9e0'/>
+<text x='52.0' y='238.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>10</text>
+<line x1='60' x2='780' y1='194.1' y2='194.1' stroke='#d1d9e0'/>
+<text x='52.0' y='198.1' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>15</text>
+<line x1='60' x2='780' y1='153.5' y2='153.5' stroke='#d1d9e0'/>
+<text x='52.0' y='157.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>20</text>
+<line x1='60' x2='780' y1='112.9' y2='112.9' stroke='#d1d9e0'/>
+<text x='52.0' y='116.9' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>25</text>
+<line x1='60' x2='780' y1='72.2' y2='72.2' stroke='#d1d9e0'/>
+<text x='52.0' y='76.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>30</text>
+<line x1='60' x2='780' y1='72.2' y2='72.2' stroke='#1a7f37' stroke-width='2' stroke-dasharray='6 4'/>
+<text x='780.0' y='66.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1a7f37' text-anchor='end' font-weight='600'>target: 30</text>
+<circle cx='170.0' cy='246.2' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='170.0' y='236.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.6</text>
+<circle cx='410.0' cy='249.5' r='5' fill='#ffffff' stroke='#0969da' stroke-width='2'/>
+<text x='410.0' y='239.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.2</text>
+<circle cx='650.0' cy='264.5' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='650.0' y='254.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>6.3</text>
+<circle cx='190.0' cy='257.5' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='190.0' y='247.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.2</text>
+<circle cx='430.0' cy='237.6' r='5' fill='#ffffff' stroke='#bc4c00' stroke-width='2'/>
+<text x='430.0' y='227.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>9.7</text>
+<circle cx='670.0' cy='256.0' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='670.0' y='246.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.4</text>
+<text x='180.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v53r2</text>
+<text x='420.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v54</text>
+<text x='660.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v61</text>
+<circle cx='66' cy='360' r='5' fill='#0969da'/>
+<text x='78.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>Link's house</text>
+<circle cx='186' cy='360' r='5' fill='#bc4c00'/>
+<text x='198.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>Ordon, outside</text>
+<circle cx='316' cy='360' r='5' fill='#ffffff' stroke='#59636e' stroke-width='2'/>
+<text x='328.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>run rejected: v54, draws were lost (uniform failures)</text>
+<text x='60.0' y='400.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='start' font-weight='normal'>v61 runs at the system clocks (333 MHz); the next builds use 444 MHz.</text>
+</svg>

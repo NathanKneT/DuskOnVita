@@ -1,0 +1,190 @@
+Vita: choose at start-up between Inline FIFO processing (the default, as patch 0001 set it) and
+upstream's Thread mode, where a worker processes the FIFO, and so runs every backend draw, while the
+game thread goes on encoding commands.
+
+drain() (GXDrawDone, aurora_end_frame) still waits for the worker, so the GX state, the game's
+memory the commands point at and the frame's order are the same in both modes; only J3D's command
+encoding overlaps the processing. std::thread gets VitaSDK's 32 KiB default stack, too small for the
+backend's draw path, so the Vita worker is a pthread with a 512 KiB stack; the backend's
+twv_gx_worker_started hook gives it its core. The 0001 lock elisions now test the mode at run time.
+
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -8,6 +8,9 @@
+ #include <cstring>
+ #include <limits>
+ #include <mutex>
++#if TWV_VITA_GFX_VGL
++#include <pthread.h>
++#endif
+ 
+ #include <tracy/Tracy.hpp>
+ 
+@@ -25,7 +28,9 @@ uint32_t sDlWritePos = 0;
+ namespace {
+ constexpr Module Log{"aurora::gx::fifo"};
+ #if TWV_VITA_GFX_VGL
+-constexpr auto kProcessingMode = ProcessingMode::Inline;
++// Inline by default (one GL/GXM owner, the main thread); Thread moves the processing, and so every
++// backend draw, onto the worker below. drain() still waits for it, as GXDrawDone requires.
++auto kProcessingMode = ProcessingMode::Inline;
+ #else
+ constexpr auto kProcessingMode = ProcessingMode::Thread;
+ #endif
+@@ -38,7 +43,17 @@ std::atomic<uint64_t> sProcessed{0};
+ uint64_t sStreamBase = 0;
+ std::mutex sBufferMutex;
+ std::atomic<uint32_t> sWorkerWake{0};
++#if TWV_VITA_GFX_VGL
++// std::thread gets VitaSDK's 32 KiB default stack, too small for the backend's draw path: a
++// pthread with an explicit stack instead, and a backend hook for its core and priority.
++extern "C" void twv_gx_worker_started() noexcept __attribute__((weak));
++constexpr size_t kVitaWorkerStack = 512 * 1024;
++pthread_t sVitaWorker{};
++bool sVitaWorkerRunning = false;
++std::atomic<bool> sVitaWorkerStop{false};
++#else
+ thread::Thread sWorkerThread;
++#endif
+ std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
+ 
+ void dispatch_draw_done() noexcept {
+@@ -58,7 +73,7 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+     ProcessResult result{};
+     {
+       std::unique_lock lock{sBufferMutex, std::defer_lock};
+-      if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();
++      if (kProcessingMode != ProcessingMode::Inline) lock.lock();
+       AURORA_ASSERT(processed >= sStreamBase && target <= sStreamBase + detail::sBufferSize,
+                     "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, target, sStreamBase,
+                     sStreamBase + detail::sBufferSize);
+@@ -74,12 +89,12 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+     }
+     processed += result.bytesProcessed;
+     sProcessed.store(processed, order);
+-    if constexpr (kProcessingMode != ProcessingMode::Inline) sProcessed.notify_all();
++    if (kProcessingMode != ProcessingMode::Inline) sProcessed.notify_all();
+   }
+ }
+ 
+-void worker_main(std::stop_token token) noexcept {
+-  std::stop_callback wakeOnStop{token, wake_worker};
++template <typename Stop>
++void worker_run(Stop&& stopRequested) noexcept {
+   while (true) {
+     const uint32_t event = sWorkerWake.load(std::memory_order_acquire);
+     const uint64_t processed = sProcessed.load(std::memory_order_relaxed);
+@@ -89,13 +104,55 @@ void worker_main(std::stop_token token) noexcept {
+       continue;
+     }
+ 
+-    if (token.stop_requested()) {
++    if (stopRequested()) {
+       break;
+     }
+     sWorkerWake.wait(event, std::memory_order_acquire);
+   }
+ }
+ 
++#if TWV_VITA_GFX_VGL
++void* vita_worker_entry(void*) {
++  if (twv_gx_worker_started) {
++    twv_gx_worker_started();
++  }
++  worker_run([] { return sVitaWorkerStop.load(std::memory_order_acquire); });
++  return nullptr;
++}
++
++bool worker_running() noexcept { return sVitaWorkerRunning; }
++
++void start_worker() {
++  if (kProcessingMode != ProcessingMode::Thread || sVitaWorkerRunning) {
++    return;
++  }
++  pthread_attr_t attr;
++  pthread_attr_init(&attr);
++  pthread_attr_setstacksize(&attr, kVitaWorkerStack);
++  sVitaWorkerStop.store(false, std::memory_order_release);
++  const int rc = pthread_create(&sVitaWorker, &attr, vita_worker_entry, nullptr);
++  pthread_attr_destroy(&attr);
++  AURORA_ASSERT(rc == 0, "fifo: failed to start the FIFO worker ({})", rc);
++  sVitaWorkerRunning = true;
++}
++
++void stop_worker() {
++  if (!sVitaWorkerRunning) {
++    return;
++  }
++  sVitaWorkerStop.store(true, std::memory_order_release);
++  wake_worker();
++  pthread_join(sVitaWorker, nullptr);
++  sVitaWorkerRunning = false;
++}
++#else
++void worker_main(std::stop_token token) noexcept {
++  std::stop_callback wakeOnStop{token, wake_worker};
++  worker_run([&] { return token.stop_requested(); });
++}
++
++bool worker_running() noexcept { return sWorkerThread.joinable(); }
++
+ void start_worker() {
+   if (kProcessingMode != ProcessingMode::Thread || sWorkerThread.joinable()) {
+     return;
+@@ -114,9 +171,16 @@ void stop_worker() {
+   sWorkerThread.request_stop();
+   sWorkerThread.join();
+ }
++#endif
+ } // namespace
+ 
+ ProcessingMode processing_mode() noexcept { return kProcessingMode; }
++#if TWV_VITA_GFX_VGL
++void set_processing_mode(ProcessingMode mode) noexcept {
++  AURORA_ASSERT(!sVitaWorkerRunning, "fifo: processing mode changed after init");
++  kProcessingMode = mode == ProcessingMode::Thread ? ProcessingMode::Thread : ProcessingMode::Inline;
++}
++#endif
+ 
+ void init() {
+   stop_worker();
+@@ -163,7 +227,7 @@ void write_data_grow(const void* data, uint32_t length) {
+     AURORA_ASSERT(resized != nullptr, "fifo::write_data: failed to allocate {} bytes", newCapacity);
+     detail::sBufferData = resized;
+   };
+-  if (sWorkerThread.joinable()) {
++  if (worker_running()) {
+     std::lock_guard lock{sBufferMutex};
+     grow();
+   } else {
+@@ -267,7 +331,7 @@ void drain() {
+ 
+   {
+     std::unique_lock lock{sBufferMutex, std::defer_lock};
+-    if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();
++    if (kProcessingMode != ProcessingMode::Inline) lock.lock();
+     sStreamBase = target;
+     detail::sBufferSize = 0;
+   }
+@@ -282,7 +346,7 @@ void clear_buffer() {
+   AURORA_ASSERT(sPublished.load(std::memory_order_acquire) == processed,
+                 "fifo::clear_buffer: published commands are still pending");
+   std::unique_lock lock{sBufferMutex, std::defer_lock};
+-  if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();
++  if (kProcessingMode != ProcessingMode::Inline) lock.lock();
+   sStreamBase = processed;
+   detail::sBufferSize = 0;
+   sPendingDraws = 0;
+--- a/lib/gx/fifo.hpp
++++ b/lib/gx/fifo.hpp
+@@ -25,6 +25,10 @@ enum class ProcessingMode : uint8_t {
+   Thread
+ };
+ ProcessingMode processing_mode() noexcept;
++#if TWV_VITA_GFX_VGL
++// Vita: chosen once at start-up, before init() (Inline unless the port selects Thread).
++void set_processing_mode(ProcessingMode mode) noexcept;
++#endif
+ 
+ void init();
+ void shutdown();

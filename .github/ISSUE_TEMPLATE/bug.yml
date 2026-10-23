@@ -1,0 +1,36 @@
+name: Bug or rendering problem
+description: Report a reproducible problem on the Vita port.
+body:
+  - type: input
+    id: revision
+    attributes:
+      label: Commit and build options
+      description: Include the source commit, CMake options and args.txt contents.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Hardware and clock settings
+      description: Vita model, firmware, plugins affecting performance, or emulator version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Stage, room, spawn, route and actions. Say whether shader caches were warm or cold.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: For rendering problems, include matching Vita and Dolphin views if possible.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: Attach a relevant runtime.jsonl excerpt or build error. Do not attach game data, firmware or personal saves.

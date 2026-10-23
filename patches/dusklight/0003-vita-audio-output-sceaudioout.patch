@@ -1,0 +1,166 @@
+Vita: DuskAudioSystem output goes to SceAudioOut (platform/vita/audio) instead of
+an SDL audio stream (docs/ARCHITECTURE.md, "Audio": audio thread core, priority
+and suspend under the port's control; no SDL_AudioSpec across the enum boundary).
+Only the output side changes: under TARGET_VITA the stream open/close and the
+SDL_PutAudioStreamData call; pause/resume go through two helpers that call the same
+SDL functions as before on other targets. Rendering (RenderNewAudioFrame, the DSP,
+the resampler and mixing) is unchanged, so what the game hears cannot change;
+surround output modes render stereo because the Vita has stereo output only.
+
+--- a/src/dusk/audio/DuskAudioSystem.cpp
++++ b/src/dusk/audio/DuskAudioSystem.cpp
+@@ -10,7 +10,14 @@
+ #include "JSystem/JAudio2/JASDSPChannel.h"
+ #include "JSystem/JAudio2/JASHeapCtrl.h"
+ 
++#if TARGET_VITA
++// The Vita sends the DSP output to SceAudioOut (platform/vita/audio) instead of an SDL
++// audio stream: the same pull model, but the audio thread's core, priority and
++// suspend behavior belong to the port. Rendering below is unchanged.
++#include "audio/audio_out.hpp"
++#else
+ #include <SDL3/SDL_init.h>
++#endif
+ #include <tracy/Tracy.hpp>
+ 
+ #include <array>
+@@ -22,6 +29,14 @@
+ static OutputSubframe OutBuffer;
+ static std::array<f32, DSP_SUBFRAME_SIZE * OutputSubframe::NUM_CHANNELS> OutInterleaveBufferFull;
+ 
++#if TARGET_VITA
++static bool PlaybackStream; // the Vita output is open
++
++/**
++ * Vita output callback to trigger rendering of new audio data.
++ */
++static void GetNewAudio(int needed);
++#else
+ static SDL_AudioStream* PlaybackStream;
+ 
+ /**
+@@ -32,6 +47,7 @@
+     SDL_AudioStream*,
+     int needed,
+     int);
++#endif
+ 
+ /**
+  * Render an entire new frame of audio and output it to SDL3.
+@@ -58,6 +74,34 @@
+     }
+ }
+ 
++#if TARGET_VITA
++// The Vita has stereo output only, so surround modes render as stereo.
++static bool InitSDL3Output() {
++    const auto speakerConfig = dusk::getSettings().audio.outputMode.getValue();
++    const size_t desiredChannelCount = 2;
++    const bool hrtf = speakerConfig == dusk::AudioOutputMode::StereoHeadphones;
++
++    if (PlaybackStream) {
++        JASCriticalSection section;
++        EnableHrtf = hrtf;
++        return false;
++    }
++
++    const bool opened = twv::vita::audio::open(SampleRate, static_cast<int>(desiredChannelCount), &GetNewAudio);
++
++    {
++        JASCriticalSection section;
++        EnableHrtf = hrtf;
++        OutChannelCount = desiredChannelCount;
++        PlaybackStream = opened;
++    }
++
++    return true;
++}
++
++static void ResumeOutput() { twv::vita::audio::resume(); }
++static void PauseOutput() { twv::vita::audio::pause(); }
++#else
+ static bool InitSDL3Output() {
+     const auto speakerConfig = dusk::getSettings().audio.outputMode.getValue();
+     const auto desiredChannelCount = GetChannelCountForOutputMode(speakerConfig);
+@@ -94,6 +138,10 @@
+     return true;
+ }
+ 
++static void ResumeOutput() { SDL_ResumeAudioStreamDevice(PlaybackStream); }
++static void PauseOutput() { SDL_PauseAudioStreamDevice(PlaybackStream); }
++#endif
++
+ void dusk::audio::Initialize() {
+     // enable 48 kHz mode
+     // this will scale voice pitch and track tempo accordingly
+@@ -107,23 +155,28 @@
+ 
+     JASPoolAllocObject_MultiThreaded<JASChannel>::newMemPool(0x48);
+ 
+-    SDL_ResumeAudioStreamDevice(PlaybackStream);
++    ResumeOutput();
+ }
+ 
+ void dusk::audio::Reinitialize() {
+     // don't re-init unless we've initialized first (using PlaybackStream being set as proxy)
+     if (PlaybackStream && InitSDL3Output()) {
+-        SDL_ResumeAudioStreamDevice(PlaybackStream);
++        ResumeOutput();
+     }
+ }
+ 
+ void dusk::audio::Shutdown() {
++#if TARGET_VITA
++    twv::vita::audio::close();
++    PlaybackStream = false;
++#else
+     if (PlaybackStream) {
+         SDL_DestroyAudioStream(PlaybackStream);
+         PlaybackStream = nullptr;
+     }
+ 
+     SDL_QuitSubSystem(SDL_INIT_AUDIO);
++#endif
+ }
+ 
+ void dusk::audio::SetMasterVolume(const f32 value) {
+@@ -134,9 +187,9 @@
+ 
+ void dusk::audio::SetPaused(const bool paused) {
+     if (paused) {
+-        SDL_PauseAudioStreamDevice(PlaybackStream);
++        PauseOutput();
+     } else {
+-        SDL_ResumeAudioStreamDevice(PlaybackStream);
++        ResumeOutput();
+     }
+ }
+ 
+@@ -150,11 +203,15 @@
+ static auto FrameName = "GetNewAudio";
+ #endif
+ 
++#if TARGET_VITA
++void GetNewAudio(int needed) {
++#else
+ void SDLCALL GetNewAudio(
+     void*,
+     SDL_AudioStream*,
+     int needed,
+     int) {
++#endif
+     FrameMarkStart(FrameName);
+     while (needed > 0) {
+         const int rendered = RenderNewAudioFrame();
+@@ -281,7 +338,11 @@
+     }
+ 
+     auto bytesToWrite = OutInterleaveBuffer.size_bytes();
++#if TARGET_VITA
++    twv::vita::audio::put(OutInterleaveBuffer.data(), bytesToWrite);
++#else
+     SDL_PutAudioStreamData(PlaybackStream, OutInterleaveBuffer.data(), bytesToWrite);
++#endif
+     return bytesToWrite;
+ }
+ 

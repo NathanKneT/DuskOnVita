@@ -1,0 +1,30 @@
+name: Performance report
+description: Share reproducible timing results from physical hardware.
+body:
+  - type: input
+    id: revision
+    attributes:
+      label: Commit, build flags and runtime arguments
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Vita model and observed clocks
+      description: Include CPU/GPU clocks and performance plugins. Identify emulator measurements explicitly.
+    validations:
+      required: true
+  - type: textarea
+    id: route
+    attributes:
+      label: Stage, route and measurement interval
+      description: Describe the camera, actions, enemies, cache state and duration so someone else can repeat the test.
+    validations:
+      required: true
+  - type: textarea
+    id: timings
+    attributes:
+      label: Results and diagnostics
+      description: Separate loading and shader stalls from steady gameplay. Paste the rows printed by tools/vita_run_report.py (or FPS, frame times and runtime.jsonl excerpts); say what changed for an A/B comparison.
+    validations:
+      required: true

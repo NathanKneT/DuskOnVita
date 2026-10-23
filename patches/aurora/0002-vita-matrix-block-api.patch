@@ -1,0 +1,32 @@
+Vita: expose a bounded, already-big-endian command block write.
+
+--- a/include/dolphin/gx/GXVert.h
++++ b/include/dolphin/gx/GXVert.h
+@@ -129,6 +129,10 @@
+ void GXCmd1u16(const u16 x);
+ void GXCmd1u32(const u32 x);
+ void GXCmd1u64(const u64 x);
++#if TARGET_VITA
++// False leaves a short display list untouched; caller uses original scalar stores.
++bool GXTryCmdBlock(const void* data, u32 nbytes);
++#endif
+ 
+ void GXParam1u8(const u8 x);
+ void GXParam1u16(const u16 x);
+--- a/lib/dolphin/gx/GXVert.cpp
++++ b/lib/dolphin/gx/GXVert.cpp
+@@ -243,6 +243,14 @@
+ void GXCmd1u16(const u16 x) { aurora::gx::fifo::write_u16(x); }
+ void GXCmd1u32(const u32 x) { aurora::gx::fifo::write_u32(x); }
+ void GXCmd1u64(const u64 x) { aurora::gx::fifo::write_u64(x); }
++#if TARGET_VITA
++bool GXTryCmdBlock(const void* data, u32 nbytes) {
++  using namespace aurora::gx::fifo;
++  if (detail::sInDisplayList && nbytes > detail::sDlSize-detail::sDlWritePos) return false;
++  write_data(data,nbytes);
++  return true;
++}
++#endif
+ 
+ void GXParam1u8(const u8 x) { aurora::gx::fifo::write_u8(x); }
+ void GXParam1u16(const u16 x) { aurora::gx::fifo::write_u16(x); }

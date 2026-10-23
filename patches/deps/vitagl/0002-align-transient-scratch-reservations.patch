@@ -1,0 +1,13 @@
+--- a/source/vgl.c
++++ b/source/vgl.c
+@@ -147,6 +147,10 @@
+ #endif
+ uint32_t circular_data_pool_size = CIRCULAR_POOL_SIZE_DEF;
+ uint8_t *vgl_reserve_data_pool(uint32_t size) {
++	// The cursor is shared by index, vertex and uniform uploads. Keep every
++	// reservation aligned for ARM VFP stores and GXM stream/uniform addresses.
++	if (size > UINT32_MAX - 15u) return NULL;
++	size = (size + 15u) & ~15u;
+ #ifndef CIRCULAR_POOL_SPEEDHACK
+ 	uint8_t *res = circular_data_pool_ptr[vgl_circular_idx];
+ 	circular_data_pool_ptr[vgl_circular_idx] += size;

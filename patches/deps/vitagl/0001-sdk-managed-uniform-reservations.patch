@@ -1,0 +1,573 @@
+--- a/source/utils/gxm_utils.h
++++ b/source/utils/gxm_utils.h
+@@ -29,7 +29,10 @@
+ extern SceGxmContext *gxm_context;
+ 
+ void vglSetupUniformCircularPool(void);
+-void *vglReserveUniformCircularPoolBuffer(uint32_t size);
++extern GLboolean vgl_uniform_reservation_failed;
++void vglBeginUniformUpload(void);
++void vglSkipEmptyUniformStage(GLboolean vertex);
++void *vglReserveNativeUniformBuffer(GLboolean vertex, uint32_t size);
+ 
+ #ifdef HAVE_PROFILING
+ typedef struct {
+@@ -57,23 +60,23 @@
+ 
+ void vglSetUniformData(uint8_t *uniformBuffer, const SceGxmParameterType t, const int offset, const uint32_t count, const uint32_t componentCount, const void *sourceData, const SceGxmParameterType input_type);
+ 
++// Native reservations belong to the command stream, not to a persistent program
++// cache. Never restore a pointer from an earlier draw/scene after a helper pass.
+ static inline __attribute__((always_inline)) void vglRestoreFragmentUniformBuffer(void) {
+-	if (vgl_def_frag_buf)
+-		sceGxmSetFragmentDefaultUniformBuffer(gxm_context, vgl_def_frag_buf);	
++    vgl_def_frag_buf = NULL;
+ }
+ static inline __attribute__((always_inline)) void vglRestoreVertexUniformBuffer(void) {
+-	if (vgl_def_vert_buf)
+-		sceGxmSetVertexDefaultUniformBuffer(gxm_context, vgl_def_vert_buf);
++    vgl_def_vert_buf = NULL;
+ }
+ static inline __attribute__((always_inline)) void *vglReserveFragmentUniformBuffer(uint32_t size) {
+-	vgl_def_frag_buf = vglReserveUniformCircularPoolBuffer(size);
+-	sceGxmSetFragmentDefaultUniformBuffer(gxm_context, vgl_def_frag_buf);
+-	return vgl_def_frag_buf;
++    (void)size; // The bound compiled fragment program determines native size.
++    vgl_def_frag_buf = vglReserveNativeUniformBuffer(GL_FALSE, size);
++    return vgl_def_frag_buf;
+ }
+ static inline __attribute__((always_inline)) void *vglReserveVertexUniformBuffer(uint32_t size) {
+-	vgl_def_vert_buf = vglReserveUniformCircularPoolBuffer(size);
+-	sceGxmSetVertexDefaultUniformBuffer(gxm_context, vgl_def_vert_buf);
+-	return vgl_def_vert_buf;
++    (void)size; // The bound compiled vertex program determines native size.
++    vgl_def_vert_buf = vglReserveNativeUniformBuffer(GL_TRUE, size);
++    return vgl_def_vert_buf;
+ }
+ 
+ typedef struct {
+--- a/source/utils/gxm_utils.c
++++ b/source/utils/gxm_utils.c
+@@ -28,12 +28,16 @@
+ #define XXH_memset sceClibMemset
+ #include "xxhash_utils.h"
+ 
+-#define UNIFORM_CIRCULAR_POOL_SIZE (2 * 1024 * 1024)
+ 
+ void *vgl_def_frag_buf = NULL;
+ void *vgl_def_vert_buf = NULL;
+-static uint8_t *unif_pool = NULL;
+-static uint32_t unif_idx = 0;
++GLboolean vgl_uniform_reservation_failed = GL_FALSE;
++static uint64_t uniform_vertex_bytes, uniform_fragment_bytes;
++static uint64_t uniform_vertex_calls, uniform_fragment_calls, uniform_failures;
++static uint64_t uniform_null_successes, uniform_negative_errors;
++static uint64_t uniform_empty_vertex, uniform_empty_fragment;
++static uint32_t uniform_first_stage, uniform_first_bytes, uniform_last_stage, uniform_last_bytes;
++static int32_t uniform_first_result, uniform_last_result;
+ 
+ #define VERTEX_PROGRAM_CACHE_WAYS 4
+ #define VERTEX_PROGRAM_CACHE_SETS 64
+@@ -218,29 +222,76 @@
+ 	sceGxmShaderPatcherForceUnregisterProgram(gxm_shader_patcher, id);
+ }
+ 
+-void vglSetupUniformCircularPool() {
+-	if (!unif_pool) {
+-		unif_pool = gpu_alloc_mapped_for_cpu(UNIFORM_CIRCULAR_POOL_SIZE);
+-	}
+-}
+-
+-void *vglReserveUniformCircularPoolBuffer(uint32_t size) {
+-	void *r;
+-	if (unif_idx + size >= UNIFORM_CIRCULAR_POOL_SIZE) {
+-#ifndef SKIP_ERROR_HANDLING
+-		static uint32_t last_frame_swap = 0;
+-		if (last_frame_swap == vgl_framecount) {
+-			vgl_log("%s:%d Circular Uniform Pool outage detected! Consider increasing UNIFORM_CIRCULAR_POOL_SIZE...\n", __FILE__, __LINE__);
+-		}
+-		last_frame_swap = vgl_framecount;
+-#endif
+-		r = unif_pool;
+-		unif_idx = size;
+-	} else {
+-		r = (unif_pool + unif_idx);
+-		unif_idx += size;
+-	}
+-	return r;
++// Kept for the existing context initialization call; no private uniform pool.
++void vglSetupUniformCircularPool() {}
++
++void vglBeginUniformUpload(void) {
++    vgl_uniform_reservation_failed = GL_FALSE;
++    vgl_def_vert_buf = NULL;
++    vgl_def_frag_buf = NULL;
++}
++
++// Only custom shader reflection proves an empty default container. A helper
++// pass size=0 is a byte-accounting sentinel and MUST still reserve native memory.
++void vglSkipEmptyUniformStage(GLboolean vertex) {
++    if (vertex) ++uniform_empty_vertex; else ++uniform_empty_fragment;
++}
++
++void *vglReserveNativeUniformBuffer(GLboolean vertex, uint32_t size) {
++    void *buffer = NULL;
++    if (vgl_uniform_reservation_failed)
++        return NULL;
++    if (vertex) ++uniform_vertex_calls; else ++uniform_fragment_calls;
++    const int result = vertex ? sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &buffer)
++                              : sceGxmReserveFragmentDefaultUniformBuffer(gxm_context, &buffer);
++    if (result < 0 || !buffer) {
++        ++uniform_failures;
++        if (result < 0) ++uniform_negative_errors; else ++uniform_null_successes;
++        const uint32_t stage = vertex ? 1u : 2u;
++        if (!uniform_first_stage) {
++            uniform_first_stage = stage;
++            uniform_first_result = (int32_t)result;
++            uniform_first_bytes = size;
++        }
++        uniform_last_stage = stage;
++        uniform_last_result = (int32_t)result;
++        uniform_last_bytes = size;
++        vgl_uniform_reservation_failed = GL_TRUE;
++        // Bounded cumulative diagnostics replace per-draw file logging.
++        return NULL;
++    }
++    if (vertex) uniform_vertex_bytes += size; else uniform_fragment_bytes += size;
++    return buffer;
++}
++
++// CPU shadows are copied immediately; these counters never expose SDK enums.
++// Sparse helper-pass reservations count as calls but not snapshot bytes.
++void vglGetUniformReservationStats(uint64_t *vertexBytes, uint64_t *fragmentBytes,
++        uint64_t *vertexCalls, uint64_t *fragmentCalls, uint64_t *failures) {
++    if (vertexBytes) *vertexBytes = uniform_vertex_bytes;
++    if (fragmentBytes) *fragmentBytes = uniform_fragment_bytes;
++    if (vertexCalls) *vertexCalls = uniform_vertex_calls;
++    if (fragmentCalls) *fragmentCalls = uniform_fragment_calls;
++    if (failures) *failures = uniform_failures;
++}
++
++
++// Fixed-width private C ABI. Stage 0=no failure, 1=vertex, 2=fragment.
++// All counters are cumulative; first/last details describe failures only.
++void vglGetUniformReservationDiagnostics(uint64_t *nullSuccesses, uint64_t *negativeErrors,
++        uint64_t *skippedEmptyVertex, uint64_t *skippedEmptyFragment,
++        uint32_t *firstStage, int32_t *firstResult, uint32_t *firstBytes,
++        uint32_t *lastStage, int32_t *lastResult, uint32_t *lastBytes) {
++    if (nullSuccesses) *nullSuccesses = uniform_null_successes;
++    if (negativeErrors) *negativeErrors = uniform_negative_errors;
++    if (skippedEmptyVertex) *skippedEmptyVertex = uniform_empty_vertex;
++    if (skippedEmptyFragment) *skippedEmptyFragment = uniform_empty_fragment;
++    if (firstStage) *firstStage = uniform_first_stage;
++    if (firstResult) *firstResult = uniform_first_result;
++    if (firstBytes) *firstBytes = uniform_first_bytes;
++    if (lastStage) *lastStage = uniform_last_stage;
++    if (lastResult) *lastResult = uniform_last_result;
++    if (lastBytes) *lastBytes = uniform_last_bytes;
+ }
+ 
+ #define decode_unif_component_simple(dst_stride, src_type, dst_type) \
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
+@@ -137,15 +137,23 @@
+ 	}
+ 
+ #ifndef HAVE_FFP_SHADER_SUPPORT
+-#define upload_uniforms() \
+-	if (p->vert_uniforms && dirty_shader_vert_unifs) { \
++#define upload_uniforms(failure) \
++	if (p->vert_uniforms && p->vshader->unif_buf_size) { \
+ 		void *buffer = vglReserveVertexUniformBuffer(p->vshader->unif_buf_size); \
++		if (!buffer) { failure; } \
+ 		vgl_fast_memcpy(buffer, p->unif_vbuffer, p->vshader->unif_buf_size); \
+ 		dirty_shader_vert_unifs = GL_FALSE; \
++	} else if (!p->vshader->unif_buf_size) { \
++		vglSkipEmptyUniformStage(GL_TRUE); \
++		dirty_shader_vert_unifs = GL_FALSE; \
+ 	} \
+-	if (p->frag_uniforms && dirty_shader_frag_unifs) { \
++	if (p->frag_uniforms && p->fshader->unif_buf_size) { \
+ 		void *buffer = vglReserveFragmentUniformBuffer(p->fshader->unif_buf_size); \
++		if (!buffer) { failure; } \
+ 		vgl_fast_memcpy(buffer, p->unif_fbuffer, p->fshader->unif_buf_size); \
++		dirty_shader_frag_unifs = GL_FALSE; \
++	} else if (!p->fshader->unif_buf_size) { \
++		vglSkipEmptyUniformStage(GL_FALSE); \
+ 		dirty_shader_frag_unifs = GL_FALSE; \
+ 	} \
+ 	if (p->vert_ubos) { \
+@@ -166,9 +174,10 @@
+ 		} \
+ 	}
+ #else
+-#define upload_uniforms() \
+-	if (p->vert_uniforms && (dirty_vert_unifs || dirty_shader_vert_unifs)) { \
++#define upload_uniforms(failure) \
++	if (p->vert_uniforms && p->vshader->unif_buf_size) { \
+ 		void *buffer = vglReserveVertexUniformBuffer(p->vshader->unif_buf_size); \
++		if (!buffer) { failure; } \
+ 		if (dirty_vert_unifs) { \
+ 			dirty_vert_unifs = GL_FALSE; \
+ 			if (p->ffp_binds[FFP_MVP_MATRIX]) { \
+@@ -193,10 +202,17 @@
+ 		} \
+ 		vgl_fast_memcpy(buffer, p->unif_vbuffer, p->vshader->unif_buf_size); \
+ 		dirty_shader_vert_unifs = GL_FALSE; \
++	} else if (!p->vshader->unif_buf_size) { \
++		vglSkipEmptyUniformStage(GL_TRUE); \
++		dirty_shader_vert_unifs = GL_FALSE; \
+ 	} \
+-	if (p->frag_uniforms && dirty_shader_frag_unifs) { \
++	if (p->frag_uniforms && p->fshader->unif_buf_size) { \
+ 		void *buffer = vglReserveFragmentUniformBuffer(p->fshader->unif_buf_size); \
++		if (!buffer) { failure; } \
+ 		vgl_fast_memcpy(buffer, p->unif_fbuffer, p->fshader->unif_buf_size); \
++		dirty_shader_frag_unifs = GL_FALSE; \
++	} else if (!p->fshader->unif_buf_size) { \
++		vglSkipEmptyUniformStage(GL_FALSE); \
+ 		dirty_shader_frag_unifs = GL_FALSE; \
+ 	} \
+ 	if (p->vert_ubos) { \
+@@ -904,7 +920,7 @@
+ 		vertex_layout_setup_ptrs(p, layout_entry->is_packed, lowest, highest - lowest, highest, ptrs);
+ 		p->vprog = layout_entry->vprog;
+ 		sceGxmSetVertexProgram(gxm_context, p->vprog);
+-		upload_uniforms();
++		upload_uniforms(return);
+ 		for (int j = 0; j < drawcount; j++) {
+ 			for (int i = 0; i < p->attr_num; i++) {
+ 				uint8_t attr_idx = p->attr_map[i];
+@@ -916,7 +932,7 @@
+ 					}
+ 				}
+ 			}
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[j]);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[j]);
+ 		}
+ #ifdef HAVE_PROFILING
+ 		shaders_draw_profiler_cnt += sceKernelGetProcessTimeLow() - draw_start;
+@@ -1027,7 +1043,7 @@
+ 	sceGxmSetVertexProgram(gxm_context, p->vprog);
+ 
+ 	// Uploading both fragment and vertex uniforms data
+-	upload_uniforms();
++	upload_uniforms(return);
+ 	
+ 	for (int j = 0; j < drawcount; j++) {
+ 		// Uploading vertex streams
+@@ -1049,7 +1065,7 @@
+ 			}
+ 		}
+ 		
+-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[j]);
++		if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[j]);
+ 	}
+ #ifdef HAVE_PROFILING
+ 	shaders_draw_profiler_cnt += sceKernelGetProcessTimeLow() - draw_start;
+@@ -1162,7 +1178,7 @@
+ 		vertex_layout_setup_ptrs(p, layout_entry->is_packed, first, count, count, ptrs);
+ 		p->vprog = layout_entry->vprog;
+ 		sceGxmSetVertexProgram(gxm_context, p->vprog);
+-		upload_uniforms();
++		upload_uniforms(return GL_FALSE);
+ 		for (int i = 0; i < p->attr_num; i++) {
+ 			uint8_t attr_idx = p->attr_map[i];
+ 			if (cur_vao->vertex_attrib_state & (1 << attr_idx)) {
+@@ -1308,7 +1324,7 @@
+ 	sceGxmSetVertexProgram(gxm_context, p->vprog);
+ 
+ 	// Uploading both fragment and vertex uniforms data
+-	upload_uniforms();
++	upload_uniforms(return GL_FALSE);
+ 
+ 	// Uploading vertex streams
+ 	for (int i = 0; i < p->attr_num; i++) {
+@@ -1467,7 +1483,7 @@
+ 			vertex_layout_setup_ptrs(p, layout_entry->is_packed, 0, top_idx, top_idx, ptrs);
+ 			p->vprog = layout_entry->vprog;
+ 			sceGxmSetVertexProgram(gxm_context, p->vprog);
+-			upload_uniforms();
++			upload_uniforms(return GL_FALSE);
+ 			for (int i = 0; i < p->attr_num; i++) {
+ 				uint8_t attr_idx = p->attr_map[i];
+ 				if (cur_vao->vertex_attrib_state & (1 << attr_idx)) {
+@@ -1645,7 +1661,7 @@
+ 	sceGxmSetVertexProgram(gxm_context, p->vprog);
+ 
+ 	// Uploading both fragment and vertex uniforms data
+-	upload_uniforms();
++	upload_uniforms(return GL_FALSE);
+ 
+ 	// Uploading vertex streams
+ 	for (int i = 0; i < p->attr_num; i++) {
+@@ -1719,7 +1735,7 @@
+ 	}
+ 
+ 	// Uploading both fragment and vertex uniforms data
+-	upload_uniforms();
++	upload_uniforms(return);
+ 
+ #ifdef HAVE_PROFILING
+ 	shaders_draw_profiler_cnt += sceKernelGetProcessTimeLow() - draw_start;
+--- a/source/ffp.c
++++ b/source/ffp.c
+@@ -569,6 +569,9 @@
+ #endif
+ 
+ uint8_t reload_ffp_shaders(SceGxmVertexAttribute *attrs, SceGxmVertexStream *streams, SceGxmIndexSource index_type) {
++	// Refresh both native snapshots on every draw setup. CPU shadows persist.
++	dirty_vert_unifs = 0xFFFF;
++	dirty_frag_unifs = 0xFFFFFFFF;
+ #ifdef HAVE_PROFILING
+ 	uint32_t reload_ffp_shaders_start = sceKernelGetProcessTimeLow();
+ #endif
+@@ -1204,6 +1207,7 @@
+ 	if (dirty_frag_unifs) {
+ 		if (ffp_fragment_unif_buf_size) {
+ 			uint8_t *buffer = vglReserveFragmentUniformBuffer(ffp_fragment_unif_buf_size);
++			if (!buffer) return 0;
+ 			if (ffp_fragment_params[ALPHA_CUT_UNIF] >= 0) {
+ 				upload_ffp_fragment_unif(ALPHA_CUT_UNIF, 0, 1, 1, &vgl_alpha_ref)
+ 			}
+@@ -1275,6 +1279,7 @@
+ 		}
+ 	if (dirty_vert_unifs) {
+ 		uint8_t *buffer = vglReserveVertexUniformBuffer(ffp_vertex_unif_buf_size);
++		if (!buffer) return 0;
+ 		if (ffp_vertex_params[CLIP_PLANES_EQUATION_UNIF] >= 0) {
+ 			upload_ffp_vertex_unif(CLIP_PLANES_EQUATION_UNIF, 0, mask.clip_planes_num, 4, &clip_planes[0].x)
+ 		}
+@@ -1613,7 +1618,7 @@
+ 		for (int z = 0; z < j; z++) {
+ 			sceGxmSetVertexStream(gxm_context, z, ptrs[z] + (first[i] - lowest) * strides[z]);
+ 		}
+-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[i]);
++		if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, idx_ptr, count[i]);
+ 	}
+ #ifdef HAVE_PROFILING
+ 	ffp_draw_profiler_cnt += sceKernelGetProcessTimeLow() - draw_start;
+@@ -2854,7 +2859,7 @@
+ 		break;
+ 	}
+ 
+-	sceGxmDraw(gxm_context, prim, SCE_GXM_INDEX_FORMAT_U16, ptr, index_count);
++	if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, prim, SCE_GXM_INDEX_FORMAT_U16, ptr, index_count);
+ 
+ 	// Moving legacy pool address offset
+ 	if (texture_units[1].state)
+--- a/source/draw.c
++++ b/source/draw.c
+@@ -211,7 +211,7 @@
+ 			vgl_log("%s:%d Attempting to draw a model with glDrawArrays which is too big! Consider increasing MAX_IDX_NUMBER value... (Max requested index: %d)\n", __FILE__, __LINE__, count - 1);
+ 		}
+ #endif
+-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
++		if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+ 	}
+ 	restore_polygon_mode(gxm_p);
+ }
+@@ -323,7 +323,7 @@
+ 			vgl_log("%s:%d Attempting to draw a model with glDrawArraysInstanced which is too big! Consider increasing MAX_IDX_NUMBER value... (Max requested index: %d)\n", __FILE__, __LINE__, count - 1);
+ 		}
+ #endif
+-		sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count * primcount, count);
++		if (!vgl_uniform_reservation_failed) sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count * primcount, count);
+ 	}
+ 	restore_polygon_mode(gxm_p);
+ }
+@@ -378,13 +378,13 @@
+ 	{
+ 		if (type == GL_UNSIGNED_SHORT) {
+ 			setup_elements_indices(uint16_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+ 		} else if (type == GL_UNSIGNED_INT) {
+ 			setup_elements_indices(uint32_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
+ 		} else {
+ 			setup_8bit_elements_indices();
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+ 		}
+ 	}
+ 	restore_polygon_mode(gxm_p);
+@@ -424,12 +424,12 @@
+ 	{
+ 		if (type == GL_UNSIGNED_INT) {
+ 			setup_elements_indices(uint32_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32 + baseVertex, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32 + baseVertex, ptr, count);
+ 		}
+ 		else
+ 		{
+ 			setup_elements_indices(uint16_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16 + baseVertex, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16 + baseVertex, ptr, count);
+ 		}
+ 	}
+ 	restore_polygon_mode(gxm_p);
+@@ -471,12 +471,12 @@
+ 	{
+ 		if (type == GL_UNSIGNED_INT) {
+ 			setup_elements_indices(uint32_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
+ 		}
+ 		else
+ 		{
+ 			setup_elements_indices(uint16_t);
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+ 		}
+ 	}
+ 	restore_polygon_mode(gxm_p);
+@@ -516,12 +516,12 @@
+ 	{
+ 		if (type == GL_UNSIGNED_INT) {
+ 			setup_elements_indices(uint32_t)
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32 + baseVertex, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32 + baseVertex, ptr, count);
+ 		}
+ 		else
+ 		{
+ 			setup_elements_indices(uint16_t)
+-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16 + baseVertex, ptr, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16 + baseVertex, ptr, count);
+ 		}
+ 	}
+ 	restore_polygon_mode(gxm_p);
+@@ -556,12 +556,12 @@
+ 	{
+ 		if (type == GL_UNSIGNED_INT) {
+ 			setup_elements_indices(uint32_t);
+-			sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count * primcount, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count * primcount, count);
+ 		}
+ 		else
+ 		{
+ 			setup_elements_indices(uint16_t);
+-			sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count * primcount, count);
++			if (!vgl_uniform_reservation_failed) sceGxmDrawInstanced(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count * primcount, count);
+ 		}
+ 	}
+ 	restore_polygon_mode(gxm_p);
+@@ -586,7 +586,7 @@
+ 	texture_unit *tex_unit = &texture_units[0];
+ 	if (cur_program != 0) {
+ 		_vglDrawObjects_CustomShadersIMPL();
+-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, index_object, count);
++		if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, index_object, count);
+ 	} else if (ffp_vertex_attrib_state & (1 << FFP_ATTRIB_POSITION)) {
+ 		reload_ffp_shaders(NULL, NULL, SCE_GXM_INDEX_SOURCE_INDEX_16BIT);
+ 		if (ffp_vertex_attrib_state & (1 << FFP_ATTRIB_TEX0)) {
+@@ -602,7 +602,7 @@
+ 		} else if (ffp_vertex_num_params > 1)
+ 			sceGxmSetVertexStream(gxm_context, 1, color_object);
+ 		sceGxmSetVertexStream(gxm_context, 0, vertex_object);
+-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, index_object, count);
++		if (!vgl_uniform_reservation_failed) sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, index_object, count);
+ 	}
+ 
+ 	restore_polygon_mode(gxm_p);
+--- a/source/misc.c
++++ b/source/misc.c
+@@ -641,6 +641,7 @@
+ }
+ 
+ void glClear(GLbitfield mask) {
++	vglBeginUniformUpload();
+ 	THREAD_SAFE()
+ 
+ #ifndef SKIP_ERROR_HANDLING
+@@ -673,11 +674,13 @@
+ 	sceGxmSetVertexProgram(gxm_context, clear_vertex_program_patched);
+ 	sceGxmSetFragmentProgram(gxm_context, is_fbo_float ? clear_fragment_program_float_patched : clear_fragment_program_patched);
+ 
+-	sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vbuffer);
++	vbuffer = vglReserveVertexUniformBuffer(0);
++	if (!vbuffer) goto clear_uniform_cleanup;
+ 	sceGxmSetUniformDataF(vbuffer, clear_position, 0, 4, &clear_vertices->x);
+ 	sceGxmSetUniformDataF(vbuffer, clear_depth, 0, 1, &clear_depth_value);
+ 
+-	sceGxmReserveFragmentDefaultUniformBuffer(gxm_context, &fbuffer);
++	fbuffer = vglReserveFragmentUniformBuffer(0);
++	if (!fbuffer) goto clear_uniform_cleanup;
+ 	sceGxmSetUniformDataF(fbuffer, clear_color, 0, 4, &clear_rgba_val.r);
+ 
+ 	// Disable fragment program if not clearing color buffer. Depth and stencil clears are unaffected.
+@@ -719,6 +722,7 @@
+ 
+ 	sceGxmDrawPrecomputed(gxm_context, &clear_draw_state);
+ 
++clear_uniform_cleanup:
+ 	validate_depth_test();
+ 	change_depth_write((depth_mask_state && depth_test_state) ? SCE_GXM_DEPTH_WRITE_ENABLED : SCE_GXM_DEPTH_WRITE_DISABLED);
+ 
+--- a/source/tests.c
++++ b/source/tests.c
+@@ -254,6 +254,7 @@
+ }
+ 
+ void update_scissor_test() {
++	vglBeginUniformUpload();
+ 	const float scissor_depth = 1.0f;
+ 
+ 	// Setting current vertex program to clear screen one and fragment program to scissor test one
+@@ -340,13 +341,14 @@
+ 		SCE_GXM_STENCIL_OP_KEEP,
+ 		0, 0);
+ 
+-	void *vertex_buffer;
+-	sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vertex_buffer);
++	void *vertex_buffer = vglReserveVertexUniformBuffer(0);
++	if (!vertex_buffer) goto scissor_uniform_cleanup;
+ 	vglSetUniformData((uint8_t *)vertex_buffer + clear_position_offset, SCE_GXM_PARAMETER_TYPE_F32, 0, 1, 4, scissor_test_state ? &scissor_test_vertices->x : &clear_vertices->x, SCE_GXM_PARAMETER_TYPE_F32);
+ 	vglSetUniformData((uint8_t *)vertex_buffer + clear_depth_offset, SCE_GXM_PARAMETER_TYPE_F32, 0, 1, 1, &scissor_depth, SCE_GXM_PARAMETER_TYPE_F32);
+ 
+ 	sceGxmDrawPrecomputed(gxm_context, &clear_draw_state);
+ 
++scissor_uniform_cleanup:
+ 	// Restoring viewport and culling
+ 	validate_viewport();
+ 	change_cull_mode();
+@@ -368,7 +370,7 @@
+ 	refresh_stencil_settings();
+ 
+ 	vglRestoreVertexUniformBuffer();
+-	dirty_scissor_state = GL_FALSE;
++	dirty_scissor_state = vgl_uniform_reservation_failed;
+ }
+ 
+ void reset_scissor_test_region(void) {
+--- a/source/framebuffers.c
++++ b/source/framebuffers.c
+@@ -898,14 +898,15 @@
+ 		texcoord.w = (DISPLAY_HEIGHT_FLOAT - (float)srcY0) / DISPLAY_HEIGHT_FLOAT;
+ 	}
+ 
+-	void *vertex_buffer;
+-	sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vertex_buffer);
++	void *vertex_buffer = vglReserveVertexUniformBuffer(0);
++	if (!vertex_buffer) goto blit_uniform_cleanup;
+ 	vglSetUniformData((uint8_t *)vertex_buffer + blit_position_offset, SCE_GXM_PARAMETER_TYPE_F32, 0, 1, 4, &position.x, SCE_GXM_PARAMETER_TYPE_F32);
+ 	vglSetUniformData((uint8_t *)vertex_buffer + blit_texcoord_offset, SCE_GXM_PARAMETER_TYPE_F32, 0, 1, 4, &texcoord.x, SCE_GXM_PARAMETER_TYPE_F32);
+ 
+ 	// Draw read framebuffer on top of write framebuffer
+ 	sceGxmDrawPrecomputed(gxm_context, &blit_draw_state);
+ 
++blit_uniform_cleanup:
+ 	// Restore all invalidated configurations
+ 	if (readFramebuffer) {
+ 		vglSetTexMagFilter(tex, read_fb->tex->mag_filter);
+--- a/source/gxm.c
++++ b/source/gxm.c
+@@ -580,6 +580,7 @@
+ }
+ 
+ void scene_reset(void) {
++	vglBeginUniformUpload();
+ 	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
+ 		scene_not_flushed = GL_TRUE;
+ 		dirty_framebuffer = GL_FALSE;

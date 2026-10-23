@@ -1,0 +1,16 @@
+Vita: borealis::net reports "unavailable", as upstream already does for the Switch.
+The Vita has no socket service started (SceNet/SceNetCtl are not initialized by the
+port), so connect()/listen() fail through upstream's own available() == false path;
+endpoint parsing stays upstream. Not game code.
+
+--- a/src/net/platform_posix.cpp
++++ b/src/net/platform_posix.cpp
+@@ -16,7 +16,7 @@
+ namespace borealis::net::detail::platform {
+ 
+ bool available() noexcept {
+-#if defined(__SWITCH__)
++#if defined(__SWITCH__) || defined(__vita__)
+     return false;
+ #else
+     return true;

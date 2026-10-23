@@ -1,0 +1,608 @@
+V59 Vita portable GX register/command decoder candidate, runtime default OFF.
+
+Adapted from the 3DS port's patches/aurora/0009-3ds-fast-register-decode.patch.
+Only portable register, colour, matrix/light and command parsing work is included.
+No 3DS backend, verifier, PICA, shader-info reuse, or game simulation changes.
+
+Apply after Vita Aurora 0001 and 0002 to Aurora
+3227d76c60e1e782ca576610bce61c9e7744d8be. Pristine command_processor.cpp
+SHA256 ff3eeb1c06562c0cbbeb5cbad0daa45aeb4370733dd073ccd34f10f6303ba5ab.
+TWV_VITA_GX_FAST_DECODE defaults to 0. When compiled in, the frontend's locked
+twv_vita_gx_fast_enabled() chooses original (0) or candidate (nonzero) at runtime.
+OFF retains the original division/read_bits/store helpers and persistent ByteReader.
+TWV_GX_DECODE_REF=1 compiles only the original implementations for an independent
+namespace-remapped oracle. The candidate skips only writes the original handlers
+ignore; mask, valid bits, triggers, DRAWDONE, viewport/projection and indexed-array
+checks keep their original behavior. Short commands use the original reader errors.
+
+--- a/lib/gx/regs.hpp
++++ b/lib/gx/regs.hpp
+@@ -5,6 +5,18 @@
+ #include <bit>
+ #include <cstring>
+ #include <span>
++
++// V59 portable candidate: the same executable keeps the original decoder selectable.
++#ifndef TWV_VITA_GX_FAST_DECODE
++#define TWV_VITA_GX_FAST_DECODE 0
++#endif
++#ifndef TWV_GX_DECODE_REF
++#define TWV_GX_DECODE_REF 0
++#endif
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// Locked startup choice supplied by the Vita frontend; nonzero selects the candidate.
++extern "C" int twv_vita_gx_fast_enabled(void) noexcept;
++#endif
+ 
+ namespace aurora::gx::fifo {
+ 
+@@ -18,4 +30,42 @@
+ 
+ bool copy_xf_data(u32 addr, const u8* data, u32 len, std::endian e) noexcept;
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++ALWAYS_INLINE bool gx_fast_decode_enabled() noexcept {
++  return twv_vita_gx_fast_enabled() != 0;
++}
++
++// Portable unchanged-write tests adapted from the committed 3DS patch.
++// 1 for the BP registers whose unchanged write handle_bp ignores; 0 for the mask register (0xFE),
++// the registers handled on every write (EFB copy and TLUT load triggers) and DRAWDONE (process() returns
++// after it).
++extern const std::array<u8, 0x100> kBpSkipUnchanged;
++// 1 for the CP registers whose unchanged write handle_cp ignores.
++extern const std::array<u8, 0x100> kCpSkipUnchanged;
++
++// True when handle_bp(value) would change nothing: no BP mask pending (the merged value is then `value`
++// itself), the register holds `value` already and handle_bp ignores an unchanged write to it.
++ALWAYS_INLINE bool bp_write_unchanged(u32 value) noexcept {
++  const u32 regId = value >> 24;
++  const auto& state = g_gxState;
++  return kBpSkipUnchanged[regId] != 0 && state.bpRegCache[0xFE] == 0x00FFFFFF && state.bpRegCache[regId] == value &&
++         state.bpRegValid[regId];
++}
++
++// True when handle_cp(addr, value) would change nothing.
++ALWAYS_INLINE bool cp_write_unchanged(u8 addr, u32 value) noexcept {
++  const auto& state = g_gxState;
++  return kCpSkipUnchanged[addr] != 0 && state.cpRegCache[addr] == value && state.cpRegValid[addr];
++}
++
++// True when handle_xf(addr, one word `value`) would change nothing: an XF register outside the viewport
++// and projection blocks (decoded as a whole) that holds `value` already.
++ALWAYS_INLINE bool xf_write_unchanged(u32 addr, u32 value) noexcept {
++  const u32 reg = addr - 0x1000;
++  const auto& state = g_gxState;
++  return reg < XfRegCount && reg - 0x1A > 0x26 - 0x1A && state.xfRegCache[reg] == value && state.xfRegValid[reg];
++}
++
++#endif
++
+ } // namespace aurora::gx::fifo
+--- a/lib/gx/regs.cpp
++++ b/lib/gx/regs.cpp
+@@ -1,5 +1,8 @@
+ #include "regs.hpp"
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++#include "dolphin/gd/GDGeometry.h"
++#endif
+ #include "gx_fmt.hpp"
+ #include "texture.hpp"
+ 
+@@ -17,7 +20,32 @@
+   bool alwaysHandle = false; // handler has side effects (e.g. EFB copy trigger, stub logging)
+ };
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// The original division is evaluated at compile time with the same float rounding.
++constexpr std::array<float, 256> kUnorm8 = [] {
++  std::array<float, 256> table{};
++  for (u32 v = 0; v < 256; ++v) {
++    table[v] = static_cast<float>(v) / 255.f;
++  }
++  return table;
++}();
++
++Vec4<float> unpack_color_fast(u32 packed) noexcept {
++  return {
++      kUnorm8[packed >> 24 & 0xFF],
++      kUnorm8[packed >> 16 & 0xFF],
++      kUnorm8[packed >> 8 & 0xFF],
++      kUnorm8[packed & 0xFF],
++  };
++}
++#endif
++
+ Vec4<float> unpack_color(u32 packed) noexcept {
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if (gx_fast_decode_enabled()) {
++    return unpack_color_fast(packed);
++  }
++#endif
+   return {
+       static_cast<float>(packed >> 24 & 0xFF) / 255.f,
+       static_cast<float>(packed >> 16 & 0xFF) / 255.f,
+@@ -341,7 +369,51 @@
+ }
+ 
+ // TEV color registers / K color registers (0xE0-0xE7)
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// static_cast<float>(sext11(bits)) / 255.f, from kUnorm8 for 0-255 (the usual range).
++float tev_reg_component(u32 bits) noexcept {
++  const s32 v = sext11(bits);
++  return static_cast<u32>(v) <= 255 ? kUnorm8[v] : static_cast<float>(v) / 255.f;
++}
++
++void bp_tev_reg_fast(u8 reg, u32 value) noexcept {
++  u32 idx = (reg - 0xE0) / 2;
++  bool isRA = (reg & 1) == 0;
++  if (reg_get(value, 1, 23) != 0) {
++    // K color register (8-bit components)
++    if (idx < GX_MAX_KCOLOR) {
++      auto& kc = g_gxState.kcolors[idx];
++      if (isRA) {
++        kc[0] = kUnorm8[reg_get(value, 8, 0)];  // R
++        kc[3] = kUnorm8[reg_get(value, 8, 12)]; // A
++      } else {
++        kc[2] = kUnorm8[reg_get(value, 8, 0)];  // B
++        kc[1] = kUnorm8[reg_get(value, 8, 12)]; // G
++      }
++    }
++  } else {
++    // TEV color register (11-bit signed components)
++    if (idx < MaxTevRegs) {
++      auto& cr = g_gxState.colorRegs[idx];
++      if (isRA) {
++        cr[0] = tev_reg_component(reg_get(value, 11, 0));
++        cr[3] = tev_reg_component(reg_get(value, 11, 12));
++      } else {
++        cr[2] = tev_reg_component(reg_get(value, 11, 0));
++        cr[1] = tev_reg_component(reg_get(value, 11, 12));
++      }
++    }
++  }
++}
++#endif
++
+ void bp_tev_reg(u8 reg, u32 value) noexcept {
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if (gx_fast_decode_enabled()) {
++    bp_tev_reg_fast(reg, value);
++    return;
++  }
++#endif
+   u32 idx = (reg - 0xE0) / 2;
+   bool isRA = (reg & 1) == 0;
+   if (reg_get(value, 1, 23) != 0) {
+@@ -927,6 +999,171 @@
+   g_gxState.dirty |= DirtyUniform;
+ }
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// Choose the byte order once per XF memory load; preserve all stored float bits.
++template <bool Swap>
++ALWAYS_INLINE u32 xf_word(const u8* data) noexcept {
++  const u32 v = unaligned_load<u32>(data);
++  return Swap ? bswap(v) : v;
++}
++
++// Stores one word's bits into *dst; returns the bits that changed.
++template <bool Swap>
++ALWAYS_INLINE u32 store_xf_word(f32* dst, const u8* data) noexcept {
++  const u32 v = xf_word<Swap>(data);
++  u32 old;
++  std::memcpy(&old, dst, sizeof(old));
++  std::memcpy(dst, &v, sizeof(v));
++  return old ^ v;
++}
++
++// `len` words into consecutive floats (position, texture and post-transform matrices).
++template <bool Swap>
++bool store_xf_words(f32* dst, const u8* data, u32 len) noexcept {
++  u32 diff = 0;
++  u32 i = 0;
++  for (; i + 4 <= len; i += 4) {
++    diff |= store_xf_word<Swap>(dst + i, data + i * 4);
++    diff |= store_xf_word<Swap>(dst + i + 1, data + i * 4 + 4);
++    diff |= store_xf_word<Swap>(dst + i + 2, data + i * 4 + 8);
++    diff |= store_xf_word<Swap>(dst + i + 3, data + i * 4 + 12);
++  }
++  for (; i < len; ++i) {
++    diff |= store_xf_word<Swap>(dst + i, data + i * 4);
++  }
++  return diff != 0;
++}
++
++// Normal matrices: 3x3 source words into 3x4 storage.
++template <bool Swap>
++bool store_xf_nrm(f32* flat, const u8* data, u32 len) noexcept {
++  u32 diff = 0;
++  if (len == 9) {
++    for (u32 row = 0; row < 3; ++row) {
++      diff |= store_xf_word<Swap>(flat + row * 4, data + row * 12);
++      diff |= store_xf_word<Swap>(flat + row * 4 + 1, data + row * 12 + 4);
++      diff |= store_xf_word<Swap>(flat + row * 4 + 2, data + row * 12 + 8);
++    }
++  } else {
++    for (u32 i = 0; i < len; i++) {
++      diff |= store_xf_word<Swap>(flat + (i / 3) * 4 + i % 3, data + i * 4);
++    }
++  }
++  return diff != 0;
++}
++
++// Light fields from startOffset (the original's switch, with the stores above).
++template <bool Swap>
++bool store_xf_light(Light& light, u32 startOffset, const u8* data, u32 len) noexcept {
++  u32 diff = 0;
++  for (u32 i = 0; i < len; i++) {
++    const u8* word = data + i * 4;
++    switch (startOffset + i) {
++    case 3: { // Color (packed u32)
++      const Vec4<float> color = unpack_color(xf_word<Swap>(word));
++      if (memcmp(&light.color, &color, sizeof(color)) != 0) {
++        light.color = color;
++        diff |= 1;
++      }
++      break;
++    }
++    case 4:
++      diff |= store_xf_word<Swap>(&light.cosAtt[0], word);
++      break; // a0
++    case 5:
++      diff |= store_xf_word<Swap>(&light.cosAtt[1], word);
++      break; // a1
++    case 6:
++      diff |= store_xf_word<Swap>(&light.cosAtt[2], word);
++      break; // a2
++    case 7:
++      diff |= store_xf_word<Swap>(&light.distAtt[0], word);
++      break; // k0
++    case 8:
++      diff |= store_xf_word<Swap>(&light.distAtt[1], word);
++      break; // k1
++    case 9:
++      diff |= store_xf_word<Swap>(&light.distAtt[2], word);
++      break; // k2
++    case 10:
++      diff |= store_xf_word<Swap>(&light.pos[0], word);
++      break; // px
++    case 11:
++      diff |= store_xf_word<Swap>(&light.pos[1], word);
++      break; // py
++    case 12:
++      diff |= store_xf_word<Swap>(&light.pos[2], word);
++      break; // pz
++    case 13:
++      diff |= store_xf_word<Swap>(&light.dir[0], word);
++      break; // nx
++    case 14:
++      diff |= store_xf_word<Swap>(&light.dir[1], word);
++      break; // ny
++    case 15:
++      diff |= store_xf_word<Swap>(&light.dir[2], word);
++      break; // nz
++    default:
++      break; // padding (0-2)
++    }
++  }
++  return diff != 0;
++}
++
++template <bool Swap>
++bool copy_xf_data_impl(u32 addr, const u8* data, u32 len) noexcept {
++  bool changed;
++  if (addr < 0x78) {
++    // Position matrices (0x0000-0x0077)
++    u32 mtxIdx = addr / 12;
++    [[maybe_unused]] u32 startOffset = addr % 12;
++    CHECK(mtxIdx < MaxPnMtx, "XF: PosMtx copy oob? Should never happen; mtxIdx={}", mtxIdx);
++    CHECK(startOffset == 0 && len == 12, "XF: PosMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
++    changed = store_xf_words<Swap>(reinterpret_cast<f32*>(&g_gxState.pnMtx[mtxIdx].pos), data, len);
++  } else if (addr < 0x0F0) {
++    // Texture matrices (0x078-0x0EF)
++    u32 texBase = addr - 0x078;
++    u32 mtxIdx = texBase / 12;
++    [[maybe_unused]] u32 startOffset = texBase % 12;
++    CHECK(mtxIdx < MaxTexMtx, "XF TexMtx copy oob? Should never happen; mtxIdx={}", mtxIdx);
++    CHECK(startOffset == 0 && (len == 8 || len == 12), "XF TexMtx sub-copy unsupported: offs={}, len={}", startOffset,
++          len);
++    changed = store_xf_words<Swap>(reinterpret_cast<f32*>(&g_gxState.texMtxs[mtxIdx]), data, len);
++  } else if (addr >= 0x400 && addr < 0x45A) {
++    // Normal matrices (0x400-0x459)
++    u32 nrmBase = addr - 0x400;
++    u32 mtxIdx = nrmBase / 9;
++    [[maybe_unused]] u32 startOffset = nrmBase % 9;
++    CHECK(mtxIdx < MaxPnMtx, "XF: NrmMtx copy oob? Should never happen; mtxIdx={}", mtxIdx);
++    CHECK(startOffset == 0 && len == 9, "XF: NrmMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
++    changed = store_xf_nrm<Swap>(reinterpret_cast<f32*>(&g_gxState.pnMtx[mtxIdx].nrm), data, len);
++  } else if (addr >= 0x500 && addr < 0x5F0) {
++    // Post-transform texture matrices (0x500-0x5EF)
++    u32 ptBase = addr - 0x500;
++    u32 mtxIdx = ptBase / 12;
++    [[maybe_unused]] u32 startOffset = ptBase % 12;
++    CHECK(mtxIdx < MaxPTTexMtx, "XF: PTTexMtx copy oob? Should never happen; mtxIdx={}", mtxIdx);
++    CHECK(startOffset == 0 && len == 12, "XF: PTTexMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
++    changed = store_xf_words<Swap>(reinterpret_cast<f32*>(&g_gxState.ptTexMtxs[mtxIdx]), data, len);
++  } else if (addr >= 0x600 && addr < 0x680) {
++    // Lights (0x600-0x67F)
++    u32 lightBase = addr - 0x600;
++    u32 lightIdx = lightBase / 0x10;
++    u32 startOffset = lightBase % 0x10;
++    CHECK(lightIdx < 8, "XF: Light copy oob? Should never happen; lightIdx={}", lightIdx);
++    CHECK(startOffset + len <= 0x10, "XF: Light copy that crosses across light boundaries unsupported: offs={}, len={}",
++          startOffset, len);
++    changed = store_xf_light<Swap>(g_gxState.lights[lightIdx], startOffset, data, len);
++  } else {
++    return false;
++  }
++  if (changed) {
++    g_gxState.dirty |= DirtyUniform;
++  }
++  return true;
++}
++#endif
++
+ // Compare raw bits instead of floats
+ bool store_xf_f32(f32& dst, u32 bits) noexcept {
+   if (std::bit_cast<u32>(dst) == bits) {
+@@ -980,7 +1217,30 @@
+   }
+ }
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++extern const std::array<u8, 0x100> kBpSkipUnchanged = [] {
++  std::array<u8, 0x100> skip{};
++  for (u32 r = 0; r < 0x100; ++r) {
++    skip[r] = !kBpRegs[r].alwaysHandle && r != 0xFE && r != GX_BP_REG_DRAWDONE;
++  }
++  return skip;
++}();
++extern const std::array<u8, 0x100> kCpSkipUnchanged = [] {
++  std::array<u8, 0x100> skip{};
++  for (u32 r = 0; r < 0x100; ++r) {
++    skip[r] = !kCpRegs[r].alwaysHandle;
++  }
++  return skip;
++}();
++#endif
++
+ bool copy_xf_data(u32 addr, const u8* data, u32 len, std::endian e) noexcept {
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if (gx_fast_decode_enabled()) {
++    return e == std::endian::native ? copy_xf_data_impl<false>(addr, data, len)
++                                    : copy_xf_data_impl<true>(addr, data, len);
++  }
++#endif
+   if (addr < 0x78) {
+     // Position matrices (0x0000-0x0077)
+     u32 mtxIdx = addr / 12;
+@@ -1123,7 +1383,71 @@
+   return false;
+ }
+ 
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++static void handle_xf_fast(u16 addr, std::span<const u8> data) noexcept {
++  const u32 count = static_cast<u32>(data.size() / sizeof(u32));
++  const u8* xfData = data.data();
++
++  if (addr < 0x1000) {
++    if (!copy_xf_data_impl<std::endian::big != std::endian::native>(addr, xfData, count)) {
++#ifndef NDEBUG
++      Log.debug("Unhandled XF memory write 0x{:04X} ({} words)", addr, count);
++#endif
++    }
++    return;
++  }
++
++  // XF registers (0x1000+)
++  auto& state = g_gxState;
++  const u32 xfAddr = addr - 0x1000;
++  for (u32 i = 0; i < count; i++) {
++    const u32 reg = xfAddr + i;
++    const u8* wordData = xfData + i * 4;
++
++    if (reg - 0x1A <= 0x26 - 0x1A) UNLIKELY {
++      if (reg == 0x1A && count - i >= 6) {
++        // Viewport mapping depends on the current render target
++        xf_load_viewport(wordData);
++        i += 5;
++      } else if (reg == 0x20 && count - i >= 7) {
++        // Projection depends only on its XF block, so identical loads can dedupe
++        if (!xf_block_unchanged(0x20, wordData, 7)) {
++          xf_load_projection(wordData);
++        }
++        i += 6;
++      }
++      // Do not shadow unsupported partial blocks
++      continue;
++    }
++
++    if (reg >= XfRegCount) {
++#ifndef NDEBUG
++      Log.debug("Unhandled XF register 0x{:04X} (value 0x{:08X})", reg, read_bits<u32>(wordData));
++#endif
++      continue;
++    }
++    const u32 val = read_bits<u32>(wordData);
++    if (state.xfRegValid[reg] && state.xfRegCache[reg] == val) {
++      continue;
++    }
++    state.xfRegValid[reg] = true;
++    state.xfRegCache[reg] = val;
++    const RegHandler& info = kXfRegs[reg];
++    state.dirty |= info.dirty;
++    if (info.decode != nullptr) {
++      info.decode(static_cast<u8>(reg), val);
++    }
++  }
++}
++#endif
++
+ void handle_xf(u16 addr, std::span<const u8> data) noexcept {
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if (gx_fast_decode_enabled()) {
++    handle_xf_fast(addr, data);
++    return;
++  }
++#endif
+   const u32 count = static_cast<u32>(data.size() / sizeof(u32));
+   const u8* xfData = data.data();
+ 
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -213,23 +213,23 @@
+ static void handle_draw(u8 cmd, ByteReader& reader) noexcept;
+ static void handle_aurora(ByteReader& reader) noexcept;
+ 
+-ProcessResult process(const u8* data, u32 size) noexcept {
+-  ZoneScoped;
+-  ByteReader reader{{data, size}};
+-
+-  while (!reader.empty()) {
++// The original command switch, shared by the persistent ByteReader reference path
++// and the candidate's fallback. The reader always spans the entire original buffer,
++// so truncated-input errors and diagnostic offsets keep their original meaning.
++static bool process_command(ByteReader& reader, const u8* data, u32 size) noexcept {
++  {
+     const u8 cmd = reader.read<u8>();
+     u8 opcode = cmd & CP_OPCODE_MASK;
+ 
+     switch (opcode) {
+     case CP_CMD_NOP:
+-      continue;
++      break;
+ 
+     case CP_CMD_LOAD_BP_REG: {
+       const u32 value = reader.read<u32>();
+       handle_bp(value);
+       if (reg_get(value, 8, 24) == GX_BP_REG_DRAWDONE) {
+-        return {static_cast<u32>(reader.offset()), true};
++        return true;
+       }
+       break;
+     }
+@@ -331,7 +331,122 @@
+       break;
+     }
+   }
++  return false;
++}
++
++static ProcessResult process_original(const u8* data, u32 size) noexcept {
++  ByteReader reader{{data, size}};
++  while (!reader.empty()) {
++    if (process_command(reader, data, size)) {
++      return {static_cast<u32>(reader.offset()), true};
++    }
++  }
+   return {size, false};
++}
++
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// Exactly the ARRAYBASE branch of handle_aurora; valid complete commands only.
++static void load_array_base(u32 attrIdx, u64 arrayAddr, u32 arraySize, bool le) noexcept {
++  auto& array = g_gxState.arrays[attrIdx];
++  const auto newData = reinterpret_cast<void*>(arrayAddr);
++  if (array.data != newData || array.size != arraySize || array.le != le) {
++    if (array.le != le) {
++      // Endianness is baked into the shader
++      g_gxState.dirty |= DirtyPipeline;
++    }
++    array.data = newData;
++    array.size = arraySize;
++    array.le = le;
++    array.cachedRange = {};
++    g_gxState.dirty |= DirtyImmediates;
++  }
++}
++
++static ProcessResult process_fast(const u8* data, u32 size) noexcept {
++  u32 pos = 0;
++  while (pos != size) {
++    const u8* const p = data + pos;
++    const u32 avail = size - pos;
++    const u32 op = p[0] >> 3;
++    bool drawDone = false;
++    bool taken = false;
++    switch (op) {
++    case CP_CMD_LOAD_BP_REG >> 3:
++      if (avail >= 5) LIKELY {
++        const u32 value = read_bits<u32>(p + 1);
++        pos += 5;
++        taken = true;
++        if (!bp_write_unchanged(value)) {
++          handle_bp(value);
++          drawDone = (value >> 24) == GX_BP_REG_DRAWDONE;
++        }
++      }
++      break;
++    case CP_CMD_LOAD_XF_REG >> 3:
++      if (avail >= 5) LIKELY {
++        const u32 header = read_bits<u32>(p + 1);
++        const u32 count = ((header >> 16) & 0xFFFF) + 1;
++        if (count * sizeof(u32) <= avail - 5) LIKELY {
++          const u16 addr = header & 0xFFFF;
++          pos += 5 + count * sizeof(u32);
++          taken = true;
++          if (count != 1 || !xf_write_unchanged(addr, read_bits<u32>(p + 5))) {
++            handle_xf(addr, {p + 5, count * sizeof(u32)});
++          }
++        }
++      }
++      break;
++    case CP_CMD_LOAD_CP_REG >> 3:
++      if (avail >= 6) LIKELY {
++        const u8 addr = p[1];
++        const u32 value = read_bits<u32>(p + 2);
++        pos += 6;
++        taken = true;
++        if (!cp_write_unchanged(addr, value)) {
++          handle_cp(addr, value);
++        }
++      }
++      break;
++    case CP_CMD_NOP >> 3:
++      ++pos;
++      taken = true;
++      break;
++    case GX_AURORA >> 3:
++      if (avail >= 16) {
++        const u16 subCmd = read_bits<u16>(p + 1);
++        if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
++          load_array_base(subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS, read_bits<u64>(p + 3),
++                          read_bits<u32>(p + 11), p[15] == 1);
++          pos += 16;
++          taken = true;
++        }
++      }
++      break;
++    default:
++      break;
++    }
++    if (!taken) {
++      ByteReader reader{{data, size}};
++      reader.skip(pos);
++      drawDone = process_command(reader, data, size);
++      pos = static_cast<u32>(reader.offset());
++    }
++    if (drawDone) {
++      return {pos, true};
++    }
++  }
++  return {size, false};
++}
++#endif
++
++ProcessResult process(const u8* data, u32 size) noexcept {
++  ZoneScoped;
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if (gx_fast_decode_enabled()) {
++    return process_fast(data, size);
++  }
++#endif
++  return process_original(data, size);
+ }
+ 
+ [[noreturn]] static void handle_draw_overrun(size_t totalVtxBytes, const ByteReader& reader) noexcept {

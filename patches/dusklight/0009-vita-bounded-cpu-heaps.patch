@@ -1,0 +1,45 @@
+Vita: bound desktop heap reserves to the handheld process. Game data, actors,
+scripts and progression are unchanged. The 64 MiB MEM1/16 MiB ARAM reserves
+are enforced by the Vita Aurora adapter. Keep twice-retail archive/J2D sizes,
+reserve 12 MiB system and six-times-retail game heap rather than the PC's
+32 MiB system and twenty-times-retail game heap. These are initial capacities,
+not a claim of a validated full-game memory budget.
+The initial four-times game heap (17.2 MiB) demonstrably exhausted while loading
+R_SP01 room4 after Alink ShieldArcHeap (0x7d310 requested, 0x4acf0 free).
+The retail physical-address check that removes 24 MiB must not run on relocated
+Vita pointers: the executable lives outside this separately allocated arena.
+
+--- a/src/m_Do/m_Do_machine.cpp
++++ b/src/m_Do/m_Do_machine.cpp
+@@ -768,7 +768,7 @@
+     #endif
+     JFWSystem::setMaxStdHeap(1);
+ 
+-    #if !DEBUG
++    #if !DEBUG && !TARGET_VITA
+     uintptr_t arenaHi = (uintptr_t)OSGetArenaHi();
+     uintptr_t arenaLo = (uintptr_t)OSGetArenaLo();
+ 
+@@ -855,14 +855,22 @@
+ 
+ #if TARGET_PC
+     // Change heap sizes to account for 64bit pointers & extra memory available.
++#if TARGET_VITA
++    arenaSize = 12 * 1024 * 1024;
++#else
+     arenaSize = 32 * 1024 * 1024;
++#endif
+     commandHeapSize *= 2;
+ #if DEBUG
+     dynamicLinkHeapSize *= 2;
+ #endif
+     archiveHeapSize *= 2;
+     j2dHeapSize *= 2;
++#if TARGET_VITA
++    gameHeapSize *= 6;
++#else
+     gameHeapSize *= 20; // NOTE: increased from 2 to 20 to try to solve heap alloc crashes. maybe do a better fix later
++#endif
+ #endif
+ 
+     JFWSystem::setSysHeapSize(arenaSize);

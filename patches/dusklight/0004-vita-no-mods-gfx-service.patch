@@ -1,0 +1,18 @@
+Vita: compile out the mods gfx service. It hands mods the WebGPU device, passes and
+present targets (wgpu C API); the Vita renders with GXM and links no WebGPU. Mods that
+import the service fail with upstream's own "missing service" message. src/dusk/mods/svc/gfx.cpp
+is left out of the Vita build (cmake/VitaApp.cmake). Not game code.
+
+--- a/src/dusk/mods/svc/registry.cpp
++++ b/src/dusk/mods/svc/registry.cpp
+@@ -281,7 +281,10 @@
+             &svc::g_gameModule,
+             &svc::g_cameraModule,
+             &svc::g_windowModule,
++#if !TARGET_VITA
++            // Exposes the WebGPU device and render passes; the Vita renders with GXM.
+             &svc::g_gfxModule,
++#endif
+             &svc::g_audioResModule,
+             &svc::g_saveModule,
+             &svc::g_stageModule,

@@ -1,0 +1,85 @@
+THIRD-PARTY NOTICES AND SOURCE PROVENANCE
+
+The MIT license in LICENSE covers the original code of this PS Vita port. It does not replace the
+licenses or notices of the projects below. None of them is copied into this repository: Dusklight
+(with Aurora and Borealis) is a pinned git submodule, the other sources are archives pinned by
+SHA-256 in deps.lock and downloaded by tools/fetch_deps.sh, and the toolchain is a container image
+pinned by digest. The files in patches/ modify those projects' files at build time; a patch does not
+change the license of the file it applies to. License texts are in LICENSES/.
+
+Game code and libraries (git submodules)
+
+  Dusklight
+    Source: https://github.com/TwilitRealm/dusklight
+    Pin: 34a144a493b7f57adeb4034d382317c826eb5c8d
+    CC0 1.0 Universal (LICENSES/Dusklight.txt). Dusklight is built on the Twilight Princess
+    decompilation, https://github.com/zeldaret/tp, which is credited here as its origin.
+
+  Aurora (Dusklight's submodule)
+    Source: https://github.com/encounter/aurora
+    Pin: 3227d76c60e1e782ca576610bce61c9e7744d8be
+    MIT; Copyright (c) 2022 Luke Street (LICENSES/Aurora.txt).
+
+  Borealis (Dusklight's submodule)
+    Source: https://github.com/encounter/borealis
+    Pin: 4ac5e7052a8c49a122f8d57f626b5c75c5ca6968
+    MIT; Copyright (c) 2026 Luke Street (LICENSES/Borealis.txt).
+
+  Dusklight's own libraries built here keep their notices, for example libs/freeverb (public domain,
+  as stated in its source files).
+
+vitaGL
+  Source: https://github.com/Rinnegatamante/vitaGL
+  Pin: 7635e3ceb3c52e34ca2e51d2281628d6c756a35b (archive SHA-256 in deps.lock)
+  LGPL version 3 or later, as stated in its source headers (LICENSES/vitaGL-LGPL-text.txt, and the GPL
+  text it builds on, LICENSES/vitaGL-GPL-text.txt). It is built from that source with the local
+  changes in patches/deps/vitagl/, so it can be rebuilt and relinked with this repository's build.
+  Keep vitaGL's COPYING, COPYING.LESSER, its per-file notices and those patches with any binary.
+
+Other pinned source archives (deps.lock)
+
+  Tracy 0.14.1 (headers only): BSD 3-Clause (LICENSES/Tracy.txt).
+  Abseil 20240722.0: Apache License 2.0 (LICENSES/Abseil.txt).
+  fmt 12.1.0: MIT, with the optional exception in its license (LICENSES/fmt.txt).
+  xxHash 0.8.3 (library): BSD 2-Clause (LICENSES/xxHash-library.txt).
+  nlohmann/json 3.12.0: MIT (LICENSES/nlohmann-json.txt).
+  cxxopts 3.3.1: MIT (LICENSES/cxxopts.txt).
+  miniz 3.0.2: MIT (LICENSES/miniz.txt).
+  PicoSHA2 1.0.1: MIT (LICENSES/PicoSHA2.txt).
+  Dear ImGui 1.91.9b-docking (headers only): MIT (LICENSES/ImGui.txt).
+  RmlUi (encounter fork, f00a0fee38391b2f927114e11bea18dc0a7dba1e, headers only): MIT
+    (LICENSES/RmlUi.txt).
+  nod v2.0.0-alpha.12 (nod-ffi/include/nod.h only; the Rust crate is not built): MIT OR Apache
+    License 2.0 at the recipient's option (LICENSES/nod-MIT-option.txt, nod-Apache-option.txt).
+    platform/vita/disc/gcm_nod.cpp implements that header's API for plain GameCube images; its
+    comments name the nod source files whose behavior it follows.
+  Dawn v20260807.225922 generated WebGPU headers (headers only; the archive's binaries are never
+    linked): BSD 3-Clause notices of The Dawn & Tint Authors and of the "WebGPU native" developers
+    (LICENSES/Dawn-generated-webgpu-header.txt, Dawn-WebGPU-native-header.txt).
+
+Toolchain and system libraries (container image, not distributed by this repository)
+
+  Image: vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf4312c1cd40167f7d9bb
+  (tag 2026.08): GCC, newlib, libstdc++, the psp2 stub libraries, SDL3, zstd, libpng and zlib.
+  SDL3: zlib license (LICENSES/SDL3.txt, the image's share/licenses/SDL3/LICENSE.txt).
+  The toolchain and SDK components keep their own licenses; this repository grants none for them.
+  A binary release (VPK) contains some of them. It needs an inventory of everything it actually
+  contains, with the notices those licenses require.
+
+Shared code
+
+  Some files are shared with a Nintendo 3DS port of the same code base and adapted from it: the
+  fast register decode and pipeline info reuse (patches/aurora/0003, 0004), the display lists by
+  reference (patches/aurora/0006, patches/dusklight/0014), the J3D matrix loads
+  (patches/dusklight/0011, platform/vita/gfx_vgl/xf_fifo_block.hpp) and the CPU vertex stage
+  (platform/vita/gfx_vgl/vertex.cpp). Both ports are by the same authors and under the same license.
+  tests/fixtures/baseline/ holds frozen earlier versions of this port's own files.
+
+Game data and firmware
+
+  This repository contains no game data: no disc image, no file extracted from a disc, no textures,
+  models, audio, fonts or text from the game, no Nintendo or Sony software, no firmware module and
+  no shader compiler. Every user supplies their own copy of the game and extracts libshacccg.suprx on
+  their own console. The VPK built from this repository contains the compiled game code from the
+  decompilation above and no game assets. The CC0 declaration of Dusklight does not grant any right
+  in Nintendo's game, characters or trademarks.

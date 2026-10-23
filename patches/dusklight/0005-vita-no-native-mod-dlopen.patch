@@ -1,0 +1,27 @@
+Vita: native mods cannot be loaded (no dlopen of unsigned code; natives.cpp already
+has no Vita platform tag), so NativeModule fails with an explicit message instead of
+linking dlopen/dlsym/dlclose (dlclose is not in VitaSDK's libc). Not game code.
+
+--- a/src/dusk/mods/loader/native_module.cpp
++++ b/src/dusk/mods/loader/native_module.cpp
+@@ -28,6 +28,20 @@
+     }
+     return s;
+ }
++#elif TARGET_VITA
++// No native mods on the Vita: the platform has no k_nativePlatform (natives.cpp), and
++// loading code at runtime needs a signed module, not dlopen. Opening fails with this
++// message through NativeModule's normal error path.
++void* pl_dlopen(const std::filesystem::path&) {
++    return nullptr;
++}
++void* pl_dlsym(void*, const char*) {
++    return nullptr;
++}
++void pl_dlclose(void*) {}
++std::string pl_dlerror() {
++    return "native mods are not supported on the PS Vita";
++}
+ #else
+ #include <dlfcn.h>
+ void* pl_dlopen(const std::filesystem::path& p) {

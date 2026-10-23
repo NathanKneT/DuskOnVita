@@ -1,0 +1,1 @@
+--stage=R_SP01,4,2,0 --cvar game.enableFrameInterpolation=0 --cvar video.maxFrameRate=30

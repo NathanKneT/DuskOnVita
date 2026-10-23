@@ -1,0 +1,7 @@
+build,date,console,scene,frames_drawn,fps,game_ticks_per_s,status,note
+v53r2,2026-10-22,vita1000,house,every,8.59,8.55,measured,444 MHz requested
+v53r2,2026-10-22,vita1000,outside,every,7.20,6.94,measured,444 MHz requested
+v54,2026-10-22,vita1000,house,every,8.19,8.55,rejected,draws were lost (uniform failures)
+v54,2026-10-22,vita1000,outside,every,9.65,8.31,rejected,draws were lost (uniform failures)
+v61,2026-10-22,vita1000,house,every,6.34,6.14,measured,system clocks (333 MHz); all draws
+v61,2026-10-22,vita1000,outside,every,7.39,5.95,measured,system clocks (333 MHz); all draws

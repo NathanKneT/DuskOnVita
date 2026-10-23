@@ -1,0 +1,15 @@
+Supply the archive's recorded source revision without requiring a nested Git checkout.
+
+--- a/Makefile
++++ b/Makefile
+@@ -10,8 +10,9 @@
+ CC      = $(PREFIX)-gcc
+ CXX     = $(PREFIX)-g++
+ AR      = $(PREFIX)-gcc-ar
++VGL_GIT_HASH ?= $(shell git rev-parse --short HEAD)
+ CFLAGS  = -g -Wl,-q -O3 -ffast-math -mtune=cortex-a9 -mfpu=neon -Wno-incompatible-pointer-types -Wno-stringop-overflow -mfp16-format=ieee \
+-	-DVGL_GIT_HASH='"$(shell git rev-parse --short HEAD)"' -Isource
++	-DVGL_GIT_HASH='"$(VGL_GIT_HASH)"' -Isource
+ ASFLAGS = $(CFLAGS)
+ 
+ ifeq ($(SOFTFP_ABI),1)

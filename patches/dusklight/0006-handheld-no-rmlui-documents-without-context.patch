@@ -1,0 +1,54 @@
+Vita/3DS: build Dusklight's RmlUi pages only when an RmlUi context exists. game_main calls
+dusk::ui::initialize() (which already returns false without RmlUi) and then pushed the
+overlay, touch controls, menu bar and console documents, and the first-run preset chooser,
+unconditionally; their constructors read elements of a document that was never loaded.
+Without RmlUi the default settings stay. Desktop builds are unchanged. Not game code.
+
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -73,6 +73,9 @@
+ #endif
+ #include "dusk/ui/touch_controls.hpp"
+ #include "dusk/ui/ui.hpp"
++#if TARGET_VITA || TARGET_3DS
++#include <aurora/rmlui.hpp> // aurora::rmlui::is_initialized, for the handheld guard in game_main
++#endif
+ #include "dusk/version.hpp"
+ 
+ #include "d/actor/d_a_movie_player.h"
+@@ -758,10 +761,17 @@
+     dusk::texture_replacements::reload();
+     dusk::ui::initialize();
+     dusk::ui::apply_scale();
+-    dusk::ui::push_document(std::make_unique<dusk::ui::Overlay>(), true, true);
+-    dusk::ui::push_document(std::make_unique<dusk::ui::TouchControls>(), false, true);
+-    dusk::ui::push_document(std::make_unique<dusk::ui::MenuBar>(), false);
+-    dusk::ui::push_document(std::make_unique<dusk::ui::CommandConsole>(), false);
++#if TARGET_VITA || TARGET_3DS
++    // These documents are RmlUi pages. Without an RmlUi context (aurora::rmlui::is_initialized()
++    // false, which the upstream UI calls already handle) there is nothing to build them in.
++    if (aurora::rmlui::is_initialized())
++#endif
++    {
++        dusk::ui::push_document(std::make_unique<dusk::ui::Overlay>(), true, true);
++        dusk::ui::push_document(std::make_unique<dusk::ui::TouchControls>(), false, true);
++        dusk::ui::push_document(std::make_unique<dusk::ui::MenuBar>(), false);
++        dusk::ui::push_document(std::make_unique<dusk::ui::CommandConsole>(), false);
++    }
+ 
+     // Invalidate a bad saved isoPath so that Dusklight can't get blocked from starting up.
+     // This is only a metadata check; full hash verification is handled by the prelaunch UI.
+@@ -952,7 +962,12 @@
+     }
+ #endif
+ 
+-    if (!dusk::getSettings().backend.wasPresetChosen) {
++    if (!dusk::getSettings().backend.wasPresetChosen
++#if TARGET_VITA || TARGET_3DS
++        // The first-run preset chooser is an RmlUi page; without RmlUi the default settings stay.
++        && aurora::rmlui::is_initialized()
++#endif
++    ) {
+         dusk::ui::push_document(std::make_unique<dusk::ui::PresetWindow>());
+     }
+ 

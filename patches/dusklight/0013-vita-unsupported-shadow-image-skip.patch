@@ -1,0 +1,45 @@
+Vita opt-in CPU shortcut for shadow images the current backend cannot render.
+Keep projection, the outer framebuffer/copy/GX state flow and original packet
+base-matrix restoration. Onscreen shadow projections, bloom/monochrome, minimap,
+actor state, animation and collision remain on their original paths.
+
+--- a/src/d/d_drawlist.cpp
++++ b/src/d/d_drawlist.cpp
+@@ -12,6 +12,10 @@
+ #include "m_Do/m_Do_graphic.h"
+ #include "m_Do/m_Do_lib.h"
+ #include "m_Do/m_Do_mtx.h"
++#if TARGET_VITA
++extern "C" int twv_vita_shadow_image_skip();
++extern "C" void twv_vita_shadow_image_skipped(unsigned models, unsigned shapes);
++#endif
+ 
+ #if TARGET_PC
+ #include "dusk/game_clock.h"
+@@ -1093,6 +1097,26 @@
+         GXSetProjection(mRenderProjMtx, GX_ORTHOGRAPHIC);
+     }
+     JUT_ASSERT(1916, mModelNum);
++#if TARGET_VITA
++    if (twv_vita_shadow_image_skip()) {
++        // drawFast normally restores every non-hidden shape packet to this
++        // camera, including packets hidden at the packet (rather than shape)
++        // level. Preserve that postcondition for the subsequent visible pass.
++        unsigned restored = 0;
++        for (u8 i = 0; i < mModelNum; ++i) {
++            J3DModel* model = mpModels[i];
++            J3DModelData* data = model->getModelData();
++            for (u16 j = 0; j < data->getShapeNum(); ++j) {
++                if (!data->getShapeNodePointer(j)->checkFlag(1)) {
++                    model->getShapePacket(j)->setBaseMtxPtr((Mtx*)param_0);
++                    ++restored;
++                }
++            }
++        }
++        twv_vita_shadow_image_skipped(mModelNum, restored);
++        return;
++    }
++#endif
+     J3DModelData* model_data;
+     J3DModel** models = mpModels;
+     J3DShapePacket* shape_pkt;

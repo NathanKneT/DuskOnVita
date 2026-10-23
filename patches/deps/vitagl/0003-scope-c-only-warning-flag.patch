@@ -1,0 +1,13 @@
+Keep the C-only warning option out of C++ commands; preserve code-generation flags.
+
+--- a/Makefile
++++ b/Makefile
+@@ -275,7 +275,7 @@
+ 
+ 
+ 
+-CXXFLAGS  = $(CFLAGS) -fexceptions -std=gnu++11 -Wno-write-strings
++CXXFLAGS  = $(filter-out -Wno-incompatible-pointer-types,$(CFLAGS)) -fexceptions -std=gnu++11 -Wno-write-strings
+ 
+ all: $(TARGET).a
+ 

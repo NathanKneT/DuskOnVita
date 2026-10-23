@@ -1,0 +1,7 @@
+# Scripts and patches run in Linux containers and are applied byte-exactly: always LF.
+* text=auto eol=lf
+*.png binary
+*.zip binary
+# Patch context and verbatim upstream license texts retain their whitespace.
+patches/** -whitespace
+LICENSES/** -text -whitespace

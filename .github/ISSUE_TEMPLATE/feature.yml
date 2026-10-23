@@ -1,0 +1,23 @@
+name: Contribution or feature proposal
+description: Coordinate a focused improvement before starting a large change.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user-visible problem and any existing issue it relates to.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Include affected files or upstream patches, dependencies and how you would validate the change.
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to work on this.

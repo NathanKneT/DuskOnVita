@@ -1,0 +1,260 @@
+Vita: process J3D's display lists in place, and know the arrays they load (port of
+the 3DS port's Aurora patches 0004 and 0006).
+
+GXCallDisplayList copies a display list into the FIFO every call, because the caller may change or
+free it afterwards. GXCallDisplayListStatic queues a reference (address, size, id) instead; the
+command processor processes the list where it is and tells the Vita backend which list it is in
+(twv_gfx_static_dl) and which list every array base came from (twv_gfx_array_base, also from the
+fast decoder of patch 0003). The id changes with GXInvalidateDisplayListStatic, which the caller
+calls after every change to a list's bytes (patches/dusklight/0014 does for J3D);
+GXInvalidateArrayStatic names arrays their owner changes in place (twv_gx_array_dynamic /
+twv_gx_array_gen). The mode is chosen at start-up by the backend (twv_gx_static_dl_mode): 0 copies
+every list as upstream does, 1 goes by reference, 2 also hashes each list at the call and at its
+processing and reports any change made without an invalidation. Same commands, same order.
+
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -96,9 +96,34 @@ extern "C" {
+  */
+ #define GX_AURORA_DRAW_INDEXED 0x0041
+ 
++/**
++ * twilight-vita: process a display list in place instead of a copy of it (GXCallDisplayListStatic).
++ * Must be followed by a u64 list address, a u32 byte size, a u32 list id (unchanged while the list's
++ * bytes are) and a u32 check hash (0: none).
++ */
++#define GX_AURORA_CALL_DL_STATIC 0x0042
++
+ #define GX2_SET_POLYGON_OFFSET 0x1000
+ 
+ 
++/*
++ * twilight-vita: display lists the caller keeps unchanged and alive until the frame's
++ * commands are processed (J3D's shape display lists). GXCallDisplayListStatic queues a reference
++ * instead of copying the list; GXInvalidateDisplayListStatic must follow every change to such a
++ * list's bytes (including a new list allocated at the address of a freed one). Elsewhere, and while
++ * a display list is being recorded, GXCallDisplayListStatic is GXCallDisplayList.
++ */
++void GXCallDisplayListStatic(const void* list, u32 nbytes);
++void GXInvalidateDisplayListStatic(const void* list);
++
++/*
++ * twilight-vita: an array whose bytes its owner changes in place from now on (J3D's vertex
++ * buffers name theirs whenever they swap them). The Vita backend takes an array loaded from a static
++ * display list as unchanged while that list's id holds, except an array named here: that one it
++ * reads anew every frame.
++ */
++void GXInvalidateArrayStatic(const void* array);
++
+ /*
+  * Debug marker stuff
+  */
+--- a/lib/dolphin/gx/GXDispList.cpp
++++ b/lib/dolphin/gx/GXDispList.cpp
+@@ -5,6 +5,41 @@
+ 
+ #include <cstring>
+ 
++#if defined(__vita__)
++#include <atomic>
++#include <mutex>
++#include <unordered_map>
++#include <unordered_set>
++#include <xxhash.h>
++
++namespace {
++// GXCallDisplayListStatic: an id per list, new whenever the list may have changed. Lists are normally
++// made and drawn on the main thread; the lock covers a model built elsewhere.
++std::mutex sStaticListMutex;
++struct StaticList {
++  u32 size;
++  u32 id;
++  u32 hash;  // verify mode: the bytes' hash when the id was given (0 otherwise)
++};
++std::unordered_map<const void*, StaticList> sStaticLists;
++u32 sStaticListId = 0;
++constexpr size_t MaxStaticLists = 16384;  // past this, start over (every list gets a new id)
++// GXInvalidateArrayStatic: arrays changed in place (same lock). A new entry moves the generation on;
++// starting over moves the epoch on as well (the backend then forgets every array it took as unchanged).
++std::unordered_set<const void*> sDynamicArrays;
++std::atomic<u32> sDynamicArrayGen{1};
++u32 sDynamicArrayEpoch = 0;
++constexpr size_t MaxDynamicArrays = 4096;
++} // namespace
++
++// platform/vita/gfx_vgl (weak: absent without the Vita backend): the start-up mode, 0 off (every
++// list is copied, as upstream does), 1 by reference, 2 by reference with each list's hash checked at
++// the call and at its processing; and verify mode's report of a list whose bytes changed without an
++// invalidation.
++extern "C" int twv_gx_static_dl_mode() noexcept __attribute__((weak));
++extern "C" void twv_gfx_static_dl_changed() noexcept __attribute__((weak));
++#endif
++
+ static __GXData_struct sSavedGXData;
+ 
+ extern "C" {
+@@ -62,4 +97,86 @@ void GXCallDisplayList(const void* data, u32 nbytes) {
+   aurora::gx::fifo::publish();
+ }
+ 
++void GXCallDisplayListStatic(const void* data, u32 nbytes) {
++#if defined(__vita__)
++  const int mode = twv_gx_static_dl_mode ? twv_gx_static_dl_mode() : 0;
++  if (mode == 0 || aurora::gx::fifo::in_display_list() || nbytes == 0) {
++    GXCallDisplayList(data, nbytes);
++    return;
++  }
++  if (__gx->dirtyState != 0) {
++    __GXSetDirtyState();
++  }
++  if (*reinterpret_cast<u32*>(&__gx->vNum) != 0) {
++    __GXSendFlushPrim();
++  }
++  u32 id;
++  u32 hash;
++  {
++    std::lock_guard lock{sStaticListMutex};
++    if (sStaticLists.size() >= MaxStaticLists) {
++      sStaticLists.clear();
++    }
++    auto& list = sStaticLists[data];
++    hash = 0;
++    if (mode == 2) {
++      hash = XXH32(data, nbytes, 0) | 1;
++      if (list.id != 0 && list.size == nbytes && list.hash != hash && twv_gfx_static_dl_changed) {
++        twv_gfx_static_dl_changed();
++      }
++    }
++    if (list.id == 0 || list.size != nbytes || list.hash != hash) {
++      list = {nbytes, ++sStaticListId, hash};
++    }
++    id = list.id;
++  }
++  GX_WRITE_AURORA(GX_AURORA_CALL_DL_STATIC);
++  GX_WRITE_U64(reinterpret_cast<uintptr_t>(data));
++  GX_WRITE_U32(nbytes);
++  GX_WRITE_U32(id);
++  GX_WRITE_U32(hash);
++  aurora::gx::fifo::publish();
++#else
++  GXCallDisplayList(data, nbytes);
++#endif
++}
++
++void GXInvalidateDisplayListStatic(const void* data) {
++#if defined(__vita__)
++  std::lock_guard lock{sStaticListMutex};
++  sStaticLists.erase(data);
++#else
++  (void)data;
++#endif
++}
++
++void GXInvalidateArrayStatic(const void* array) {
++#if defined(__vita__)
++  std::lock_guard lock{sStaticListMutex};
++  if (sDynamicArrays.size() >= MaxDynamicArrays) {
++    sDynamicArrays.clear();
++    ++sDynamicArrayEpoch;
++    sDynamicArrayGen.fetch_add(1, std::memory_order_release);
++  }
++  if (sDynamicArrays.insert(array).second) {
++    sDynamicArrayGen.fetch_add(1, std::memory_order_release);
++  }
++#else
++  (void)array;
++#endif
++}
++
++#if defined(__vita__)
++// platform/vita/gfx_vgl: whether GXInvalidateArrayStatic named an array, with the generation and epoch
++// the answer holds for; and the generation alone, without the lock. An array named after the answer
++// moves the generation on before its new bytes are written.
++bool twv_gx_array_dynamic(const void* array, u32* gen, u32* epoch) noexcept {
++  std::lock_guard lock{sStaticListMutex};
++  *gen = sDynamicArrayGen.load(std::memory_order_relaxed);
++  *epoch = sDynamicArrayEpoch;
++  return sDynamicArrays.count(array) != 0;
++}
++u32 twv_gx_array_gen() noexcept { return sDynamicArrayGen.load(std::memory_order_acquire); }
++#endif
++
+ }
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -12,6 +12,9 @@
+ #include "texture.hpp"
+ 
+ #include <tracy/Tracy.hpp>
++#if defined(__vita__)
++#include <xxhash.h>
++#endif
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -221,6 +224,17 @@ u8 line_mode_for_prim(GXPrimitive prim) noexcept {
+ static void handle_draw(u8 cmd, ByteReader& reader) noexcept;
+ static void handle_aurora(ByteReader& reader) noexcept;
+ 
++#if defined(__vita__)
++// platform/vita/gfx_vgl (weak: absent without the Vita backend): the static display list being
++// processed in place (list, size, id; nullptr after it), and a verification build's report of a list
++// whose bytes changed between the call and its processing.
++extern "C" void twv_gfx_static_dl(const u8* list, u32 size, u32 id) noexcept __attribute__((weak));
++extern "C" void twv_gfx_static_dl_mismatch() noexcept __attribute__((weak));
++// The same backend: an array base load (GX_VA_POS-based attribute), before the unchanged-array check,
++// so it learns where every load came from (a static list's or not).
++extern "C" void twv_gfx_array_base(u32 attr) noexcept __attribute__((weak));
++#endif
++
+ // The original command switch, shared by the persistent ByteReader reference path
+ // and the candidate's fallback. The reader always spans the entire original buffer,
+ // so truncated-input errors and diagnostic offsets keep their original meaning.
+@@ -355,6 +369,11 @@ static ProcessResult process_original(const u8* data, u32 size) noexcept {
+ #if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
+ // Exactly the ARRAYBASE branch of handle_aurora; valid complete commands only.
+ static void load_array_base(u32 attrIdx, u64 arrayAddr, u32 arraySize, bool le) noexcept {
++#if defined(__vita__)
++  if (twv_gfx_array_base) {
++    twv_gfx_array_base(attrIdx);
++  }
++#endif
+   auto& array = g_gxState.arrays[attrIdx];
+   const auto newData = reinterpret_cast<void*>(arrayAddr);
+   if (array.data != newData || array.size != arraySize || array.le != le) {
+@@ -736,6 +755,11 @@ void handle_aurora(ByteReader& reader) noexcept {
+     const u64 arrayAddr = reader.read<u64>();
+     const u32 arraySize = reader.read<u32>();
+     const bool le = reader.read<u8>() == 1;
++#if defined(__vita__)
++    if (twv_gfx_array_base) {
++      twv_gfx_array_base(attrIdx);
++    }
++#endif
+ 
+     auto& array = g_gxState.arrays[attrIdx];
+     const auto newData = reinterpret_cast<void*>(arrayAddr);
+@@ -889,6 +913,23 @@ void handle_aurora(ByteReader& reader) noexcept {
+     if (indexCount != 0) {
+       push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
+     }
++#if defined(__vita__)
++  } else if (subCmd == GX_AURORA_CALL_DL_STATIC) {
++    const auto* list = reinterpret_cast<const u8*>(static_cast<uintptr_t>(reader.read<u64>()));
++    const u32 size = reader.read<u32>();
++    const u32 id = reader.read<u32>();
++    const u32 hash = reader.read<u32>();
++    if (hash != 0 && twv_gfx_static_dl_mismatch && (XXH32(list, size, 0) | 1) != hash) {
++      twv_gfx_static_dl_mismatch();
++    }
++    if (twv_gfx_static_dl) {
++      twv_gfx_static_dl(list, size, id);
++    }
++    process(list, size);
++    if (twv_gfx_static_dl) {
++      twv_gfx_static_dl(nullptr, 0, 0);
++    }
++#endif
+   } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
+     auto label = reader.read_string();
+     gfx::push_debug_group(std::move(label));

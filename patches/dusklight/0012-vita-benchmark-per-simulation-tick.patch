@@ -1,0 +1,35 @@
+Vita opt-in benchmark: advance once after each original simulation commit, never per presentation.
+Keeps450 inputs at30simulationHz when presentation is60Hz or catches up multiple ticks.
+
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -51,6 +51,9 @@
+ #include "dusk/imgui/ImGuiConsole.hpp"
+ #include "dusk/imgui/ImGuiEngine.hpp"
+ #include "dusk/interp/frame_interpolation.h"
++#if TARGET_VITA
++extern "C" void twv_vita_benchmark_tick() __attribute__((weak));
++#endif
+ #include "dusk/iso_validate.hpp"
+ #include "dusk/logging.h"
+ #include "dusk/main.h"
+@@ -303,6 +306,9 @@
+                     dusk::processCameraCommands();
+                     mDoAud_Execute();
+                     dusk::game_clock::commit_sim_tick();
++#if TARGET_VITA
++                    if (twv_vita_benchmark_tick) twv_vita_benchmark_tick();
++#endif
+                 }
+             }
+ 
+@@ -328,6 +334,9 @@
+ 
+             mDoAud_Execute();
+             dusk::game_clock::commit_sim_tick();
++#if TARGET_VITA
++                    if (twv_vita_benchmark_tick) twv_vita_benchmark_tick();
++#endif
+         }
+ 
+         aurora_end_frame();

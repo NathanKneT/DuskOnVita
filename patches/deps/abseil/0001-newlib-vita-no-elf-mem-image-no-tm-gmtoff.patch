@@ -1,0 +1,24 @@
+diff -ru a/absl/debugging/internal/elf_mem_image.h b/absl/debugging/internal/elf_mem_image.h
+--- a/absl/debugging/internal/elf_mem_image.h	2026-10-20 11:00:26.838740122 +0900
++++ b/absl/debugging/internal/elf_mem_image.h	2026-10-20 11:00:26.849501636 +0900
+@@ -35,7 +35,7 @@
+ #if defined(__ELF__) && !defined(__OpenBSD__) && !defined(__QNX__) && \
+     !defined(__native_client__) && !defined(__asmjs__) &&             \
+     !defined(__wasm__) && !defined(__HAIKU__) && !defined(__sun) &&   \
+-    !defined(__VXWORKS__) && !defined(__hexagon__)
++    !defined(__VXWORKS__) && !defined(__hexagon__) && !defined(__vita__)
+ #define ABSL_HAVE_ELF_MEM_IMAGE 1
+ #endif
+ 
+diff -ru a/absl/time/internal/cctz/src/time_zone_libc.cc b/absl/time/internal/cctz/src/time_zone_libc.cc
+--- a/absl/time/internal/cctz/src/time_zone_libc.cc	2026-10-20 11:00:26.847012987 +0900
++++ b/absl/time/internal/cctz/src/time_zone_libc.cc	2026-10-20 11:00:26.850686201 +0900
+@@ -61,7 +61,7 @@
+   return tzname[is_dst];
+ }
+ #elif defined(__native_client__) || defined(__myriad2__) || \
+-    defined(__EMSCRIPTEN__)
++    defined(__EMSCRIPTEN__) || defined(__vita__)
+ // Uses the globals: '_timezone' and 'tzname'.
+ auto tm_gmtoff(const std::tm& tm) -> decltype(_timezone + 0) {
+   const bool is_dst = tm.tm_isdst > 0;

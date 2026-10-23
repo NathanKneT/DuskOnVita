@@ -1,0 +1,22 @@
+diff --git a/sdk/include/mods/api.h b/sdk/include/mods/api.h
+index 3015130ae3..6e19d1262d 100644
+--- a/sdk/include/mods/api.h
++++ b/sdk/include/mods/api.h
+@@ -214,7 +214,7 @@ typedef struct MOD_META_ALIGN ModMetaHookFn {
+     void* resolved; /* runtime only */
+ } ModMetaHookFn;
+ 
+-static_assert(sizeof(ModMetaHookFn) == 24);
++static_assert(sizeof(ModMetaHookFn) == 8 + 2 * sizeof(void*));
+ 
+ /*
+  * Hook on a member function: `pmf` holds the compiler's pointer-to-member representation
+@@ -251,7 +251,7 @@ typedef struct MOD_META_ALIGN ModMetaHookMemExt {
+     void* resolved; /* runtime only */
+ } ModMetaHookMemExt;
+ 
+-static_assert(sizeof(ModMetaHookMemExt) == 24);
++static_assert(sizeof(ModMetaHookMemExt) == 8 + 2 * sizeof(void*));
+ 
+ /*
+  * Hook on a function by symbol name, for targets that cannot be named in C++ (file-local statics,

@@ -1,0 +1,22 @@
+The memory-card save worker runs on a std::thread, which VitaSDK's pthread
+creates with a 32 KiB stack. copy_stream's 64 KiB local buffer overflowed it
+(V61 hardware core dump: data abort zeroing the buffer, save worker ->
+open_atomic_file -> copy_stream). On the Vita only, copy in 4 KiB chunks.
+Output, EOF and error semantics are unchanged; cmake/PlatformLibs.cmake gives
+io.cpp TARGET_VITA=1 and fails the build if the frame grows past 8 KiB.
+
+--- a/lib/io.cpp
++++ b/lib/io.cpp
+@@ -22,7 +22,12 @@
+ }
+ 
+ bool copy_stream(SDL_IOStream* src, SDL_IOStream* dst) noexcept {
++#if defined(TARGET_VITA) && TARGET_VITA
++  // Keep the copy buffer within the bounded Vita IO worker stack.
++  std::array<uint8_t, 4 * 1024> buffer{};
++#else
+   std::array<uint8_t, 64 * 1024> buffer{};
++#endif
+   while (true) {
+     const size_t read = SDL_ReadIO(src, buffer.data(), buffer.size());
+     if (read > 0 && !write_exact(dst, buffer.data(), read)) {

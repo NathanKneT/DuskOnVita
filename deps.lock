@@ -1,0 +1,22 @@
+# Third-party sources fetched by tools/fetch_deps.sh (outside the container, then built offline).
+# name  url  sha256
+# Versions follow what Dusklight 34a144a / Aurora 3227d76 / Borealis 4ac5e70 fetch on desktop.
+# Hashes marked TOFU were not pinned upstream; recorded on first download (2026-10-20).
+tracy        https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.zip                       908f3a2917fa86a247abfcf85dcf04bad1db6986a4d40f94b70512f3e9e98d5b
+abseil       https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz              f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3 TOFU
+fmt          https://github.com/fmtlib/fmt/archive/refs/tags/12.1.0.tar.gz                         ea7de4299689e12b6dddd392f9896f08fb0777ac7168897a244a6d6085043fea
+xxhash       https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz                    aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80
+json         https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz               42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+cxxopts      https://github.com/jarro2783/cxxopts/archive/refs/tags/v3.3.1.tar.gz                  3bfc70542c521d4b55a46429d808178916a579b28d048bd8c727ee76c39e2072
+miniz        https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip           ada38db0b703a56d3dd6d57bf84a9c5d664921d870d8fea4db153979fb5332c5 TOFU
+picosha2     https://github.com/okdshin/PicoSHA2/archive/refs/tags/v1.0.1.tar.gz                   9983136544234e573fe07cc1a22fdf978ad7979043e7be2e9082f6d4991ff8a8
+imgui        https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz            466fdef9b18de15f0bb6e288e3d00ffa3d82200ec458ce5e4f724a161d9528a5
+rmlui        https://github.com/encounter/RmlUi/archive/f00a0fee38391b2f927114e11bea18dc0a7dba1e.tar.gz 6d9fd1164b7873c9dfba72d724753bda9e3db8280c9af802eed8e2a12035f152
+# Only the generated WebGPU C/C++ headers are used (Aurora's pinned Dawn v20260807.225922); the macOS binaries in the archive are never linked.
+dawnheaders  https://github.com/encounter/dawn/releases/download/v20260807.225922/dawn-darwin-arm64.tar.gz  c36e2ef9c7b9d395462973dbb62076c246b9e550ec7bcfc224171e8d42b02b83 TOFU
+# nod v2.0.0-alpha.12 (Aurora's AURORA_NOD_VERSION): only nod-ffi/include/nod.h is used, as the API
+# platform/vita/disc/gcm_nod.cpp implements for plain GCM/ISO images. The Rust crate is not built.
+nodheaders   https://github.com/encounter/nod/archive/refs/tags/v2.0.0-alpha.12.tar.gz             e696c90d37cbf9f1daf9edafca021c2a4006a9b9d7261af6f573f602522aa5cc TOFU
+# Build this exact source rather than an opaque SDK vitaGL archive. Library splash is disabled;
+# only the game's original intro should run. LGPL-3.0 source/license retained in the dependency.
+vitagl       https://github.com/Rinnegatamante/vitaGL/archive/7635e3ceb3c52e34ca2e51d2281628d6c756a35b.tar.gz cf0849e18c3a692c9aec91854c8ca62da0598c8a6f7a1e17336f7d67ba092e23

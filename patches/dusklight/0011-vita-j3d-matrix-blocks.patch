@@ -1,0 +1,91 @@
+Vita: J3D matrix loads in one FIFO block, adapted from the 3DS port's dusklight patch 0024 and aurora patch 0007. Same FIFO bytes, memcpy float bits; original short-list fallback and build rollback.
+
+--- a/libs/JSystem/src/J3DGraphBase/J3DGD.cpp
++++ b/libs/JSystem/src/J3DGraphBase/J3DGD.cpp
+@@ -6,6 +6,9 @@
+ 
+ #include "JSystem/J3DGraphBase/J3DGD.h"
+ #include "JSystem/J3DGraphBase/J3DFifo.h"
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++#include "gfx_vgl/xf_fifo_block.hpp"
++#endif
+ 
+ #if TARGET_PC
+ #include "dusk/logging.h"
+@@ -616,6 +619,14 @@
+ }
+ 
+ void J3DFifoLoadPosMtxImm(MtxP mtx, u32 id) {
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++    twv::vgl::XfFifoBlock<12> block(4 * id);
++    for (u32 r=0;r<3;++r) {
++        for (u32 c=0;c<4;++c) block.scalar(r*4+c,&mtx[r][c]);
++    }
++    if (GXTryCmdBlock(block.bytes,sizeof block.bytes)) return;
++    // Keep the original per-store overflow behaviour for undersized display lists.
++#endif
+     J3DFifoWriteXFCmdHdr(4 * id, 12);
+     J3DGXCmd1f32ptr(&mtx[0][0]);
+     J3DGXCmd1f32ptr(&mtx[0][1]);
+@@ -632,6 +643,14 @@
+ }
+ 
+ void J3DFifoLoadNrmMtxImm(MtxP mtx, u32 id) {
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++    twv::vgl::XfFifoBlock<9> block(id * 3 + 0x400);
++    for (u32 r=0;r<3;++r) {
++        for (u32 c=0;c<3;++c) block.scalar(r*3+c,&mtx[r][c]);
++    }
++    if (GXTryCmdBlock(block.bytes,sizeof block.bytes)) return;
++    // Keep the original per-store overflow behaviour for undersized display lists.
++#endif
+     J3DFifoWriteXFCmdHdr(id * 3 + 0x400, 9);
+     J3DGXCmd1f32ptr(&mtx[0][0]);
+     J3DGXCmd1f32ptr(&mtx[0][1]);
+@@ -645,6 +664,14 @@
+ }
+ 
+ void J3DFifoLoadNrmMtxImm3x3(Mtx3P mtx, u32 id) {
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++    twv::vgl::XfFifoBlock<9> block(id * 3 + 0x400);
++    for (u32 r=0;r<3;++r) {
++        for (u32 c=0;c<3;++c) block.scalar(r*3+c,&mtx[r][c]);
++    }
++    if (GXTryCmdBlock(block.bytes,sizeof block.bytes)) return;
++    // Keep the original per-store overflow behaviour for undersized display lists.
++#endif
+     J3DFifoWriteXFCmdHdr(id * 3 + 0x400, 9);
+     J3DGXCmd1f32ptr(&mtx[0][0]);
+     J3DGXCmd1f32ptr(&mtx[0][1]);
+@@ -658,6 +685,15 @@
+ }
+ 
+ void J3DFifoLoadNrmMtxToTexMtx(MtxP mtx, u32 id) {
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++    twv::vgl::XfFifoBlock<12> block(4 * id);
++    for (u32 r=0;r<3;++r) {
++        for (u32 c=0;c<3;++c) block.scalar(r*4+c,&mtx[r][c]);
++        block.word(r*4+3,0); // Same positive-zero padding as the original.
++    }
++    if (GXTryCmdBlock(block.bytes,sizeof block.bytes)) return;
++    // Keep the original per-store overflow behaviour for undersized display lists.
++#endif
+     J3DFifoWriteXFCmdHdr(4 * id, 12);
+     J3DGXCmd1f32ptr(&mtx[0][0]);
+     J3DGXCmd1f32ptr(&mtx[0][1]);
+@@ -674,6 +710,15 @@
+ }
+ 
+ void J3DFifoLoadNrmMtxToTexMtx3x3(Mtx3P mtx, u32 id) {
++#if TARGET_VITA && TWV_VITA_MATRIX_BLOCKS
++    twv::vgl::XfFifoBlock<12> block(4 * id);
++    for (u32 r=0;r<3;++r) {
++        for (u32 c=0;c<3;++c) block.scalar(r*4+c,&mtx[r][c]);
++        block.word(r*4+3,0); // Same positive-zero padding as the original.
++    }
++    if (GXTryCmdBlock(block.bytes,sizeof block.bytes)) return;
++    // Keep the original per-store overflow behaviour for undersized display lists.
++#endif
+     J3DFifoWriteXFCmdHdr(4 * id, 0xc);
+     J3DGXCmd1f32ptr(&mtx[0][0]);
+     J3DGXCmd1f32ptr(&mtx[0][1]);

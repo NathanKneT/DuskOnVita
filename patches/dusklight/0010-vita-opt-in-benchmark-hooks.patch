@@ -1,0 +1,20 @@
+--- a/src/d/d_s_logo.cpp
++++ b/src/d/d_s_logo.cpp
+@@ -32,0 +33,3 @@
++#if TARGET_VITA
++extern "C" void twv_vita_benchmark_blank_save() __attribute__((weak));
++#endif
+@@ -842,0 +846,3 @@
++#if TARGET_VITA
++                    if (twv_vita_benchmark_blank_save) twv_vita_benchmark_blank_save();
++#endif
+--- a/libs/JSystem/src/JUtility/JUTGamePad.cpp
++++ b/libs/JSystem/src/JUtility/JUTGamePad.cpp
+@@ -8,0 +9,3 @@
++#if TARGET_VITA
++extern "C" void twv_vita_benchmark_pad(PADStatus*) __attribute__((weak));
++#endif
+@@ -93,0 +97,3 @@
++#if TARGET_VITA
++   if (twv_vita_benchmark_pad) twv_vita_benchmark_pad(mPadStatus);
++#endif

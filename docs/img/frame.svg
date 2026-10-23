@@ -1,0 +1,21 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 760 254' width='760' height='254'>
+<rect width='760' height='254' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='24.0' y='28.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='16' fill='#1f2328' text-anchor='start' font-weight='600'>Link's house — where one frame goes (ms, console)</text>
+<text x='24.0' y='46.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#59636e' text-anchor='start' font-weight='normal'>build v61, all on one core: 154 ms in total; the budget at 30 FPS is 33 ms</text>
+<text x='160.0' y='79.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='13' fill='#1f2328' text-anchor='end' font-weight='normal'>Game simulation</text>
+<rect x='170' y='64' width='94.5' height='20' rx='3' fill='#0969da'/>
+<text x='272.5' y='79.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='start' font-weight='normal'>12</text>
+<text x='160.0' y='109.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='13' fill='#1f2328' text-anchor='end' font-weight='normal'>J3D draw building</text>
+<rect x='170' y='94' width='157.6' height='20' rx='3' fill='#0969da'/>
+<text x='335.6' y='109.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='start' font-weight='normal'>20</text>
+<text x='160.0' y='139.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='13' fill='#1f2328' text-anchor='end' font-weight='normal'>GX command decode</text>
+<rect x='170' y='124' width='244.2' height='20' rx='3' fill='#bc4c00'/>
+<text x='422.2' y='139.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='start' font-weight='normal'>31</text>
+<text x='160.0' y='169.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='13' fill='#1f2328' text-anchor='end' font-weight='normal'>Vertex preparation</text>
+<rect x='170' y='154' width='520.0' height='20' rx='3' fill='#bc4c00'/>
+<text x='698.0' y='169.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='start' font-weight='normal'>66</text>
+<text x='160.0' y='199.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='13' fill='#1f2328' text-anchor='end' font-weight='normal'>vitaGL calls</text>
+<rect x='170' y='184' width='197.0' height='20' rx='3' fill='#bc4c00'/>
+<text x='375.0' y='199.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='start' font-weight='normal'>25</text>
+<text x='24.0' y='240.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='start' font-weight='normal'>orange: the GX translation layer (Aurora + the vitaGL backend), the main target — help wanted</text>
+</svg>

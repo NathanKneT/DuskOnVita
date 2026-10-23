@@ -1,0 +1,170 @@
+Minimal C03 draft for vitaGL 7635e3ceb3c52e34ca2e51d2281628d6c756a35b.
+Apply after 0001-sdk-managed-uniform-reservations.patch; no texel ownership changes.
+
+--- a/source/textures.c
++++ b/source/textures.c
+@@ -2514,21 +2514,33 @@
+-void glGenSamplers(GLsizei n, GLuint *smps) {
+-	THREAD_SAFE()
+-
+-#ifndef SKIP_ERROR_HANDLING
+-	// Error handling
+-	if (n < 0) {
+-		SET_GL_ERROR(GL_INVALID_VALUE)
+-	}
+-#endif
+-
+-	for (int i = 0; i < n; i++) {
+-		sampler *smp = (sampler *)vglMalloc(sizeof(sampler));
+-		smp->min_filter = SCE_GXM_TEXTURE_FILTER_POINT;
+-		smp->mag_filter = SCE_GXM_TEXTURE_FILTER_LINEAR;
+-		smp->u_mode = smp->v_mode = SCE_GXM_TEXTURE_ADDR_REPEAT;
+-		smp->mip_filter = SCE_GXM_TEXTURE_MIP_FILTER_ENABLED;
+-		smp->lod_bias = GL_MAX_TEXTURE_LOD_BIAS;
+-		smp->use_mips = GL_TRUE;
+-		smps[i] = (GLuint)smp;
+-	}
+-}
++void glGenSamplers(GLsizei n, GLuint *smps) {
++	THREAD_SAFE()
++
++#ifndef SKIP_ERROR_HANDLING
++	if (n < 0) {
++		SET_GL_ERROR(GL_INVALID_VALUE)
++	}
++#endif
++	if (n > 0 && !smps) {
++		SET_GL_ERROR(GL_INVALID_VALUE)
++	}
++
++	// Transactional creation: no partially owned handles escape on OOM.
++	for (int i = 0; i < n; i++)
++		smps[i] = 0;
++	for (int i = 0; i < n; i++) {
++		sampler *smp = (sampler *)vglMalloc(sizeof(sampler));
++		if (!smp) {
++			for (int j = 0; j < i; j++) {
++				vgl_free((void *)smps[j]);
++				smps[j] = 0;
++			}
++			SET_GL_ERROR(GL_OUT_OF_MEMORY)
++		}
++		smp->min_filter = SCE_GXM_TEXTURE_FILTER_POINT;
++		smp->mag_filter = SCE_GXM_TEXTURE_FILTER_LINEAR;
++		smp->u_mode = smp->v_mode = SCE_GXM_TEXTURE_ADDR_REPEAT;
++		smp->mip_filter = SCE_GXM_TEXTURE_MIP_FILTER_ENABLED;
++		smp->lod_bias = GL_MAX_TEXTURE_LOD_BIAS;
++		smp->use_mips = GL_TRUE;
++		smps[i] = (GLuint)smp;
++	}
++}
+--- a/source/custom_shaders.c
++++ b/source/custom_shaders.c
+@@ -845,7 +845,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, smp->lod_bias);
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+@@ -854,7 +854,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, tex->lod_bias);
+ 				tex->overridden = GL_FALSE;
+ 			}
+@@ -892,7 +892,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+ 				vglSetTexMinFilter(&tex->gxm_tex, tex->min_filter);
+@@ -900,7 +900,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_FALSE;
+ 			}
+ 			sceGxmSetVertexTexture(gxm_context, i, &tex->gxm_tex);
+@@ -1103,7 +1103,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, smp->lod_bias);
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+@@ -1112,7 +1112,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, tex->lod_bias);
+ 				tex->overridden = GL_FALSE;
+ 			}
+@@ -1150,7 +1150,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+ 				vglSetTexMinFilter(&tex->gxm_tex, tex->min_filter);
+@@ -1158,7 +1158,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_FALSE;
+ 			}
+ 			sceGxmSetVertexTexture(gxm_context, i, &tex->gxm_tex);
+@@ -1389,7 +1389,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, smp->lod_bias);
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+@@ -1398,7 +1398,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				vglSetTexLodBias(&tex->gxm_tex, tex->lod_bias);
+ 				tex->overridden = GL_FALSE;
+ 			}
+@@ -1436,7 +1436,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_TRUE;
+ 			} else if (tex->overridden) {
+ 				vglSetTexMinFilter(&tex->gxm_tex, tex->min_filter);
+@@ -1444,7 +1444,7 @@
+ 				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+ 				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+ 				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+-				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
++				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : (tex_type == 0 ? 1 : 0));
+ 				tex->overridden = GL_FALSE;
+ 			}
+ 			sceGxmSetVertexTexture(gxm_context, i, &tex->gxm_tex);

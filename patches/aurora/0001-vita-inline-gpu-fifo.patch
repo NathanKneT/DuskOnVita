@@ -1,0 +1,30 @@
+Vita owns one GL/GXM context on the main thread and selects Aurora Inline mode.
+In that existing serialized mode only, avoid the worker mutex/atomic notifications
+when processing or clearing the FIFO. Keep the original bytes, processing order,
+draw-done callbacks, watermarks, range assertions and all Thread/Drain locking.
+No game tick, actor update or command is skipped. Calls from another producer
+thread are not supported by the existing Inline graphics context contract.
+
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -26,0 +27,3 @@
++#if TWV_VITA_GFX_VGL
++constexpr auto kProcessingMode = ProcessingMode::Inline;
++#else
+@@ -27,0 +31 @@
++#endif
+@@ -56 +60,2 @@
+-      std::lock_guard lock{sBufferMutex};
++      std::unique_lock lock{sBufferMutex, std::defer_lock};
++      if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();
+@@ -72 +77 @@
+-    sProcessed.notify_all();
++    if constexpr (kProcessingMode != ProcessingMode::Inline) sProcessed.notify_all();
+@@ -264 +269,2 @@
+-    std::lock_guard lock{sBufferMutex};
++    std::unique_lock lock{sBufferMutex, std::defer_lock};
++    if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();
+@@ -278 +284,2 @@
+-  std::lock_guard lock{sBufferMutex};
++  std::unique_lock lock{sBufferMutex, std::defer_lock};
++  if constexpr (kProcessingMode != ProcessingMode::Inline) lock.lock();

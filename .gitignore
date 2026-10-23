@@ -1,0 +1,63 @@
+# Build products and downloaded dependencies
+/build*/
+/external/_deps/
+*.o
+*.obj
+*.a
+*.so
+*.elf
+*.velf
+*.self
+*.vpk
+*.suprx
+*.skprx
+eboot.bin
+
+# Game data, firmware, saves and generated shader caches: never commit them.
+# Everyone supplies their own GameCube disc image.
+*.iso
+*.gcm
+*.rvz
+*.wia
+*.wbfs
+*.ciso
+*.gcz
+*.nkit.*
+*.gci
+*.raw
+*.gxp
+*.bin
+/data/
+/game/
+/cache/
+libshacccg.suprx
+args.txt
+sequence.txt
+
+# Local receipts and captures (they can name local paths)
+*.psp2dmp
+*.log
+*.jsonl
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.zip
+*.tar
+*.gz
+/reports/
+/captures/
+
+# Local tool and editor state
+.codex/
+.claude/
+AGENTS.md
+CLAUDE.md
+.env
+.env.*
+.vscode/
+.idea/
+__pycache__/
+.pytest_cache/
+.DS_Store
+Thumbs.db

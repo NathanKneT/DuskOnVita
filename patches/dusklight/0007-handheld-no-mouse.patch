@@ -1,0 +1,38 @@
+Vita/3DS: no mouse. dusk::mouse reads relative mouse motion for the optional mouse aim and
+mouse camera, captures the pointer and hides the cursor, using SDL mouse state and ImGui's IO
+(which needs an ImGui context the handhelds do not create). The handhelds have no mouse, so
+read() and the focus handlers return at once and the deltas stay zero, exactly as on desktop
+with no mouse connected. Not game code.
+
+--- a/src/dusk/mouse.cpp
++++ b/src/dusk/mouse.cpp
+@@ -162,6 +162,9 @@
+ }  // namespace
+ 
+ void read() {
++#if TARGET_VITA || TARGET_3DS
++    return; // no mouse on the handhelds: aim/camera deltas stay zero, as with no mouse connected
++#endif
+     SDL_Window* window = aurora::window::get_sdl_window();
+     const bool capture_active = sync_capture_state(window, should_capture_mouse(window));
+     update_cursor_visibility(window, capture_active);
+@@ -211,6 +214,9 @@
+ }
+ 
+ void on_focus_lost() {
++#if TARGET_VITA || TARGET_3DS
++    return; // no mouse capture or cursor to restore
++#endif
+     SDL_Window* window = aurora::window::get_sdl_window();
+     if (window != nullptr) {
+         sync_capture_state(window, false);
+@@ -219,6 +225,9 @@
+ }
+ 
+ void on_focus_gained() {
++#if TARGET_VITA || TARGET_3DS
++    return; // no mouse capture to resume
++#endif
+     SDL_Window* window = aurora::window::get_sdl_window();
+     sync_capture_state(window, should_capture_mouse(window));
+ }

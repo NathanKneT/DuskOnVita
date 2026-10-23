@@ -1,0 +1,25 @@
+name: Host tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Fetch the pinned upstream sources
+        run: |
+          git submodule update --init external/dusklight
+          git -C external/dusklight submodule update --init extern/aurora extern/borealis
+      - name: Run host tests
+        env:
+          CXX: g++
+          CC: gcc
+        run: bash tools/host_tests.sh

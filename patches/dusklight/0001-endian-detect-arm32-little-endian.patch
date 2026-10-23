@@ -1,0 +1,13 @@
+diff --git a/include/helpers/endian.h b/include/helpers/endian.h
+index b9727ce4c7..aed095bb4c 100644
+--- a/include/helpers/endian.h
++++ b/include/helpers/endian.h
+@@ -6,7 +6,7 @@
+ #include "dolphin/mtx.h"
+ 
+ // Platform detection - Little Endian targets
+-#if defined(_WIN32) || defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) || defined(_M_X64) || defined(_M_IX86)
++#if defined(_WIN32) || defined(__x86_64__) || defined(__i386__) || defined(__aarch64__) || defined(_M_X64) || defined(_M_IX86) || (defined(__arm__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+     #define TARGET_LITTLE_ENDIAN 1
+ #else
+     #define TARGET_LITTLE_ENDIAN 0

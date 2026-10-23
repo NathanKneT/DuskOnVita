@@ -1,0 +1,46 @@
+Vita: treat device paths ("ux0:", "app0:") as absolute in borealis::data.
+std::filesystem (POSIX grammar) calls them relative and absolute() prefixes newlib's
+cwd, giving "app0:/ux0:data/twilight-vita". Measured in Vita3K (stat of
+app0:/ux0:data/twilight-vita/config.json). Path handling only; not game code.
+
+--- a/src/data.cpp
++++ b/src/data.cpp
+@@ -31,7 +31,26 @@
+ constexpr Log Log{"borealis::data"};
+ constexpr std::string_view kLocationDescriptorName = "data_location.json";
+ 
++#if defined(__vita__)
++// Vita paths start with a device ("ux0:", "app0:"). std::filesystem's POSIX grammar
++// calls them relative, so absolute()/weakly_canonical() would prefix newlib's current
++// directory ("app0:/ux0:data/..."). They are absolute already, and the Vita has no
++// symlinks, so the lexical form is the canonical one.
++bool is_vita_device_path(const std::filesystem::path& path) {
++    // "ux0:data/x" iterates as "ux0:data", "x", so look at the text: a device name
++    // ends at the first ':' and comes before any '/'.
++    const std::string& text = path.native();
++    const auto colon = text.find(':');
++    return colon != std::string::npos && colon > 0 && text.find('/') > colon;
++}
++#endif
++
+ std::filesystem::path normalized_path(const std::filesystem::path& path) {
++#if defined(__vita__)
++    if (is_vita_device_path(path)) {
++        return path.lexically_normal();
++    }
++#endif
+     std::error_code ec;
+     auto normalized = std::filesystem::weakly_canonical(path, ec);
+     if (!ec) {
+@@ -46,6 +65,11 @@
+ }
+ 
+ std::filesystem::path absolute_path(const std::filesystem::path& path) {
++#if defined(__vita__)
++    if (is_vita_device_path(path)) {
++        return path.lexically_normal();
++    }
++#endif
+     std::error_code ec;
+     const auto absolute = std::filesystem::absolute(path, ec);
+     return ec ? path.lexically_normal() : absolute.lexically_normal();

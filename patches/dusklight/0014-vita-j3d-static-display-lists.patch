@@ -1,0 +1,218 @@
+Vita: J3D's shape display lists and vertex-format lists by reference, and the arrays they load
+(port of the 3DS port's dusklight patches 0020 and 0023; with patches/aurora/0006).
+
+J3DShapeDraw::draw and J3DShape's vertex-format list (mVcdVatCmd) go to the GX with
+GXCallDisplayListStatic. Every place that changes such a list's bytes after it was made calls
+GXInvalidateDisplayListStatic (J3DShapeDraw's list copies, addTexMtxIndexInDL, J3DSkinDeform's
+in-place removal of matrix indices, makeVcdVatCmd). The arrays those lists load are the model's
+own; J3D changes them in place only after a J3DVertexBuffer swap, so every swap names both of its
+arrays to GXInvalidateArrayStatic. Same commands to the GX; no game logic changes. With the
+backend's mode off, GXCallDisplayListStatic is GXCallDisplayList.
+
+--- a/libs/JSystem/include/JSystem/J3DGraphBase/J3DVertex.h
++++ b/libs/JSystem/include/JSystem/J3DGraphBase/J3DVertex.h
+@@ -4,6 +4,9 @@
+ #include <gx.h>
+ #include <mtx.h>
+ #include "helpers/endian_gx.hpp"
++#if defined(__vita__)
++#include <dolphin/gx/GXAurora.h>  // GXInvalidateArrayStatic (twilight-vita, patches/dusklight/0014)
++#endif
+ 
+ class J3DModel;
+ class J3DAnmVtxColor;
+@@ -126,6 +129,16 @@ public:
+         setCurrentVtxCol(mVtxColArray[0]);
+     }
+ 
++#if defined(__vita__)
++    // twilight-vita (patches/dusklight/0014): every in-place write of these arrays (deformers,
++    // skinning, vertex colour animation) follows a swap, so a swap names both arrays: the Vita backend
++    // then reads them anew every frame instead of taking them as unchanged.
++    static void twvArraysChange(const void* a, const void* b) {
++        if (a != NULL) GXInvalidateArrayStatic(a);
++        if (b != NULL) GXInvalidateArrayStatic(b);
++    }
++#endif
++
+     void* getTransformedVtxPos(int idx) { return mTransformedVtxPosArray[idx]; }
+     void* getTransformedVtxNrm(int idx) { return mTransformedVtxNrmArray[idx]; }
+     J3DVertexData* getVertexData() const { return mVtxData; }
+@@ -134,30 +147,45 @@ public:
+         void* tmp = mTransformedVtxPosArray[0];
+         mTransformedVtxPosArray[0] = mTransformedVtxPosArray[1];
+         mTransformedVtxPosArray[1] = tmp;
++#if defined(__vita__)
++        twvArraysChange(mTransformedVtxPosArray[0], mTransformedVtxPosArray[1]);
++#endif
+     }
+ 
+     void swapTransformedVtxNrm() {
+         void* tmp = mTransformedVtxNrmArray[0];
+         mTransformedVtxNrmArray[0] = mTransformedVtxNrmArray[1];
+         mTransformedVtxNrmArray[1] = tmp;
++#if defined(__vita__)
++        twvArraysChange(mTransformedVtxNrmArray[0], mTransformedVtxNrmArray[1]);
++#endif
+     }
+ 
+     void swapVtxPosArrayPointer() {
+         void* temp = mVtxPosArray[0];
+         mVtxPosArray[0] = mVtxPosArray[1];
+         mVtxPosArray[1] = temp;
++#if defined(__vita__)
++        twvArraysChange(mVtxPosArray[0], mVtxPosArray[1]);
++#endif
+     }
+ 
+     void swapVtxNrmArrayPointer() {
+         void* temp = mVtxNrmArray[0];
+         mVtxNrmArray[0] = mVtxNrmArray[1];
+         mVtxNrmArray[1] = temp;
++#if defined(__vita__)
++        twvArraysChange(mVtxNrmArray[0], mVtxNrmArray[1]);
++#endif
+     }
+ 
+     void swapVtxColArrayPointer() {
+         GXColor* temp = mVtxColArray[0];
+         mVtxColArray[0] = mVtxColArray[1];
+         mVtxColArray[1] = temp;
++#if defined(__vita__)
++        twvArraysChange(mVtxColArray[0], mVtxColArray[1]);
++#endif
+     }
+ 
+     void* getVtxPosArrayPointer(int index) {
+--- a/libs/JSystem/src/J3DGraphAnimator/J3DSkinDeform.cpp
++++ b/libs/JSystem/src/J3DGraphAnimator/J3DSkinDeform.cpp
+@@ -5,6 +5,9 @@
+ #include "JSystem/J3DGraphAnimator/J3DModel.h"
+ #include "JSystem/JKernel/JKRHeap.h"
+ #include <cstring>
++#if defined(__vita__)
++#include <dolphin/gx/GXAurora.h>  // GXInvalidateDisplayListStatic (twilight-vita, patches/dusklight/0014)
++#endif
+ 
+ J3DSkinNList::J3DSkinNList() {
+     field_0x0 = NULL;
+@@ -397,6 +400,9 @@ void J3DSkinDeform::changeFastSkinDL(J3DModelData* pModelData) {
+ 
+                 pShapeNode->getShapeDraw(j)->setDisplayListSize(dlistSize);
+                 DCStoreRange(displayListStart, pShapeNode->getShapeDraw(j)->getDisplayListSize());
++#if defined(__vita__)
++                GXInvalidateDisplayListStatic(displayListStart);
++#endif
+             }
+         }
+     }
+--- a/libs/JSystem/src/J3DGraphBase/J3DShape.cpp
++++ b/libs/JSystem/src/J3DGraphBase/J3DShape.cpp
+@@ -10,6 +10,13 @@
+ #include "JSystem/JKernel/JKRHeap.h"
+ 
+ #include <dolphin/gx.h>
++#if defined(__vita__)
++// twilight-vita: the vertex-format display list goes to the GX by reference (patches/aurora/0006);
++// makeVcdVatCmd, its writer, invalidates it. The arrays it loads are the model's own, which J3D
++// changes in place only through a vertex buffer swap (J3DVertex.h) or right before makeVcdVatCmd
++// (J3DSkinDeform::transformVtxPosNrm).
++#include <dolphin/gx/GXAurora.h>
++#endif
+ #include <tracy/Tracy.hpp>
+ #endif
+ 
+@@ -287,6 +294,9 @@ void J3DShape::makeVcdVatCmd() {
+     GDPadCurr32();
+     GDFlushCurrToMem();
+     GDSetCurrent(NULL);
++#if defined(__vita__)
++    GXInvalidateDisplayListStatic(mVcdVatCmd);
++#endif
+     OSEnableScheduler();
+     OSRestoreInterrupts(sInterruptFlag);
+ }
+@@ -299,7 +309,11 @@ void J3DShape::loadCurrentMtx() const {
+ 
+ void J3DShape::loadPreDrawSetting() const {
+     if (sOldVcdVatCmd != mVcdVatCmd) {
++#if defined(__vita__)
++        GXCallDisplayListStatic(mVcdVatCmd, kVcdVatDLSize);
++#else
+         GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
++#endif
+         sOldVcdVatCmd = mVcdVatCmd;
+     }
+ 
+@@ -322,7 +336,11 @@ void J3DShape::setArrayAndBindPipeline() const {
+ void J3DShape::drawFast() const {
+     ZoneScoped;
+     if (sOldVcdVatCmd != mVcdVatCmd) {
++#if defined(__vita__)
++        GXCallDisplayListStatic(mVcdVatCmd, kVcdVatDLSize);
++#else
+         GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
++#endif
+         sOldVcdVatCmd = mVcdVatCmd;
+     }
+ 
+@@ -369,7 +387,11 @@ void J3DShape::simpleDraw() const {
+ 
+ void J3DShape::simpleDrawCache() const {
+     if (sOldVcdVatCmd != mVcdVatCmd) {
++#if defined(__vita__)
++        GXCallDisplayListStatic(mVcdVatCmd, kVcdVatDLSize);
++#else
+         GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
++#endif
+         sOldVcdVatCmd = mVcdVatCmd;
+     }
+ 
+--- a/libs/JSystem/src/J3DGraphBase/J3DShapeDraw.cpp
++++ b/libs/JSystem/src/J3DGraphBase/J3DShapeDraw.cpp
+@@ -9,6 +9,13 @@
+ #if TARGET_PC
+ #include <aurora/dl.hpp>
+ #include <tracy/Tracy.hpp>
++#endif
++#if defined(__vita__)
++// twilight-vita: shape display lists go to the GX by reference (patches/aurora/0006); every change
++// to a list's bytes is followed by GXInvalidateDisplayListStatic.
++#include <dolphin/gx/GXAurora.h>
++#endif
++#if TARGET_PC
+ 
+ namespace {
+ 
+@@ -25,6 +32,9 @@ void set_display_list_copy(void*& displayList, u32& displayListSize, const u8* d
+     displayList = newDL;
+     displayListSize = alignedSize;
+     DCStoreRange(newDL, displayListSize);
++#if defined(__vita__)
++    GXInvalidateDisplayListStatic(newDL);
++#endif
+ }
+ 
+ }  // namespace
+@@ -148,6 +158,9 @@ void J3DShapeDraw::addTexMtxIndexInDL(u32 stride, u32 attrOffs, u32 valueBase) {
+     mDisplayListSize = realSize;
+     mDisplayList = newDLStart;
+     DCStoreRange(newDLStart, mDisplayListSize);
++#if defined(__vita__)
++    GXInvalidateDisplayListStatic(newDLStart);
++#endif
+ }
+ #endif
+ 
+@@ -173,7 +186,11 @@ J3DShapeDraw::J3DShapeDraw(
+ 
+ void J3DShapeDraw::draw() const {
+     ZoneScoped;
++#if defined(__vita__)
++    GXCallDisplayListStatic(mDisplayList, mDisplayListSize);
++#else
+     GXCallDisplayList(mDisplayList, mDisplayListSize);
++#endif
+ }
+ 
+ J3DShapeDraw::~J3DShapeDraw() {}

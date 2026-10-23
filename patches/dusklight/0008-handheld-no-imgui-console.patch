@@ -1,0 +1,27 @@
+Vita/3DS: Dusklight's ImGui debug console (hotkeys, tool windows, overlays) needs ImGui,
+which the handheld builds do not include (no ImGui context exists). PreDraw/PostDraw return
+at once there; HandleSDLEvent is already a no-op upstream. The game frame is unaffected:
+the console only draws Dusklight's own developer tools. Not game code.
+
+--- a/src/dusk/imgui/ImGuiConsole.cpp
++++ b/src/dusk/imgui/ImGuiConsole.cpp
+@@ -265,6 +265,9 @@
+ 
+     void ImGuiConsole::PreDraw() {
+         ZoneScoped;
++#if TARGET_VITA || TARGET_3DS
++        return; // the ImGui debug console needs ImGui, which the handheld builds do not include
++#endif
+ 
+         UpdateSettings();
+ 
+@@ -391,6 +394,9 @@
+     }
+ 
+     void ImGuiConsole::PostDraw() {
++#if TARGET_VITA || TARGET_3DS
++        return; // no ImGui frame was begun (PreDraw)
++#endif
+         m_menuTools.afterDraw();
+     }
+ 
