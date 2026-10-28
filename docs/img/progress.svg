@@ -18,36 +18,42 @@
 <text x='52.0' y='76.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>30</text>
 <line x1='60' x2='780' y1='72.2' y2='72.2' stroke='#1a7f37' stroke-width='2' stroke-dasharray='6 4'/>
 <text x='780.0' y='66.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1a7f37' text-anchor='end' font-weight='600'>target: 30</text>
-<circle cx='122.0' cy='246.2' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
-<text x='122.0' y='236.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.6</text>
-<circle cx='266.0' cy='249.5' r='5' fill='#ffffff' stroke='#0969da' stroke-width='2'/>
-<text x='266.0' y='239.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.2</text>
-<circle cx='410.0' cy='264.5' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
-<text x='410.0' y='254.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>6.3</text>
-<circle cx='554.0' cy='151.6' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
-<text x='554.0' y='141.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>20.2</text>
-<circle cx='698.0' cy='158.0' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
-<text x='698.0' y='148.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>19.4</text>
-<circle cx='142.0' cy='257.5' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
-<text x='142.0' y='247.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.2</text>
-<circle cx='286.0' cy='237.6' r='5' fill='#ffffff' stroke='#bc4c00' stroke-width='2'/>
-<text x='286.0' y='227.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>9.7</text>
-<circle cx='430.0' cy='256.0' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
-<text x='430.0' y='246.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.4</text>
-<circle cx='574.0' cy='129.6' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
-<text x='574.0' y='119.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>22.9</text>
-<circle cx='718.0' cy='94.8' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
-<text x='718.0' y='84.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>27.2</text>
-<text x='132.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v53r2</text>
-<text x='276.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v54</text>
-<text x='420.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v61</text>
-<text x='564.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>g2c-vgl</text>
-<text x='708.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>g2c-gxm</text>
+<circle cx='101.4' cy='246.2' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='101.4' y='236.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.6</text>
+<circle cx='204.3' cy='249.5' r='5' fill='#ffffff' stroke='#0969da' stroke-width='2'/>
+<text x='204.3' y='239.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>8.2</text>
+<circle cx='307.1' cy='264.5' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='307.1' y='254.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>6.3</text>
+<circle cx='410.0' cy='151.6' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='410.0' y='141.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>20.2</text>
+<circle cx='512.9' cy='158.0' r='5' fill='#0969da' stroke='#0969da' stroke-width='2'/>
+<text x='512.9' y='148.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#0969da' text-anchor='middle' font-weight='600'>19.4</text>
+<circle cx='121.4' cy='257.5' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='121.4' y='247.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.2</text>
+<circle cx='224.3' cy='237.6' r='5' fill='#ffffff' stroke='#bc4c00' stroke-width='2'/>
+<text x='224.3' y='227.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>9.7</text>
+<circle cx='327.1' cy='256.0' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='327.1' y='246.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>7.4</text>
+<circle cx='430.0' cy='129.6' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='430.0' y='119.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>22.9</text>
+<circle cx='532.9' cy='94.8' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='532.9' y='84.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>27.2</text>
+<circle cx='635.7' cy='89.1' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='635.7' y='79.1' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>27.9</text>
+<circle cx='738.6' cy='93.0' r='5' fill='#bc4c00' stroke='#bc4c00' stroke-width='2'/>
+<text x='738.6' y='83.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#bc4c00' text-anchor='middle' font-weight='600'>27.4</text>
+<text x='111.4' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v53r2</text>
+<text x='214.3' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v54</text>
+<text x='317.1' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>v61</text>
+<text x='420.0' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>g2c-vgl</text>
+<text x='522.9' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>g2c-gxm</text>
+<text x='625.7' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>b1</text>
+<text x='728.6' y='334.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>b2</text>
 <circle cx='66' cy='360' r='5' fill='#0969da'/>
 <text x='78.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>Link's house</text>
 <circle cx='186' cy='360' r='5' fill='#bc4c00'/>
 <text x='198.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>Ordon, outside</text>
 <circle cx='316' cy='360' r='5' fill='#ffffff' stroke='#59636e' stroke-width='2'/>
 <text x='328.0' y='364.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>run rejected: v54, draws were lost (uniform failures)</text>
-<text x='60.0' y='400.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='start' font-weight='normal'>v61 ran at the system clocks (333 MHz), the other builds at 444 MHz; g2c-gxm uses the experimental GXM renderer.</text>
+<text x='60.0' y='400.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='start' font-weight='normal'>v61: system clocks (333 MHz), the others 444 MHz. g2c-gxm, b1, b2: GXM. b1, b2: game at full speed.</text>
 </svg>

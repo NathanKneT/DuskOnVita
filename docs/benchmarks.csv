@@ -11,3 +11,15 @@ g2c-vgl,2026-10-23,vita1000,faron,every,11.71,11.89,measured,444 MHz; vitaGL; Fa
 g2c-gxm,2026-10-23,vita1000,house,every,19.45,19.45,measured,444 MHz; --vita-gpu=gxm
 g2c-gxm,2026-10-23,vita1000,outside,every,27.23,27.24,measured,444 MHz; --vita-gpu=gxm
 g2c-gxm,2026-10-23,vita1000,faron,every,14.04,14.13,measured,444 MHz; --vita-gpu=gxm; Faron fight
+b1,2026-10-28,vita1000,outside,every,27.92,29.98,measured,444 MHz; bench v2; F_SP103 room 1 (outside Link's house); play profile (GXM; 75 %; fixed ticks; frame overlap)
+b1,2026-10-28,vita1000,ordon-centre,every,11.81,23.63,measured,444 MHz; bench v2; F_SP103 room 0 (village centre); play profile (GXM; 75 %; fixed ticks; frame overlap)
+b1,2026-10-28,vita1000,castle-town,every,16.73,29.94,measured,444 MHz; bench v2; F_SP116 (twilight); play profile (GXM; 75 %; fixed ticks; frame overlap)
+b1,2026-10-28,vita1000,kakariko,every,12.84,25.73,measured,444 MHz; bench v2; F_SP109 (twilight); play profile (GXM; 75 %; fixed ticks; frame overlap)
+b1,2026-10-28,vita1000,hyrule-field,every,19.56,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); play profile (GXM; 75 %; fixed ticks; frame overlap)
+b1,2026-10-28,vita1000,faron-bench,every,11.59,23.28,measured,444 MHz; bench v2; F_SP108 room 6; only 4 steady windows; play profile (GXM; 75 %; fixed ticks; frame overlap)
+b2,2026-10-28,vita1000,outside,every,27.44,30.00,measured,444 MHz; bench v2; F_SP103 room 1 (outside Link's house); b1 + fast actor paths + texture pool fix
+b2,2026-10-28,vita1000,ordon-centre,every,12.35,24.74,measured,444 MHz; bench v2; F_SP103 room 0 (village centre); b1 + fast actor paths + texture pool fix
+b2,2026-10-28,vita1000,castle-town,every,19.80,29.98,measured,444 MHz; bench v2; F_SP116 (twilight); b1 + fast actor paths + texture pool fix
+b2,2026-10-28,vita1000,kakariko,every,12.60,25.25,measured,444 MHz; bench v2; F_SP109 (twilight); b1 + fast actor paths + texture pool fix
+b2,2026-10-28,vita1000,hyrule-field,every,18.90,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); b1 + fast actor paths + texture pool fix
+b2,2026-10-28,vita1000,faron-bench,every,11.50,23.04,measured,444 MHz; bench v2; F_SP108 room 6; only 4 steady windows; b1 + fast actor paths + texture pool fix

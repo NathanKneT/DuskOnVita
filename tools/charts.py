@@ -71,7 +71,7 @@ def progress():
         s.append(text(lx + 18, ly + 4, label, 11))
     s.append(f"<circle cx='{left + 256}' cy='{ly}' r='5' fill='#ffffff' stroke='{MUTED}' stroke-width='2'/>")
     s.append(text(left + 268, ly + 4, 'run rejected: ' + '; '.join(f'{b}, {why}' for b, why in rejected.items()), 11))
-    s.append(text(left, h - 20, 'v61 ran at the system clocks (333 MHz), the other builds at 444 MHz; g2c-gxm uses the experimental GXM renderer.', 11, MUTED))
+    s.append(text(left, h - 20, 'v61: system clocks (333 MHz), the others 444 MHz. g2c-gxm, b1, b2: GXM. b1, b2: game at full speed.', 11, MUTED))
     s.append('</svg>')
     return '\n'.join(s)
 

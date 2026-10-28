@@ -13,8 +13,20 @@ layer (a renderer that translates Aurora's GX commands to
 [vitaGL](https://github.com/Rinnegatamante/vitaGL), or experimentally straight to GXM, audio, input,
 memory, receipts) and a small queue of reviewed patches to the pinned upstreams.
 
-**It is not playable yet.** The aim is a stable 30 FPS; the console runs the game at a fraction of
-that today. The code is shared so others can reproduce the work and help.
+## State of the game (28 Oct 2026)
+
+- **Playable, but not comfortably.** On a PS Vita 1000 the game boots from your disc image to the
+  title screen; a new game starts, the opening in Ordon plays, and saving works.
+- **Slow.** 12 to 28 FPS in the places measured so far, against the original's 30. The game keeps its
+  real speed down to 15 FPS; below that it slows down.
+- **Missing:** the minimap and map screens, real-time shadows, bloom and the other effects that need
+  frame-buffer copies; a settings menu (options are set in files); a language choice.
+- **Wrong:** some textures flicker; the 3D lock-on marker is drawn in the wrong place.
+- **Untested:** dungeons, the rest of the story, a full playthrough, sleep and resume, discs other
+  than the European release.
+
+The aim is a steady 30 FPS. What comes next is in [docs/ROADMAP.md](docs/ROADMAP.md). The code is
+shared so others can reproduce the work and help.
 
 ## Status (measured on a PS Vita 1000)
 
@@ -41,7 +53,7 @@ Earlier runs, frames per second, build g2c at 444 MHz:
 | Scene | vitaGL | GXM + G2 |
 | --- | ---: | ---: |
 | Link's house | 20.2 | 19.4 |
-| Ordon village | 22.9 | 27.2 |
+| Ordon, outside Link's house | 22.9 | 27.2 |
 | Faron fight | 11.7 | 14.0 |
 
 The best result, 27.2 FPS, is Ordon village on GXM. Link's house runs at about 20 FPS on either
@@ -84,7 +96,8 @@ in the house with GXM:
 | Outdoor scenes | ⚠️ | a black shape appears in some views |
 | Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes are not implemented yet; draws that would sample a copy nothing wrote are skipped instead of drawn black |
 | Saves | ✅ | saving works on the console (`patches/aurora/0005-vita-copy-stream-stack.patch`); rolling backups, a repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
-| Full opening, dungeons, complete playthrough | ❔ | untested |
+| Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select about 21 FPS, Ordon about 23 |
+| Dungeons, complete playthrough | ❔ | untested |
 
 ## Requirements
 
