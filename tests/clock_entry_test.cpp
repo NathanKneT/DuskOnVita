@@ -25,6 +25,14 @@ int scePowerSetArmClockFrequency(int);
 int scePowerSetBusClockFrequency(int);
 int scePowerSetGpuClockFrequency(int);
 int scePowerSetGpuXbarClockFrequency(int);
+// The data folder listing for the missing-disc screen (psp2/io/dirent.h).
+using SceUID = int;
+struct SceIoDirent {
+    char d_name[256];
+};
+SceUID sceIoDopen(const char*);
+int sceIoDread(SceUID, SceIoDirent*);
+int sceIoDclose(SceUID);
 
 #define main clockEntryUnderTest
 #include "clock_entry_fixture.inc"
@@ -48,6 +56,7 @@ struct EntryState {
     std::uint32_t gpuFeatures = 0;
     int overlap = -1;
     int fastShadow = -1; // twv_vita_fast_shadow_collect_select's argument, -1 when not called
+    int saveImport = -1; // twv_vita_save_import_select's argument, -1 when not called
 } state;
 const char* axes[]{"arm", "bus", "gpu", "gpu_xbar"};
 constexpr std::array<int, 4> initial{321, -17, 111, INT_MIN};
@@ -73,23 +82,47 @@ void writeFile(const char* path, const std::string& value) {
     std::ofstream file(path, std::ios::binary);
     assert(file); file.write(value.data(), value.size()); assert(file);
 }
+// A minimal plain GameCube image for the start-up disc check: header, DOL, FST with one file.
+std::string gameCubeImage(const char* id) {
+    std::string image(0x3000, '\0');
+    const auto be32 = [&](std::size_t at, std::uint32_t v) {
+        for (int i = 0; i < 4; ++i) image[at + i] = char(v >> (24 - 8 * i));
+    };
+    image.replace(0, 6, id);
+    be32(0x1C, 0xC2339F3Du);
+    be32(0x420, 0x2500); be32(0x424, 0x2600); be32(0x428, 24);
+    image[0x2600] = 1; be32(0x2608, 2);
+    be32(0x2610, 0x2800); be32(0x2614, 0x800);
+    return image;
+}
+std::string discImage = gameCubeImage("GZ2P01");
+// startupErrorExit never returns on the Vita; here it unwinds back to run().
+struct StartupExit {
+    int code;
+};
 int run(const char* args, bool disc = true, bool bundle = true, bool renderer = true, int gameResult = 7) {
     state = {}; state.bundleAvailable = bundle; state.rendererAvailable = renderer;
     state.gameResult = gameResult;
     if (args) writeFile("ux0:data/twilight-vita/args.txt", args);
     else std::filesystem::remove("ux0:data/twilight-vita/args.txt");
-    if (disc) writeFile("ux0:data/twilight-vita/game.iso", "host fixture");
+    if (disc) writeFile("ux0:data/twilight-vita/game.iso", discImage);
     else std::filesystem::remove("ux0:data/twilight-vita/game.iso");
     // Existing entry behavior ignores the process argv; args.txt remains the
     // supported option source, even if a process argument resembles our option.
     char arg0[] = "host", ignored[] = "--vita-clocks=legacy444";
     char* argv[]{arg0, ignored, nullptr};
-    return clockEntryUnderTest(2, argv);
+    try {
+        return clockEntryUnderTest(2, argv);
+    } catch (const StartupExit& exit) {
+        return exit.code;
+    }
 }
 void checkRejected(int result) {
     assert(result == 2 && state.gameCalls == 0 && state.exits == std::vector<int>{2});
     assert(state.nativeCalls.empty());
     assert(state.text.count("args_error"));
+    // The screen says what the receipt says.
+    assert(state.text.at("startup_screen") == "args_error" && state.text.at("screen_problem") == state.text.at("args_error") + ".");
 }
 void checkClocks(bool legacy, bool explicitMode) {
     assert(state.gameCalls == 1 && state.bundleCalls == 1);
@@ -147,7 +180,29 @@ void telemetryFlush() {}
 void telemetrySync() { state.calls.emplace_back("sync"); }
 void runControlExitAfter(unsigned seconds) { state.calls.emplace_back("exit_after"); state.exitAfter = seconds; }
 void telemetryQuiet(bool quiet) { state.quiet = quiet; }
+void startupErrorExit(const MessageText& text, int code) {
+    state.text["startup_screen"] = text.kind;
+    state.text["screen_title"] = text.message.title;
+    state.text["screen_problem"] = text.message.items[0].text ? text.message.items[0].text : "";
+    for (const auto& item : text.message.items)
+        if (item.text && item.style == ui::Style::Path) state.text["screen_path"] = item.text;
+    state.exits.push_back(code);
+    throw StartupExit{code};
 }
+}
+std::vector<std::string> folder; // what sceIoDread lists
+std::size_t folderNext = 0;
+SceUID sceIoDopen(const char* path) {
+    folderNext = 0;
+    return std::string(path) == "ux0:data/twilight-vita" ? 5 : -1;
+}
+int sceIoDread(SceUID dir, SceIoDirent* entry) {
+    assert(dir == 5);
+    if (folderNext >= folder.size()) return 0;
+    std::snprintf(entry->d_name, sizeof entry->d_name, "%s", folder[folderNext++].c_str());
+    return 1;
+}
+int sceIoDclose(SceUID dir) { assert(dir == 5); return 0; }
 #if TWV_TEST_PLAY_PROFILE
 // With a GPU selector present, a build has every path the play profile needs.
 extern "C" int twv_vita_gpu_select(int backend, int, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
@@ -181,6 +236,10 @@ extern "C" int twv_vita_pipeline_fast_select(int value) { return selectRenderer(
 // Not a renderer choice: recorded apart, so the play profile's selections stay as they are.
 extern "C" int twv_vita_fast_shadow_collect_select(int mode) {
     assert(state.fastShadow == -1); state.fastShadow = mode; return mode >= 0 && mode <= 2;
+}
+// --vita-import-saves (aurora/save_safety.cpp): not a renderer choice either; set once per boot.
+extern "C" int twv_vita_save_import_select(int mode) {
+    assert(state.saveImport == -1); state.saveImport = mode; return 1;
 }
 extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memory) {
     state.calls.emplace_back("bundle"); ++state.bundleCalls;
@@ -228,6 +287,8 @@ int main() {
     assert(run("--vita-fast-shadow-collect=verify --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
     assert(state.fastShadow == 2 && state.text.at("fast_shadow_collect_requested") == "verify" && fixedTicks == 2);
     assert(state.selections.at("gx_thread") == 1 && state.gameArgs.back() == "R_SP01,4,2,0");
+    // --vita-import-saves leaves the implicit profile on too.
+    assert(run("--vita-import-saves=off") == 7 && state.text.at("play_profile") == "on" && state.saveImport == 0);
     assert(run("--vita-profile=off --vita-fast-shadow-collect=on") == 7 && state.fastShadow == 1);
     assert(state.text.at("play_profile") == "off" && state.selections.empty());
     fixedTicks = -1;
@@ -342,6 +403,14 @@ int main() {
     assert(state.fastShadow == 1 && state.text.at("fast_shadow_collect_requested") == "on" && state.gameArgs.size() == 5);
     for (const char* bad : {"--vita-fast-shadow-collect=ON", "--vita-fast-shadow-collect=onx",
                             "--vita-fast-shadow-collect=off --vita-fast-shadow-collect=verify"})
+        checkRejected(run(bad));
+    // --vita-import-saves: auto unless off, passed on before the game starts, never a game argument.
+    assert(run(nullptr) == 7 && state.saveImport == 1 && state.text.at("save_import_mode") == "default auto");
+    assert(run("--vita-import-saves=off --vita-clocks=system") == 7); checkClocks(false, true);
+    assert(state.saveImport == 0 && state.text.at("save_import_mode") == "off" && state.gameArgs.size() == 5);
+    assert(run("--vita-import-saves=auto") == 7 && state.saveImport == 1 && state.text.at("save_import_mode") == "auto");
+    for (const char* bad : {"--vita-import-saves=on", "--vita-import-saves=", "--vita-import-saves=OFF",
+                            "--vita-import-saves=off --vita-import-saves=auto"})
         checkRejected(run(bad));
     assert(run("--vita-clocks=system") == 7); checkClocks(false, true);
     assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
@@ -486,6 +555,41 @@ int main() {
     checkRejected(run("--vita-clocks=system"));
     std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
     std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    // Start-up screens (runtime/startup_check.hpp): the file the option came from, and the option.
+    writeFile("ux0:data/twilight-vita/sequence.txt", "only: --vita-ticks=sometimes");
+    writeFile("ux0:data/twilight-vita/sequence_state.txt", "0");
+    checkRejected(run(nullptr));
+    assert(state.text.at("screen_title") == "Problem in sequence.txt" &&
+           state.text.at("screen_path") == "ux0:data/twilight-vita/sequence.txt");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    checkRejected(run("--stage R_SP01,4,2,0 --vita-ticks=sometimes"));
+    assert(state.text.at("screen_title") == "Problem in args.txt" &&
+           state.text.at("screen_path") == "ux0:data/twilight-vita/args.txt" &&
+           state.text.at("screen_problem") == "--vita-ticks needs fixed, frames or single, once.");
+    // The disc, checked before anything else: missing (disc-like files in the folder are named), too
+    // short to read, not a disc, the other regions Dusklight accepts, another game, cut short.
+    folder = {"notes.txt", "Zelda.iso", "game.iso.txt", "tp.rvz"};
+    assert(run("--vita-clocks=system", false) == 2 && state.gameCalls == 0 && state.nativeCalls.empty());
+    assert(state.text.at("startup_screen") == "disc_missing" && state.text.count("no_disc") &&
+           state.text.at("disc_similar_files") == "Zelda.iso, game.iso.txt" &&
+           state.text.at("screen_path") == "ux0:data/twilight-vita/game.iso");
+    folder.clear();
+    discImage = "host fixture";
+    assert(run(nullptr) == 2 && state.text.at("startup_screen") == "disc_unreadable");
+    discImage = std::string(0x3000, 'x');
+    assert(run(nullptr) == 2 && state.text.at("startup_screen") == "disc_not_gamecube");
+    discImage = gameCubeImage("GZ2E01");
+    assert(run("--vita-clocks=system") == 7 && state.text.at("disc_id") == "GZ2E01" &&
+           state.events.at("disc_tested_on_vita") == 0);
+    discImage = gameCubeImage("GALE01");
+    assert(run(nullptr) == 2 && state.text.at("startup_screen") == "disc_wrong_game");
+    discImage = gameCubeImage("GZ2P01").substr(0, 0x2900); // ends inside its only file
+    assert(run(nullptr) == 2 && state.text.at("startup_screen") == "disc_truncated" &&
+           state.events.at("disc_needed_bytes") == 0x3000);
+    discImage = gameCubeImage("GZ2P01");
+    assert(run("--vita-clocks=system") == 7 && state.text.at("disc_check") == "ok" &&
+           state.events.at("disc_tested_on_vita") == 1 && !state.text.count("startup_screen"));
 #if TWV_VITA_BENCHMARK
     assert(run("--vita-clocks=legacy444 --vita-benchmark=C1-FIGHT") == 7);
     checkClocks(true, true); assert(state.benchmarkCalls == 1 && state.gameArgs.size() == 5);

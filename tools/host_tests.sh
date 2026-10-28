@@ -218,6 +218,16 @@ for warmup in 0 1; do
     "$out/preparation_$warmup$capture" "$out/warmup-golden.bin" "$out/preparation-data-$warmup$capture"
   done
 done
+# The bundle packaged in the VPK (TWV_VITA_APP_WARMUP_BUNDLE): app0: only when the data folder has none.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DTWV_VITA_SHADER_WARMUP=1 -DTWV_VITA_SHADER_SOURCE_CAPTURE=0 -DTWV_VITA_APP_WARMUP_BUNDLE=1 \
+  -I "$repo/platform/vita" "$repo/tests/shader_preparation_test.cpp" \
+  "$repo/platform/vita/gfx_vgl/shader_preparation.cpp" -o "$out/preparation_app"
+"$out/preparation_app" "$out/warmup-golden.bin" "$out/preparation-data-app"
+# Start-up screens: disc image checks, the message per problem, font, wrap and progress bar.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/startup_check_test.cpp" -o "$out/startup_check_test"
+"$out/startup_check_test"
 python3 "$repo/tools/counter_batch_test_fixture.py" --output-dir "$out"
 for batched in 0 1; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -653,3 +663,6 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/actor_profile_stats_test.cpp" -o "$out/actor_profile_stats_test"
 "$out/actor_profile_stats_test"
+# Save safety (patches/aurora/0011, docs/ARCHITECTURE.md): backups, the boot check and the
+# Save import on real folders, and the real patched card with and without the port's hooks.
+TWV_WORK="$work" bash "$repo/tools/save_safety_tests.sh" "$out/save-safety"

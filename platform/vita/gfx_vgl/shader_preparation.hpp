@@ -48,8 +48,15 @@ inline bool parse_shader_bundle(std::span<const uint8_t> bytes,ShaderBundleView&
 }
 using PrepareCompile=uint32_t(*)(uint32_t stage,const char* source);
 using PrepareRelease=void(*)(uint32_t shader);
+// After each stage of a valid bundle: stages handled so far and the bundle's stage count.
+using PrepareProgress=void(*)(uint32_t done,uint32_t total);
 // SDK-domain file operations; called once before the first original game frame.
-void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release);
+void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release,PrepareProgress progress=nullptr);
+// The bundle to prepare: ux0:data/twilight-vita/shader_warmup.bin; when it is missing and the build
+// packages one (TWV_VITA_APP_WARMUP_BUNDLE), app0:shader_warmup.bin. Receipt shader_warmup_source.
+constexpr const char* DataShaderBundle="ux0:data/twilight-vita/shader_warmup.bin";
+constexpr const char* AppShaderBundle="app0:shader_warmup.bin";
+const char* shader_bundle_path();
 // Recording happens only when --vita-shader-capture=on chose it (and the build compiled it in).
 void begin_shader_source_capture(const char* root);
 void capture_shader_source(uint32_t stage,const char* source);

@@ -8,7 +8,10 @@
 #include "runtime/run_control.hpp"
 #include "runtime/run_sequence.hpp"
 #include "runtime/fast_shadow_collect.hpp"
+#include "runtime/startup_check.hpp"
+#include "ui/startup_screen.hpp"
 
+#include <psp2/io/dirent.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
 #include <psp2/power.h>
@@ -16,6 +19,9 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
+#include <strings.h>
 #include <sys/stat.h>
 
 int game_main(int argc, char* argv[]); // Dusklight, built with int-sized enums; plain types only
@@ -50,6 +56,8 @@ extern "C" int twv_vita_input_script_load(const char* path) __attribute__((weak)
 extern "C" void dusk_vita_fixed_ticks(int max_ticks_per_loop) __attribute__((weak));
 // --vita-frame-overlap (aurora/frame_overlap.hpp): needs the GX worker; absent in null-graphics builds.
 extern "C" int twv_vita_frame_overlap_select(int enabled) __attribute__((weak));
+// --vita-import-saves (aurora/save_safety.cpp): strong, so the card's save-safety hooks are linked.
+extern "C" int twv_vita_save_import_select(int mode);
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
 // MEM1/ARAM reserves are bounded independently in the Aurora adapter.
@@ -90,6 +98,81 @@ int wordOption(const char* token, const char* prefix, const char* a, const char*
     else if (std::strcmp(token + n, b) == 0) choice = 1;
     else return -1;
     return 1;
+}
+
+// Start-up errors (runtime/startup_check.hpp): receipts, then a screen that waits for a button.
+twv::vita::MessageText startupText;
+const char* argsSource = nullptr; // "args.txt", "sequence.txt", or null: built-in options
+const char* argsToken = nullptr;  // the option being read, when one is
+const char* argsProblem = "start-up options rejected";
+void argsError(const char* text) {
+    twv::vita::telemetryText("args_error", text);
+    argsProblem = text;
+}
+[[noreturn]] void argsExit() {
+    twv::vita::arguments_message(startupText, argsSource, argsProblem, argsToken);
+    twv::vita::startupErrorExit(startupText, 2);
+}
+
+// The disc image at `path`: header, then FST and file extents (gcm_nod.cpp reads the same bytes).
+twv::vita::DiscCheck checkDisc(const char* path) {
+    using namespace twv::vita;
+    DiscCheck d;
+    struct stat info{};
+    if (stat(path, &info) != 0) {
+        d.problem = DiscProblem::Missing;
+        return d;
+    }
+    if (!S_ISREG(info.st_mode)) {
+        d.problem = DiscProblem::NotAFile;
+        return d;
+    }
+    const uint64_t size = static_cast<uint64_t>(info.st_size);
+    FILE* file = std::fopen(path, "rb");
+    if (!file) {
+        d.problem = DiscProblem::Unreadable;
+        d.size = size;
+        return d;
+    }
+    static uint8_t head[DiscHeaderBytes];
+    const std::size_t n = std::fread(head, 1, sizeof head, file);
+    d = check_disc_header(head, n, size);
+    if (d.problem == DiscProblem::None) {
+        std::unique_ptr<uint8_t[]> fst(new (std::nothrow) uint8_t[d.fstSize]);
+        const bool read = fst && std::fseek(file, long(d.fstOffset), SEEK_SET) == 0 &&
+                          std::fread(fst.get(), 1, d.fstSize, file) == d.fstSize;
+        if (read) check_disc_files(d, fst.get(), d.fstSize);
+        else d.problem = DiscProblem::Unreadable;
+    }
+    std::fclose(file);
+    return d;
+}
+
+// Disc-like files next to the missing game.iso ("Zelda.iso, tp.rvz"), for the message.
+bool similarDiscFiles(char* out, std::size_t size) {
+    out[0] = 0;
+    const SceUID dir = sceIoDopen(twv::vita::DataRoot);
+    if (dir < 0) return false;
+    static const char* const extensions[] = {".iso", ".gcm", ".ciso", ".rvz", ".wbfs", ".gcz", ".wia", ".nkit", ".tgc"};
+    SceIoDirent entry{};
+    unsigned found = 0;
+    while (found < 2 && sceIoDread(dir, &entry) > 0) {
+        const char* name = entry.d_name;
+        const std::size_t length = std::strlen(name);
+        // A disc extension at the end ("Zelda.iso", "tp.rvz"), or a name starting "game.iso" with more
+        // after it (a hidden Windows extension: "game.iso.iso", "game.iso.txt").
+        bool disc = strncasecmp(name, "game.iso", 8) == 0 && length > 8;
+        for (const char* ext : extensions) {
+            const std::size_t e = std::strlen(ext);
+            disc = disc || (length > e && strcasecmp(name + length - e, ext) == 0);
+        }
+        if (!disc || std::strcmp(name, "game.iso") == 0) continue;
+        const std::size_t used = std::strlen(out);
+        std::snprintf(out + used, size - used, "%s%s", found ? ", " : "", name);
+        ++found;
+    }
+    sceIoDclose(dir);
+    return found != 0;
 }
 
 void logFreeMemory(const char* phase) {
@@ -139,6 +222,7 @@ void selectClocks(const twv::vita::ClockOptions& options) {
 }
 
 int main(int, char**) {
+    argsSource = argsToken = nullptr;
     twv::vita::telemetryInit();
     twv::vita::installFaultReceipts();
     logFreeMemory("boot");
@@ -156,12 +240,26 @@ int main(int, char**) {
     twv::vita::telemetryText("user_dir", arg2);
     twv::vita::telemetryText("disc_path", arg4);
 
-    struct stat discInfo{};
-    if (stat(arg4, &discInfo) != 0 || !S_ISREG(discInfo.st_mode)) {
-        twv::vita::telemetryText("no_disc", "Supply your own game.iso in ux0:data/twilight-vita/");
-        twv::vita::telemetryFlush();
-        sceKernelExitProcess(2);
-        return 2;
+    // The disc before anything else: Dusklight's own checks would end in its prelaunch menu, which the
+    // Vita build does not have (a black screen). Each problem gets a screen that says what to do.
+    {
+        using namespace twv::vita;
+        const DiscCheck disc = checkDisc(arg4);
+        telemetryText("disc_check", DiscProblemNames[int(disc.problem)]);
+        if (disc.gameId[0]) telemetryText("disc_id", disc.gameId);
+        telemetryEvent("disc_bytes", static_cast<long long>(disc.size));
+        if (disc.needed) telemetryEvent("disc_needed_bytes", static_cast<long long>(disc.needed));
+        if (disc.problem == DiscProblem::None) telemetryEvent("disc_tested_on_vita", disc.tested);
+        if (disc.problem != DiscProblem::None) {
+            if (disc.problem == DiscProblem::Missing)
+                telemetryText("no_disc", "Supply your own game.iso in ux0:data/twilight-vita/");
+            static char similar[SimilarLimit + 1];
+            const bool found = (disc.problem == DiscProblem::Missing || disc.problem == DiscProblem::NotAFile) &&
+                               similarDiscFiles(similar, sizeof similar);
+            if (found) telemetryText("disc_similar_files", similar);
+            disc_message(startupText, disc, arg4, found ? similar : nullptr);
+            startupErrorExit(startupText, 2);
+        }
     }
     // Optional native test entry; no actor/camera placement or fabricated save.
     // Original game_main owns option validation and original stage/spawn loading.
@@ -177,12 +275,13 @@ int main(int, char**) {
     static char sequenceText[twv::vita::SequenceFileLimit + 1];
     bool haveArgs = false, fromSequence = false;
     if (FILE* file = std::fopen(twv::vita::SequenceFile, "rb")) {
+        argsSource = "sequence.txt";
         const auto n = std::fread(sequenceText, 1, sizeof sequenceText - 1, file);
         const bool tooLong = n == sizeof sequenceText - 1 && std::fgetc(file) != EOF;
         std::fclose(file);
         if (tooLong) {
-            twv::vita::telemetryText("args_error", "sequence.txt exceeds 4096 bytes");
-            twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+            argsError("sequence.txt exceeds 4096 bytes");
+            argsExit();
         }
         sequenceText[n] = 0;
         char state[32] = {};
@@ -194,8 +293,8 @@ int main(int, char**) {
         twv::vita::SequenceRun run;
         if (twv::vita::select_sequence_run(sequenceText, index, run)) {
             if (std::strlen(run.args) >= sizeof extra) {
-                twv::vita::telemetryText("args_error", "sequence run exceeds 511 bytes");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                argsError("sequence run exceeds 511 bytes");
+                argsExit();
             }
             std::snprintf(extra, sizeof extra, "%s", run.args);
             haveArgs = fromSequence = true;
@@ -211,18 +310,18 @@ int main(int, char**) {
             twv::vita::telemetryEvent("sequence_state_saved", saved);
         } else {
             twv::vita::telemetryEvent("sequence_complete", run.count);
+            argsSource = nullptr;
         }
     }
     if (!haveArgs) {
         if (FILE* file = std::fopen("ux0:data/twilight-vita/args.txt", "rb")) {
+            argsSource = "args.txt";
             const auto n = std::fread(extra, 1, sizeof extra - 1, file);
             const bool tooLong = n == sizeof extra - 1 && std::fgetc(file) != EOF;
             std::fclose(file);
             if (tooLong) {
-                twv::vita::telemetryText("args_error", "args.txt exceeds 511 bytes");
-                twv::vita::telemetryFlush();
-                sceKernelExitProcess(2);
-                return 2;
+                argsError("args.txt exceeds 511 bytes");
+                argsExit();
             }
             extra[n] = 0;
             haveArgs = true;
@@ -233,19 +332,19 @@ int main(int, char**) {
     const auto portOption = [&](const char* token) -> int {
         const int clockOption = clockOptions.consume(token);
         if (clockOption < 0) {
-            twv::vita::telemetryText("args_error", "clock mode invalid or selected more than once; use --vita-clocks=system|legacy444");
+            argsError("clock mode invalid or selected more than once; use --vita-clocks=system|legacy444");
             return -1;
         }
         if (clockOption > 0) return 1;
         const int exitOption = exitAfter.consume(token);
         if (exitOption < 0) {
-            twv::vita::telemetryText("args_error", "--vita-exit-after needs 10..3600 seconds, once");
+            argsError("--vita-exit-after needs 10..3600 seconds, once");
             return -1;
         }
         if (exitOption > 0) return 1;
         const int gpuOption = gpuOptions.consume(token);
         if (gpuOption < 0) {
-            twv::vita::telemetryText("args_error", "GPU option invalid or selected more than once; see runtime/gpu_options.hpp");
+            argsError("GPU option invalid or selected more than once; see runtime/gpu_options.hpp");
             return -1;
         }
         if (gpuOption > 0) {
@@ -282,7 +381,7 @@ int main(int, char**) {
             (rendererOption==20 && (!twv_vita_pipeline_fast_select ||
                 !twv_vita_pipeline_fast_select(rendererOptions.pipelineFast)));
         if(rendererOption<0 || unavailable) {
-            twv::vita::telemetryText("args_error","renderer option unavailable, invalid or selected more than once");
+            argsError("renderer option unavailable, invalid or selected more than once");
             return -1;
         }
         if(rendererOption==1) {
@@ -364,58 +463,71 @@ int main(int, char**) {
     //   game memory the frame read in place is checked for changes made by the next tick.
     // --vita-fast-shadow-collect=off|on|verify (runtime/fast_shadow_collect.hpp): not a renderer
     //   choice, so it leaves the play profile alone. Default: FastShadowCollectPlay with the profile.
+    // --vita-import-saves=auto|off (aurora/save_safety.hpp, docs/ARCHITECTURE.md): default auto,
+    //   in every profile. auto: at boot, .gci files in ux0:data/twilight-vita/import/ and the save
+    //   save (ux0:data/TwilitRealm/Dusklight/<region>/Card A) are copied into the card when they are
+    //   saves for this disc and the card has no file of that name; never moved or overwritten.
     int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1, overlapChoice = -1, fastShadowChoice = -1;
+    int importChoice = -1;
     bool inputScript = false;
     if (haveArgs) {
         for (char* token = std::strtok(extra, " \t\r\n"); token; token = std::strtok(nullptr, " \t\r\n")) {
+            argsToken = token;
             if (std::strcmp(token, "--vita-frame-overlap=verify") == 0) {
                 if (overlapChoice >= 0) {
-                    twv::vita::telemetryText("args_error", "--vita-frame-overlap needs on, off or verify, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-frame-overlap needs on, off or verify, once");
+                    argsExit();
                 }
                 overlapChoice = 2;
                 continue;
             }
             if (const int choice = wordOption(token, "--vita-frame-overlap=", "off", "on", overlapChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-frame-overlap needs on, off or verify, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-frame-overlap needs on, off or verify, once");
+                    argsExit();
                 }
                 continue;
             }
             if (const int choice = twv::vita::fastShadowCollectOption(token, fastShadowChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-fast-shadow-collect needs off, on or verify, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-fast-shadow-collect needs off, on or verify, once");
+                    argsExit();
                 }
                 continue;
             }
             if (std::strcmp(token, "--vita-ticks=single") == 0) {
                 if (ticksChoice >= 0) {
-                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed, frames or single, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-ticks needs fixed, frames or single, once");
+                    argsExit();
                 }
                 ticksChoice = 2;
                 continue;
             }
             if (const int choice = wordOption(token, "--vita-ticks=", "frames", "fixed", ticksChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed, frames or single, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-ticks needs fixed, frames or single, once");
+                    argsExit();
                 }
                 continue;
             }
             if (const int choice = wordOption(token, "--vita-profile=", "off", "play", profileChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-profile needs play or off, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-profile needs play or off, once");
+                    argsExit();
                 }
                 continue;
             }
             if (const int choice = wordOption(token, "--vita-receipts=", "full", "quiet", receiptsChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-receipts needs full or quiet, once");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-receipts needs full or quiet, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-import-saves=", "off", "auto", importChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-import-saves needs auto or off, once");
+                    argsExit();
                 }
                 continue;
             }
@@ -429,31 +541,31 @@ int main(int, char**) {
                 char path[160];
                 std::snprintf(path, sizeof path, "%s/%s", twv::vita::DataRoot, name);
                 if (!valid || !twv_vita_input_script_load || !twv_vita_input_script_load(path)) {
-                    twv::vita::telemetryText("args_error", "--vita-input-script needs one readable, valid script in the data folder");
-                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                    argsError("--vita-input-script needs one readable, valid script in the data folder");
+                    argsExit();
                 }
                 inputScript = true;
                 twv::vita::telemetryText("input_script", name);
                 continue;
             }
             const int port = portOption(token);
-            if (port < 0) {twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;}
+            if (port < 0) {argsExit();}
             if (port > 0) continue;
             if(std::strncmp(token,"--vita-benchmark=",17)==0) {
 #if TWV_VITA_BENCHMARK
                 if(twv_vita_benchmark_enable(token+17))continue;
 #endif
-                twv::vita::telemetryText("args_error","benchmark unavailable, unknown or selected more than once");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                argsError("benchmark unavailable, unknown or selected more than once");
+                argsExit();
             }
             if (gameArgc == 31) {
-                twv::vita::telemetryText("args_error", "too many arguments");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);
-                return 2;
+                argsError("too many arguments");
+                argsExit();
             }
             gameArgs[gameArgc++] = token;
             twv::vita::telemetryText("extra_arg", token);
         }
+        argsToken = nullptr; // later errors are about the combination, not one option
     }
     // Play profile, through the same parse-and-select path as typed options: it applies only when
     // no renderer or backend option was typed, so each selector still runs once. Only in builds
@@ -464,8 +576,8 @@ int main(int, char**) {
         twv_vita_lazy_vertex_plan_select && twv_vita_static_geometry_select && twv_vita_gx_thread_select &&
         twv_vita_pipeline_fast_select && twv_vita_gpu_select;
     if (profileChoice == 1 && (explicitRenderer || !profileBuilt)) {
-        twv::vita::telemetryText("args_error", "--vita-profile=play with explicit renderer options or in a build without its paths");
-        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        argsError("--vita-profile=play with explicit renderer options or in a build without its paths");
+        argsExit();
     }
     const bool implicitProfile = profileChoice < 0 && !fromSequence && !explicitRenderer && ticksChoice < 0 &&
         profileBuilt;
@@ -473,15 +585,17 @@ int main(int, char**) {
     if (playProfile)
         for (const char* token : PlayProfile)
             if (portOption(token) != 1) {
-                twv::vita::telemetryText("args_error", "play profile option rejected");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                argsError("play profile option rejected");
+                argsSource = nullptr; // the build's own option, not the file's
+                argsToken = token;
+                argsExit();
             }
     // Render size 75 % (720x408, scaled up by the display) unless the command line chose one. Drawn
     // full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %
     // (fitted from g4 RUN1/RUN2 on the console). --vita-gxm-scale=100 keeps the full size.
     if (playProfile && !gpuOptions.scaleSelected && portOption("--vita-gxm-scale=75") != 1) {
-        twv::vita::telemetryText("args_error", "play profile render scale rejected");
-        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        argsError("play profile render scale rejected");
+        argsExit();
     }
     twv::vita::telemetryText("play_profile", implicitProfile ? "on" : playProfile ? "on (explicit)" :
                              profileChoice == 0 ? "off" : fromSequence ? "off (sequence run)" :
@@ -495,8 +609,8 @@ int main(int, char**) {
     if (fixedTicks) {
         static char cvar[] = "--cvar", frameCap[] = "video.maxFrameRate=30";
         if (gameArgc + 2 > 31 || !dusk_vita_fixed_ticks) {
-            twv::vita::telemetryText("args_error", "fixed ticks unavailable in this build, or too many arguments");
-            twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+            argsError("fixed ticks unavailable in this build, or too many arguments");
+            argsExit();
         }
         for (int i = gameArgc - 1; i >= 5; --i) gameArgs[i + 2] = gameArgs[i];
         gameArgs[5] = cvar;gameArgs[6] = frameCap;gameArgc += 2;
@@ -507,8 +621,8 @@ int main(int, char**) {
     // With the play profile and no typed choice: FrameOverlapPlay.
     const int overlap = overlapChoice >= 0 ? overlapChoice : playProfile ? FrameOverlapPlay : -1;
     if (overlap >= 0 && (!twv_vita_frame_overlap_select || !twv_vita_frame_overlap_select(overlap))) {
-        twv::vita::telemetryText("args_error", "--vita-frame-overlap=on needs the GX worker (--vita-gx-thread=on, as in the play profile) in a vitaGL/GXM build");
-        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        argsError("--vita-frame-overlap=on needs the GX worker (--vita-gx-thread=on, as in the play profile) in a vitaGL/GXM build");
+        argsExit();
     }
     twv::vita::telemetryText("frame_overlap_requested", overlapChoice < 0 ?
                              (overlap == 1 ? "default on (play profile)" : "default off") :
@@ -516,18 +630,21 @@ int main(int, char**) {
     const int fastShadow = fastShadowChoice >= 0 ? fastShadowChoice : playProfile ? FastShadowCollectPlay :
         int(twv::vita::FastShadowCollectOff);
     if (!twv_vita_fast_shadow_collect_select(fastShadow)) {
-        twv::vita::telemetryText("args_error", "fast shadow collection mode rejected");
-        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        argsError("fast shadow collection mode rejected");
+        argsExit();
     }
     twv::vita::telemetryText(fastShadowChoice >= 0 ? "fast_shadow_collect_requested" : "fast_shadow_collect_default",
                              twv::vita::FastShadowCollectNames[fastShadow]);
+    // Save import: used when CARDInit mounts the card, inside game_main.
+    twv_vita_save_import_select(importChoice != 0);
+    twv::vita::telemetryText("save_import_mode", importChoice < 0 ? "default auto" : importChoice ? "auto" : "off");
     // Quiet receipts with the implicit profile (free play); sequence runs, explicit profiles and
     // renderer choices keep every receipt, and --vita-receipts decides either way.
     twv::vita::telemetryQuiet(receiptsChoice >= 0 ? receiptsChoice == 1 : implicitProfile);
     gameArgs[gameArgc] = nullptr;
     if(!twv_vita_bundle_select(rendererOptions.bundle_features(),rendererOptions.memoryProfile)) {
-        twv::vita::telemetryText("args_error","render bundle unavailable or selected after first use");
-        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        argsError("render bundle unavailable or selected after first use");
+        argsExit();
     }
     if (gpuOptions.any()) {
         if (!gpuOptions.consistent() || !twv_vita_gpu_select ||
@@ -535,8 +652,8 @@ int main(int, char**) {
                                  gpuOptions.digestLast, gpuOptions.captureFirst, gpuOptions.captureLast,
                                  gpuOptions.captureStep, gpuOptions.captureMatch, gpuOptions.features,
                                  gpuOptions.splitScenes)) {
-            twv::vita::telemetryText("args_error", "GPU backend not in this build, capture-match without digest, or a GXM feature without --vita-gpu=gxm");
-            twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+            argsError("GPU backend not in this build, capture-match without digest, or a GXM feature without --vita-gpu=gxm");
+            argsExit();
         }
     }
     twv::vita::telemetryText("gpu_backend_requested", gpuOptions.backend ? "gxm" : "vgl");

@@ -11,6 +11,9 @@
 #ifndef TWV_VITA_SHADER_SOURCE_CAPTURE
 #define TWV_VITA_SHADER_SOURCE_CAPTURE 0
 #endif
+#ifndef TWV_VITA_APP_WARMUP_BUNDLE
+#define TWV_VITA_APP_WARMUP_BUNDLE 0
+#endif
 
 namespace twv::vgl {
 namespace {
@@ -24,7 +27,18 @@ uint64_t compiles=0,compileUs=0,playCompiles=0,playCompileUs=0,playCompileMaxUs=
 // A cached GXP loads in about 10 ms on a Vita; a real Cg compile takes hundreds.
 constexpr uint64_t SlowCompileUs=50000;
 }
-void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release) {
+const char* shader_bundle_path() {
+#if TWV_VITA_APP_WARMUP_BUNDLE
+    struct stat info{};
+    if(::stat(DataShaderBundle,&info)!=0 && ::stat(AppShaderBundle,&info)==0) {
+        twv::vita::telemetryText("shader_warmup_source","app0 (packaged in the VPK)");
+        return AppShaderBundle;
+    }
+#endif
+    twv::vita::telemetryText("shader_warmup_source","data folder");
+    return DataShaderBundle;
+}
+void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease release,PrepareProgress progress) {
 #if TWV_VITA_SHADER_WARMUP
     FILE* file=std::fopen(path,"rb");
     if(!file) {twv::vita::telemetryText("shader_warmup","no optional source bundle");return;}
@@ -54,6 +68,7 @@ void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease
         const uint32_t shader=compile(source.stage,source.source);
         if(shader) {release(shader);++prepared;}
         else ++failed;
+        if(progress)progress(i+1,view.count);
     }
     twv::vita::telemetryEvent("shader_warmup_prepared",prepared);
     twv::vita::telemetryEvent("shader_warmup_failed",failed);
@@ -61,7 +76,7 @@ void prepare_shader_cache(const char* path,PrepareCompile compile,PrepareRelease
     twv::vita::telemetryText("shader_warmup_phase","finished; original rendering handles uncached stages");
     twv::vita::telemetryFlush();
 #else
-    (void)path;(void)compile;(void)release;
+    (void)path;(void)compile;(void)release;(void)progress;
 #endif
 }
 void begin_shader_source_capture(const char* root) {

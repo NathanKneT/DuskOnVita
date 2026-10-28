@@ -7,6 +7,7 @@
 #include "draw_digest.hpp"
 #include "frame_capture.hpp"
 #include "runtime/telemetry.hpp"
+#include "ui/startup_screen.hpp"
 #include <psp2/kernel/processmgr.h>
 #include <sys/stat.h>
 #include <cstdio>
@@ -94,13 +95,12 @@ extern "C" int twv_vgl_init(void) {
     if(gpu().init())return 1;
     // Fail closed: the backend's own receipts name the failing call and its error code (gxm_error,
     // gfx_init_failure); this one names the backend, and the run ends here with exit code 3 instead
-    // of an abort dialog or a black screen.
+    // of an abort dialog or a black screen: the start-up screen says what the backend noted (missing
+    // shader compiler, memory, the failing call) and waits for a button.
     char text[96];
     std::snprintf(text,sizeof text,"%s backend initialization failed; exiting",gpu().name);
     twv::vita::telemetryText("gfx_init_failure",text);
-    twv::vita::telemetrySync();
-    sceKernelExitProcess(3);
-    return 0;
+    twv::vita::startupGraphicsFailureExit(3);
 }
 extern "C" void twv_vgl_shutdown(void) {
     gpu().shutdown();

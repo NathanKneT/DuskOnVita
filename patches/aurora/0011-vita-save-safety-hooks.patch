@@ -1,0 +1,141 @@
+Save safety hooks for the port (DuskOnVita, docs/ARCHITECTURE.md). Two weak extern "C"
+hooks; without a definition (any other build) the card behaves exactly as before.
+
+aurora_card_gci_before_change(folder, file, reason): CardGciFolder calls it before it
+overwrites (CARDWrite, status commit), deletes (move to _deleted) or renames a .gci, while
+the previous version is still on disk. Once per open...close cycle for an open file (one game
+save = one CARDOpen, several CARDWrites and a status commit), every time for a change to a
+closed file. The hook only reads the file; it cannot fail or delay the change past its own
+return, and the change runs unmodified after it.
+
+aurora_card_gci_before_mount(folder, game, maker, slot): CARDInit calls it for each
+GCI-folder card before it checks and opens the folder, so the port can report or repair a
+broken save and copy in a save from another build when the card has none.
+
+--- a/lib/card/CardGciFolder.hpp
++++ b/lib/card/CardGciFolder.hpp
+@@ -20,6 +20,8 @@
+     bool opened = false;
+     bool deleted = false;
+     bool dirty = false;
++    // A copy of the previous version was offered to the port during this open...close cycle.
++    bool changeAnnounced = false;
+   };
+ 
+   std::vector<GciFile> m_files;
+@@ -36,6 +38,7 @@
+   int32_t find_file(const char* filename) const;
+   GciFile* get_open_file(const FileHandle& fh);
+   const GciFile* get_open_file(const FileHandle& fh) const;
++  void before_change(GciFile& file, const char* reason);
+ 
+ public:
+   CardGciFolder() = default;
+--- a/lib/card/CardGciFolder.cpp
++++ b/lib/card/CardGciFolder.cpp
+@@ -12,6 +12,12 @@
+ #include "FileIO.hpp"
+ #include "../internal.hpp"
+ 
++// Port hook (DuskOnVita save safety): told before the card overwrites, deletes or renames a .gci
++// in this folder, while the previous version is still on disk, so the port can keep a copy. It
++// must not change the file and cannot fail the change. Weak: without it nothing is copied.
++extern "C" void aurora_card_gci_before_change(const char* folder, const char* fileName, const char* reason)
++    __attribute__((weak));
++
+ namespace aurora::card {
+ namespace {
+ Module Log("aurora::card");
+@@ -74,6 +80,19 @@
+   return file != nullptr && file->opened ? file : nullptr;
+ }
+ 
++void CardGciFolder::before_change(GciFile& file, const char* reason) {
++  // Once per open...close cycle: a game save is one CARDOpen, several CARDWrites and a status
++  // commit, and only the version before the first of them is worth keeping. A change to a file
++  // that is not open (delete, rename, status) is announced every time.
++  if (aurora_card_gci_before_change == nullptr || (file.opened && file.changeAnnounced)) {
++    return;
++  }
++  file.changeAnnounced = file.opened;
++  const auto folder = io::fs_path_to_string(m_folderPath);
++  const std::string name{reinterpret_cast<const char*>(file.filename.data()), file.filename.size()};
++  aurora_card_gci_before_change(folder.c_str(), name.c_str(), reason);
++}
++
+ CardGciFolder::CardGciFolder(CardGciFolder&& other) {
+   m_files = std::move(other.m_files);
+   m_error = other.m_error;
+@@ -141,6 +160,7 @@
+   if (auto* file = get_file(fileno)) {
+     handleOut = FileHandle{fileno, 0};
+     file->opened = true;
++    file->changeAnnounced = false;
+     return ECardResult::READY;
+   }
+   return ECardResult::NOFILE;
+@@ -213,6 +233,7 @@
+   auto file = get_open_file(fh);
+   if (file) {
+     file->opened = false;
++    file->changeAnnounced = false;
+     return ECardResult::READY;
+   }
+ 
+@@ -237,6 +258,7 @@
+   if (!file) {
+     return ECardResult::NOFILE;
+   }
++  before_change(*file, "delete");
+   const auto deletedPath = m_folderPath / "_deleted";
+   const auto source = io::fs_path_to_string(m_folderPath / file->filename);
+   const auto destination = io::fs_path_to_string(deletedPath / file->filename);
+@@ -280,6 +302,7 @@
+   if (!contents || contents->size() != file.fileSize) {
+     return ECardResult::IOERROR;
+   }
++  before_change(file, "rename");
+   File header = file.file;
+   std::strncpy(header.m_filename, newName, CARD_FILENAME_MAX);
+   File diskHeader = header;
+@@ -307,6 +330,7 @@
+     if (fh.offset < 0 || static_cast<size_t>(fh.offset) > dataSize || size > dataSize - fh.offset) {
+       return ECardResult::LIMIT;
+     }
++    before_change(*file, "write");
+     FileIO fileIO(m_folderPath / file->filename);
+     if (fileIO) {
+       if (fileIO.fileWrite(buf, size, sizeof(File) + fh.offset))
+@@ -499,6 +523,7 @@
+     if (gciFile.deleted || !gciFile.dirty) {
+       continue;
+     }
++    before_change(gciFile, "status");
+     FileIO file{m_folderPath / gciFile.filename};
+     File tempFile = gciFile.file;
+     tempFile.swapEndian();
+--- a/lib/dolphin/card.cpp
++++ b/lib/dolphin/card.cpp
+@@ -13,6 +13,11 @@
+ #include "../card/CardGciFolder.hpp"
+ #include "../io.hpp"
+ 
++// Port hook (DuskOnVita save safety): told about each GCI-folder card before CARDInit opens it,
++// so the port can check the saves in it (and fill an empty one) first. Weak: absent elsewhere.
++extern "C" void aurora_card_gci_before_mount(const char* folder, const char* game, const char* maker, int slot)
++    __attribute__((weak));
++
+ namespace {
+ aurora::Module Log("aurora::card");
+ std::array<std::unique_ptr<aurora::card::ICard>, 2> CardChannels = {{}};
+@@ -326,6 +331,10 @@
+     }
+ 
+     const auto& curPath = cardPaths[i];
++    if (aurora_card_gci_before_mount != nullptr && CARD_USE_GCI_FOLDER && !curPath.empty()) {
++      const auto folder = aurora::io::fs_path_to_string(curPath);
++      aurora_card_gci_before_mount(folder.c_str(), game, maker, i);
++    }
+ 
+     std::error_code ec;
+     if (std::filesystem::exists(curPath, ec) && CardChannels[i]->open(curPath)) {

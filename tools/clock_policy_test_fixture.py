@@ -12,7 +12,7 @@ parser.add_argument('--output', required=True)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 source = (root / 'platform/vita/main_vita.cpp').read_text()
-for header in ('psp2/kernel/processmgr.h', 'psp2/kernel/sysmem.h', 'psp2/power.h'):
+for header in ('psp2/io/dirent.h', 'psp2/kernel/processmgr.h', 'psp2/kernel/sysmem.h', 'psp2/power.h'):
     include = f'#include <{header}>\n'
     if source.count(include) != 1:
         raise SystemExit(f'Expected one SDK include: {header}')

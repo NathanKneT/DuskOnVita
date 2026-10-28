@@ -79,6 +79,11 @@ int main(int argc,char** argv) {
     assert(events.at("shader_warmup_prepared")==2 && !events.at("shader_warmup_failed"));
     failFirst=true;prepare_shader_cache(input.c_str(),compile,release);
     assert(calls==4 && releases==3 && !live && events.at("shader_warmup_failed")==1);
+    // Progress (the start-up screen): after every stage, failed ones included, with the bundle's count.
+    static std::vector<std::pair<uint32_t,uint32_t>> steps;
+    failFirst=true;
+    prepare_shader_cache(input.c_str(),compile,release,[](uint32_t done,uint32_t total){steps.emplace_back(done,total);});
+    assert((steps==std::vector<std::pair<uint32_t,uint32_t>>{{1,2},{2,2}}) && calls==6);
 #else
     assert(!calls && !releases && events.empty() && texts.empty());
 #endif
@@ -119,5 +124,18 @@ int main(int argc,char** argv) {
     assert(events.at("gfx_shader_native_compiles")==3 && events.at("gfx_shader_native_compile_us")==421000);
     assert(events.at("gfx_shader_play_compiles")==2 && events.at("gfx_shader_play_compile_us")==412000);
     assert(events.at("gfx_shader_play_compile_max_us")==400000 && events.at("gfx_shader_play_slow_compiles")==1);
-    std::printf("shader_preparation_test: warmup%d capture%d, Python bundle interoperability, all-before-native validation, bounds/fuzz, failure cleanup, one live shader and exclusive capture paths passed\n",TWV_VITA_SHADER_WARMUP,TWV_VITA_SHADER_SOURCE_CAPTURE);
+    // Bundle path (relative "ux0:..." and "app0:..." names inside the test directory): the data folder
+    // unless it has none and the build packages one (TWV_VITA_APP_WARMUP_BUNDLE).
+#ifndef TWV_VITA_APP_WARMUP_BUNDLE
+#define TWV_VITA_APP_WARMUP_BUNDLE 0
+#endif
+    std::filesystem::current_path(directory);
+    texts.clear();
+    assert(std::string(shader_bundle_path())==DataShaderBundle && texts.back().second=="data folder");
+    write(directory/AppShaderBundle,valid);
+    assert(std::string(shader_bundle_path())==(TWV_VITA_APP_WARMUP_BUNDLE?AppShaderBundle:DataShaderBundle));
+    std::filesystem::create_directories(directory/"ux0:data/twilight-vita");
+    write(directory/DataShaderBundle,valid);
+    assert(std::string(shader_bundle_path())==DataShaderBundle);
+    std::printf("shader_preparation_test: warmup%d capture%d app%d, Python bundle interoperability, all-before-native validation, bounds/fuzz, failure cleanup, one live shader, progress, bundle path and exclusive capture paths passed\n",TWV_VITA_SHADER_WARMUP,TWV_VITA_SHADER_SOURCE_CAPTURE,TWV_VITA_APP_WARMUP_BUNDLE);
 }

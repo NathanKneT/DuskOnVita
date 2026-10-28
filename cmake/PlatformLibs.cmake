@@ -114,6 +114,8 @@ add_library(twv_aurora STATIC
         ${AURORA_ROOT}/lib/card/SRAM.cpp
         ${AURORA_ROOT}/lib/card/Util.cpp
         ${AURORA_ROOT}/lib/dolphin/card.cpp
+        # patches/aurora/0011: backups, boot check and save import behind the card's hooks
+        platform/vita/aurora/save_safety.cpp
         # dvd (aurora_dvd.cmake; nod is twv_nod)
         ${AURORA_ROOT}/lib/dolphin/dvd/dvd.cpp
         ${AURORA_ROOT}/lib/dolphin/dvd/fst.cpp
@@ -173,6 +175,9 @@ set_property(SOURCE ${AURORA_ROOT}/lib/io.cpp APPEND PROPERTY
     COMPILE_DEFINITIONS TARGET_VITA=1)
 set_property(SOURCE ${AURORA_ROOT}/lib/io.cpp APPEND PROPERTY
     COMPILE_OPTIONS -Werror=frame-larger-than=8192)
+# The backup hook runs on the same 32 KiB memory-card thread: file data stays on the heap.
+set_property(SOURCE platform/vita/aurora/save_safety.cpp APPEND PROPERTY
+    COMPILE_OPTIONS -Werror=frame-larger-than=1024)
 target_link_libraries(twv_aurora PUBLIC twv_platform_headers twv_nod PRIVATE twv_aurora_mtx)
 # Same rule as Dusklight's tree for GCC 15 (CMakeLists.txt's twv_game_headers).
 target_compile_options(twv_aurora PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>)

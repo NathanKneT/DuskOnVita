@@ -436,7 +436,7 @@ int vgl_init() {
     twv::vita::telemetryText("gfx_init_phase", "initial clear return");
     // Optional private generated-source bundle; temporary shaders are released
     // individually. Startup work is reported, never charged as free gameplay.
-    twv::vgl::prepare_shader_cache("ux0:data/twilight-vita/shader_warmup.bin",prepare_compile,prepare_release);
+    twv::vgl::prepare_shader_cache(twv::vgl::shader_bundle_path(),prepare_compile,prepare_release);
     twv::vgl::begin_shader_source_capture("ux0:data/twilight-vita/shader_sources");
     return 1;
 }

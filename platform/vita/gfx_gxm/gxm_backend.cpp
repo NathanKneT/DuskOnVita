@@ -22,6 +22,7 @@
 #include "gxm_state.hpp"
 #include "gxm_timing.hpp"
 #include "runtime/telemetry.hpp"
+#include "ui/startup_screen.hpp"
 #include <psp2/display.h>
 #include <psp2/gxm.h>
 #include <psp2/kernel/modulemgr.h>
@@ -104,19 +105,26 @@ uint64_t uniformReserveFailures=0,missingTextureBinds=0,textureAllocFailures=0,t
 uint64_t ringFailures=0,drawsSkipped=0,clears=0;
 uint64_t residentAllocs=0,residentFailures=0,residentReleases=0,primitiveDraws[4]{},packedVariants=0;
 
+bool initializing=false; // gxm_init: a failure is noted for the start-up error screen
 bool ok(int result,const char* call) {
     if(result>=0)return true;
     ++errors;
-    if(errors<=16) {
-        char text[96];std::snprintf(text,sizeof text,"%s 0x%08x",call,unsigned(result));
-        twv::vita::telemetryText("gxm_error",text);
-    }
+    char text[96];std::snprintf(text,sizeof text,"%s 0x%08x",call,unsigned(result));
+    if(errors<=16)twv::vita::telemetryText("gxm_error",text);
+    if(initializing)twv::vita::startupNoteProblem(twv::vita::StartupProblem::Graphics,text,0,0);
     return false;
 }
 void* gpu_block(Block& b,const char* name,SceKernelMemBlockType type,uint32_t size,int attribs) {
     const uint32_t align=type==SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW?256u*1024u:4096u;
     size=(size+align-1)&~(align-1);
     b.uid=sceKernelAllocMemBlock(name,type,size,nullptr);
+    if(b.uid<0 && initializing) { // the start-up screen names the memory that ran short
+        const bool cdram=type==SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW;
+        SceKernelFreeMemorySizeInfo info{};info.size=sizeof info;
+        const bool known=sceKernelGetFreeMemorySize(&info)>=0;
+        twv::vita::startupNoteProblem(twv::vita::StartupProblem::Memory,cdram?"video memory (CDRAM)":"main memory",
+            known?(cdram?info.size_cdram:info.size_user):0,known?size:0);
+    }
     if(!ok(b.uid,name))return nullptr;
     if(!ok(sceKernelGetMemBlockBase(b.uid,&b.base),name)){sceKernelFreeMemBlock(b.uid);b.uid=-1;return nullptr;}
     if(attribs && !ok(sceGxmMapMemory(b.base,size,SceGxmMemoryAttribFlags(attribs)),name)) {
@@ -758,8 +766,10 @@ void timing_finalize() {
 // --- table entries ---
 int gxm_init() {
     if(ready)return 1;
+    initializing=true;
     if(!load_compiler()) {
         twv::vita::telemetryText("gfx_init_failure","GXM backend needs ur0:data/libshacccg.suprx (extracted from your own console)");
+        twv::vita::startupNoteProblem(twv::vita::StartupProblem::ShaderCompiler,nullptr,0,0);
         return 0;
     }
     SceGxmInitializeParams init{};
@@ -924,8 +934,21 @@ int gxm_init() {
     twv::vita::telemetryEvent("gxm_texture_pool_bytes",texturePool.size);
     twv::vita::telemetryEvent("gxm_resident_pool_bytes",residentMemory.size);
     twv::vita::telemetryEvent("gxm_frame_ring_bytes",ringMemory.size);
-    twv::vgl::prepare_shader_cache("ux0:data/twilight-vita/shader_warmup.bin",
-        [](uint32_t stage,const char* source)->uint32_t{return acquire_stage(stage,source)?1u:0u;},[](uint32_t){});
+    initializing=false;
+    // Start-up screen (ui/startup_screen.hpp) in the display buffer the first frame does not draw into
+    // (frontBuffer): "Loading...", then a progress bar once a stage compiles instead of loading from
+    // the GXP cache. It stays on screen until the first frame flips; frame and stage counters and the
+    // warm-up receipts are untouched (drawing time: startup_progress_draw_us).
+    static uint64_t compilesBefore;static uint32_t warmupDone,warmupTotal;
+    compilesBefore=stageCompiles;
+    twv::vita::startupProgressBegin(displayMemory[frontBuffer].base,0);
+    twv::vgl::prepare_shader_cache(twv::vgl::shader_bundle_path(),
+        [](uint32_t stage,const char* source)->uint32_t{return acquire_stage(stage,source)?1u:0u;},[](uint32_t){},
+        [](uint32_t done,uint32_t total){
+            warmupDone=done;warmupTotal=total;
+            twv::vita::startupProgressUpdate(done,total,stageCompiles>compilesBefore);
+        });
+    twv::vita::startupProgressEnd(warmupDone,warmupTotal);
     twv::vgl::begin_shader_source_capture("ux0:data/twilight-vita/shader_sources");
     return 1;
 }

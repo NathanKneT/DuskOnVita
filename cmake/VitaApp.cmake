@@ -41,10 +41,24 @@ target_link_options(twv_vita_runtime INTERFACE -Wl,--wrap=abort)
 target_link_options(twv_vita_runtime INTERFACE -Wl,--defsym=__sce_headroom=0x2000)
 target_link_libraries(twv_vita_runtime PUBLIC
         SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub SceProcessmgr_stub SceSysmem_stub ScePower_stub
-        SceAudio_stub)
+        SceAudio_stub SceDisplay_stub SceCtrl_stub)
 set_source_files_properties(platform/vita/main_vita.cpp platform/vita/compat/newlib_gaps.c PROPERTIES COMPILE_OPTIONS -fshort-enums)
 # patches/dusklight/0016: game.buttonPrompts=playstation draws its button glyphs here (no artwork).
 target_sources(twv_vita_runtime PRIVATE platform/vita/ui/ps_glyphs.cpp)
+# Start-up progress and error screens (ui/startup_screen.hpp): CPU-drawn, shown with sceDisplay.
+target_sources(twv_vita_runtime PRIVATE platform/vita/ui/startup_screen.cpp)
+# The shader warm-up bundle inside the VPK (app0:shader_warmup.bin), read when the data folder has
+# none. Off by default: the bundle is derived from the game's materials and whether to distribute it
+# is the project owner's decision. It is never part of the repository; name a local file to package.
+option(TWV_VITA_APP_WARMUP_BUNDLE "Package a shader warm-up bundle as app0:shader_warmup.bin and read it when ux0 has none" OFF)
+set(TWV_VITA_APP_WARMUP_BUNDLE_FILE "" CACHE FILEPATH "Local shader_warmup.bin to package with TWV_VITA_APP_WARMUP_BUNDLE")
+set(TWV_VPK_EXTRA_FILES)
+if(TWV_VITA_APP_WARMUP_BUNDLE)
+    if(NOT EXISTS "${TWV_VITA_APP_WARMUP_BUNDLE_FILE}")
+        message(FATAL_ERROR "TWV_VITA_APP_WARMUP_BUNDLE needs TWV_VITA_APP_WARMUP_BUNDLE_FILE (a local shader_warmup.bin)")
+    endif()
+    set(TWV_VPK_EXTRA_FILES FILE "${TWV_VITA_APP_WARMUP_BUNDLE_FILE}" shader_warmup.bin)
+endif()
 
 # Dusklight's own platform/UI layer (src/dusk: OS threads/queues, settings,
 # config, audio DSP emulation, menus). Linked; what it needs from Aurora,
@@ -157,7 +171,8 @@ if(TWV_VITA_GFX_VGL)
         COMPILE_DEFINITIONS TWV_VITA_GFX_GXM=$<BOOL:${TWV_VITA_GFX_GXM}>)
     set_property(SOURCE platform/vita/gfx_vgl/shader_preparation.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_SHADER_WARMUP=$<BOOL:${TWV_VITA_SHADER_WARMUP}>
-                            TWV_VITA_SHADER_SOURCE_CAPTURE=$<BOOL:${TWV_VITA_SHADER_SOURCE_CAPTURE}>)
+                            TWV_VITA_SHADER_SOURCE_CAPTURE=$<BOOL:${TWV_VITA_SHADER_SOURCE_CAPTURE}>
+                            TWV_VITA_APP_WARMUP_BUNDLE=$<BOOL:${TWV_VITA_APP_WARMUP_BUNDLE}>)
     set_property(SOURCE platform/vita/gfx_vgl/gpu_api.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_SAMPLER_CACHE=$<BOOL:${TWV_VITA_SAMPLER_CACHE}>
                             TWV_VITA_UNIFORM_CACHE=$<BOOL:${TWV_VITA_UNIFORM_CACHE}>
@@ -242,7 +257,8 @@ endif ()
 vita_create_self(eboot.bin twilight_vita.elf UNSAFE)
 vita_create_vpk(twilight_vita.vpk ${TWV_TITLE_ID} eboot.bin
         VERSION ${TWV_VERSION}
-        NAME "DuskOnVita (dev)")
+        NAME "DuskOnVita (dev)"
+        ${TWV_VPK_EXTRA_FILES})
 
 # Audio output probe (platform/vita/probes/audio_probe.cpp): the SceAudioOut path
 # without the game, same title ID so tools/vita3k_smoke.sh runs it as is.
