@@ -19,10 +19,10 @@ small stack of patches on top of the pinned upstreams.
   the title screen, a new game starts, the opening in Ordon plays, and saving works.
 - **It's slow.** 12 to 28 FPS in the places I've measured, where the original runs at 30. The game
   keeps its normal speed down to 15 FPS; below that, everything slows down with it.
-- **Not there yet:** the minimap and map screens, real-time shadows, bloom and the other effects that
-  need frame-buffer copies. No settings menu either (options live in text files), and no language
-  picker.
-- **Known bugs:** some textures flicker, and the 3D lock-on marker shows up in the wrong place.
+- **Not there yet:** the minimap and map screens, Link's real-time shadow, water effects, bloom and
+  depth of field (everything that needs frame-buffer copies). No settings menu either (options live
+  in text files), and no language picker.
+- **Known bugs:** some textures flicker.
 - **Not tested yet:** dungeons, the rest of the story, a full playthrough, sleep and resume, and any
   disc other than the European one.
 
@@ -79,20 +79,20 @@ Where the GX worker's time went in the house on g2c:
 | Area | State | Notes |
 | --- | --- | --- |
 | Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select around 21 FPS, Ordon around 23 |
-| Saves | ✅ | saving works on the console; rolling backups, a repair check at boot and save import too ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves"), checked in the emulator and host tests so far |
+| Saves | ✅ | saving and the rolling backups work on the console; the repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
 | Link's house, Ordon, the Faron fight | ✅ | loaded with `--stage` |
 | Castle Town, Kakariko, Hyrule Field | ⚠️ | they run, at 12-22 FPS |
 | Full-width 16:9 picture | ✅ | drawn at 75 % (720x408) and scaled to 960x544; `--vita-gxm-scale=100` for full size |
-| GXM renderer | ⚠️ | the default; `--vita-profile=off` goes back to vitaGL |
+| GXM renderer | ✅ | the default; `--vita-profile=off` goes back to vitaGL |
+| Real game speed | ✅ | fixed 30 game ticks per second, held down to 15 FPS |
 | Controls (both sticks, buttons) | ✅ | |
 | PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork |
-| Front touch in menus, gyro aim | ⚠️ | in, but not confirmed on the console yet |
-| Start-up screens | ⚠️ | a progress screen while shaders get ready, and plain error screens (no disc, wrong disc, missing shader compiler); the errors are only checked in the emulator |
+| Front touch in menus, gyro aim | ✅ | work on the console |
+| 3D lock-on marker | ✅ | works on the console |
+| Start-up screens | ✅ | the progress screen while shaders get ready works on the console; the error screens (no disc, wrong disc, missing shader compiler) are checked in the emulator |
 | Shader preparation | ⚠️ | shaders compile the first time they're needed, which stalls; an optional warm-up file moves that to start-up |
 | 3D scenes (textured, lit, fog) | ⚠️ | some textures flicker |
-| 3D lock-on marker | ⚠️ | in the wrong place |
-| Outdoor scenes | ⚠️ | a black shape shows up in some views |
-| Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes aren't in yet; draws that would read an empty copy are skipped rather than drawn black |
+| Frame-buffer effects (minimap, map, Link's shadow, water, bloom, depth of field, heat haze) | ❌ | EFB copies and off-screen passes aren't in yet; draws that would read an empty copy are skipped rather than drawn black |
 | Dungeons, a full playthrough | ❔ | not tested |
 
 ## What you need
