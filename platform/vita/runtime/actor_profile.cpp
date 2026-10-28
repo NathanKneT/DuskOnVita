@@ -26,6 +26,16 @@ using namespace twv::vita::actprof;
 extern "C" {
 // Read by patches/dusklight/0020 (J3DModel.cpp) before each part.
 unsigned char twv_j3d_prof_on = 0;
+// Read by patches/dusklight/0030 (execute detail scopes) and the wraps below: 1 while a sub frame's
+// execute handler runs.
+unsigned char twv_actsub_on = 0;
+// runtime/fast_actors.cpp: the fast paths' totals with each receipt window.
+void twv_vita_fast_actor_publish(void) __attribute__((weak));
+// painter_profile.cpp: the painter's sections, on its own sampled frames (full receipts only).
+void twv_paintprof_begin(unsigned long long start);
+void twv_paintprof_end(unsigned long long start, unsigned long long end);
+// fast_painter.cpp: its receipts, after every painter (quiet receipts too).
+void twv_vita_fast_painter_frame(void);
 }
 
 namespace {
@@ -60,6 +70,12 @@ struct Window {
     uint32_t painterFrames = 0, painterJ3dCalls = 0;
     uint64_t painterUs = 0, painterJ3dUs = 0;
     uint64_t reads = 0;
+    // Sub frames: execute detail per profile (actor_profile_stats.hpp Sub).
+    uint32_t subFrames = 0, subTicks = 0;
+    uint64_t subExecUs = 0;
+    uint32_t subUs[TypeSlots][SubCount];
+    uint32_t subCalls[TypeSlots][SubCount];
+    uint32_t subExecSlotUs[TypeSlots];
 };
 Window gWin;
 
@@ -163,6 +179,34 @@ void publish() {
         part_text(text, sizeof text, WhereNames[k], w.parts[k]);
         telemetryText("actprof_j3d", text);
     }
+    // Execute detail: the profiles with the most execute time on sub frames, then the no-process slot.
+    telemetryEvent("actprof_sub_frames", w.subFrames);
+    telemetryEvent("actprof_sub_ticks", w.subTicks);
+    telemetryEvent("actprof_sub_exec_us", (long long)w.subExecUs);
+    {
+        constexpr unsigned SubTop = 16;
+        unsigned subTop[SubTop + 1];
+        unsigned used = 0;
+        for (unsigned i = 0; i + 1 < TypeSlots; ++i) {
+            if (!w.subExecSlotUs[i]) continue;
+            unsigned pos = used < SubTop ? used : SubTop;
+            while (pos > 0 && w.subExecSlotUs[subTop[pos - 1]] < w.subExecSlotUs[i]) --pos;
+            if (pos >= SubTop) continue;
+            for (unsigned k = (used < SubTop ? used : SubTop - 1); k > pos; --k) subTop[k] = subTop[k - 1];
+            subTop[pos] = i;
+            if (used < SubTop) ++used;
+        }
+        subTop[used++] = TypeSlots - 1;
+        for (unsigned i = 0; i < used; ++i) {
+            const unsigned slot = subTop[i];
+            char head[48];
+            std::snprintf(head, sizeof head, "p=%u;ex=%lu", slot, (unsigned long)w.subExecSlotUs[slot]);
+            telemetryText("actprof_sub_type", head);
+            unsigned next = 0;
+            while (sub_text(text, sizeof text, slot, w.subUs[slot], w.subCalls[slot], &next))
+                telemetryText("actprof_sub", text);
+        }
+    }
     telemetryEvent("actprof_painter_frames", w.painterFrames);
     telemetryEvent("actprof_painter_us", (long long)w.painterUs);
     telemetryEvent("actprof_painter_j3d_us", (long long)w.painterJ3dUs);
@@ -170,6 +214,7 @@ void publish() {
     telemetryEvent("actprof_reads", (long long)w.reads);
     telemetryEvent("actprof_clock_ns", clock_ns());
     telemetryEvent("actprof_period", Period);
+    if (twv_vita_fast_actor_publish) twv_vita_fast_actor_publish();
     twv::vita::telemetryFlush();
     std::memset(static_cast<void*>(&w), 0, sizeof w);
 }
@@ -197,17 +242,49 @@ void frame_end() {
     }
     if (gMode == ModeActors) {++w.actorFrames; w.actorTicks += n;}
     if (gMode == ModeJ3D) {++w.j3dFrames; w.j3dTicks += n;}
+    if (gMode == ModeSub) {++w.subFrames; w.subTicks += n;}
     gFrame = FrameTicks{};
     if (w.frames >= WindowFrames) publish();
     gMode = twv::vita::telemetryIsQuiet() ? ModeNone : frame_mode(++gFrameNo);
     twv_j3d_prof_on = gMode == ModeJ3D ? 1 : 0;
+    twv_actsub_on = 0;
     gWhere = WhereOther;
 }
+
+// Sub frames: the part's nesting depth (a part inside itself counts once).
+unsigned gSubDepth[SubCount];
+}  // namespace
+
+// patches/dusklight/0030 scopes and the wraps below, while twv_actsub_on: begin returns the clock
+// (never 0), end charges the part to the executing process's profile.
+extern "C" unsigned long long twv_actsub_begin(unsigned sub) {
+    if (sub >= SubCount) return 0;
+    ++gSubDepth[sub];
+    const uint64_t t = now_us();
+    return t ? t : 1;
+}
+extern "C" void twv_actsub_end(unsigned sub, unsigned long long start) {
+    const uint64_t t = now_us();
+    if (sub >= SubCount || !gSubDepth[sub]) return;
+    const unsigned slot = gExec.open ? gExec.slot : TypeSlots - 1;
+    ++gWin.subCalls[slot][sub];
+    if (--gSubDepth[sub] == 0) gWin.subUs[slot][sub] += uint32_t(t - start);
+}
+namespace {
+struct SubScope {
+    explicit SubScope(unsigned s) : sub(s), start(twv_actsub_on ? twv_actsub_begin(s) : 0) {}
+    ~SubScope() {if (start) twv_actsub_end(sub, start);}
+    SubScope(const SubScope&) = delete;
+    SubScope& operator=(const SubScope&) = delete;
+    unsigned sub;
+    unsigned long long start;
+};
 }  // namespace
 
 // profile_hooks.cpp: the tick's execute and draw handlers and the painter, with the times its
 // wrappers read (end 0: the phase begins).
 extern "C" void twv_actprof_phase(unsigned phase, unsigned long long start, unsigned long long end) {
+    if (phase == PhasePainter && end) twv_vita_fast_painter_frame();
     if (twv::vita::telemetryIsQuiet()) {
         if (gMode != ModeNone || gWin.frames) {
             gMode = ModeNone;
@@ -222,13 +299,18 @@ extern "C" void twv_actprof_phase(unsigned phase, unsigned long long start, unsi
             ++gFrame.n;
             gWhere = WhereExecute;
             gExec = ExecChain{};
+            twv_actsub_on = gMode == ModeSub ? 1 : 0;
             return;
         }
         gFrame.execUs[tick_index()] += end - start;
-        if (gExec.open) {
+        if (gExec.open && gMode == ModeSub) {
+            gWin.subExecSlotUs[gExec.slot] += uint32_t(end - gExec.start);
+            gWin.subExecUs += end - gExec.first;
+        } else if (gExec.open) {
             gWin.types[gExec.slot].execUs += uint32_t(end - gExec.start);
             gWin.actorExecUs += end - gExec.first;
         }
+        twv_actsub_on = 0;
         gExec = ExecChain{};
         gWhere = WhereOther;
     } else if (phase == PhaseDraw) {
@@ -237,7 +319,8 @@ extern "C" void twv_actprof_phase(unsigned phase, unsigned long long start, unsi
         gInDraw = false;
         gWhere = WhereOther;
     } else if (phase == PhasePainter) {
-        if (!end) {gWhere = WherePainter; return;}
+        if (!end) {gWhere = WherePainter; twv_paintprof_begin(start); return;}
+        twv_paintprof_end(start, end);
         if (gMode != ModeNone) {++gWin.painterFrames; gWin.painterUs += end - start;}
         frame_end();
     }
@@ -258,9 +341,19 @@ extern "C" void twv_j3d_prof_end(unsigned part, unsigned long long start) {
 // next process (or the handler's end) charged to it. Nested calls stay in their caller's segment.
 extern "C" int __real__Z13fpcEx_ExecuteP18base_process_class(base_process_class*);
 extern "C" int __wrap__Z13fpcEx_ExecuteP18base_process_class(base_process_class* proc) {
-    if (gMode != ModeActors || gWhere != WhereExecute || gExecDepth)
+    if ((gMode != ModeActors && gMode != ModeSub) || gWhere != WhereExecute || gExecDepth)
         return __real__Z13fpcEx_ExecuteP18base_process_class(proc);
     const uint64_t t = now_us();
+    if (gMode == ModeSub) {
+        // Execute detail: the same segments, charged to the sub frame's own totals.
+        if (gExec.open) gWin.subExecSlotUs[gExec.slot] += uint32_t(t - gExec.start);
+        else gExec.first = t;
+        gExec.open = true; gExec.slot = type_slot(proc->profname); gExec.start = t;
+        ++gExecDepth;
+        const int ret = __real__Z13fpcEx_ExecuteP18base_process_class(proc);
+        --gExecDepth;
+        return ret;
+    }
     ++gWin.reads;
     if (gExec.open) gWin.types[gExec.slot].execUs += uint32_t(t - gExec.start);
     else gExec.first = t;
@@ -348,6 +441,48 @@ extern "C" int __wrap__Z17fpcM_DrawIteraterPFiPvS_E(void* func) {
     gWin.presentUs += now_us() - start;
     return ret;
 }
+
+// Execute detail (sub frames): link wrappers around calls that cross translation units. Same
+// arguments, order and results; outside sub frames each pays one flag test. Pointer arguments as
+// void* (same AAPCS registers and return values as the original declarations).
+#define TWV_SUB_WRAP_VOID(sym, sub, params, args)                                                  \
+    extern "C" void __real_##sym params;                                                           \
+    extern "C" void __wrap_##sym params {                                                          \
+        SubScope scope(sub);                                                                       \
+        __real_##sym args;                                                                         \
+    }
+#define TWV_SUB_WRAP_RET(type, sym, sub, params, args)                                             \
+    extern "C" type __real_##sym params;                                                           \
+    extern "C" type __wrap_##sym params {                                                          \
+        SubScope scope(sub);                                                                       \
+        return __real_##sym args;                                                                  \
+    }
+TWV_SUB_WRAP_VOID(_ZN8J3DModel4calcEv, SubJ3dCalc, (void* self), (self))
+TWV_SUB_WRAP_VOID(_ZN12J3DJointTree4calcEP12J3DMtxBufferRK3VecRA3_A4_Kf, SubJointTree,
+                  (void* self, void* buffer, const void* scale, const void* mtx), (self, buffer, scale, mtx))
+TWV_SUB_WRAP_VOID(_ZN12J3DMtxBuffer21calcWeightEnvelopeMtxEv, SubWeightEnv, (void* self), (self))
+TWV_SUB_WRAP_RET(bool, _ZN4dBgS6SphChkEP11dBgS_SphChkPv, SubSph, (void* self, void* chk, void* user),
+                 (self, chk, user))
+TWV_SUB_WRAP_VOID(_ZN4dBgS11WallCorrectEP9dBgS_Acch, SubWall, (void* self, void* acch), (self, acch))
+TWV_SUB_WRAP_VOID(_ZN4dBgS15WallCorrectSortEP9dBgS_Acch, SubWall, (void* self, void* acch), (self, acch))
+TWV_SUB_WRAP_RET(float, _ZN4dBgS7RoofChkEP12dBgS_RoofChk, SubRoof, (void* self, void* chk), (self, chk))
+TWV_SUB_WRAP_RET(void*, _Z16fpcLyIt_AllJudgePFPvS_S_ES_, SubSearchAll, (void* func, void* data), (func, data))
+TWV_SUB_WRAP_RET(void*, _Z13fopAcIt_JudgePFPvS_S_ES_, SubSearchActor, (void* func, void* data), (func, data))
+TWV_SUB_WRAP_RET(int, _ZN16mDoExt_McaMorfSO4playEja, SubMorfPlay, (void* self, unsigned mode, signed char rev),
+                 (self, mode, rev))
+TWV_SUB_WRAP_RET(int, _ZN14mDoExt_McaMorf4playEP3Vecja, SubMorfPlay,
+                 (void* self, void* pos, unsigned mode, signed char rev), (self, pos, mode, rev))
+TWV_SUB_WRAP_RET(int, _ZN15mDoExt_McaMorf24playEja, SubMorfPlay, (void* self, unsigned mode, signed char rev),
+                 (self, mode, rev))
+TWV_SUB_WRAP_VOID(_ZN10Z2Creature9frameworkEja, SubCreature, (void* self, unsigned mode, signed char rev),
+                  (self, mode, rev))
+TWV_SUB_WRAP_VOID(_ZN4cCcS3SetEP8cCcD_Obj, SubCcSet, (void* self, void* obj), (self, obj))
+TWV_SUB_WRAP_VOID(_ZN10dMsgFlow_c4initEP10fopAc_ac_ciiPS1_, SubMsgFlow,
+                  (void* self, void* partner, int flow, int param, void* partners), (self, partner, flow, param, partners))
+TWV_SUB_WRAP_RET(bool, _ZN4dusk4flow13bind_resourceEPKvt, SubFlowBind, (const void* bmg, unsigned short group),
+                 (bmg, group))
+#undef TWV_SUB_WRAP_VOID
+#undef TWV_SUB_WRAP_RET
 
 // The painter's J3D part: each draw buffer's packets (GX command writing included), sampled frames.
 extern "C" void __real__ZNK13J3DDrawBuffer4drawEv(const void*);

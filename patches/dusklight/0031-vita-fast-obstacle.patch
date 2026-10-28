@@ -1,0 +1,227 @@
+Vita (--vita-fast-obstacle=off|on|verify): the path obstacle search of the town passers
+(PathTrace_c::checkObstacle, NPC_PASSER / NPC_CD3) with the same result. The original walks every
+process of every layer for each passer (fpcM_Search with s_sub), so 40 passers and 19 citizens walk
+the whole process tree 59 times a tick to hand checkObstacleSub the few actors with one of nine
+names. The fast path keeps those actors, in the walk's order, from one walk with the same test, and
+reuses them while no node list anywhere changed: every change of a node link or list owner goes
+through c_node.cpp / cLs_Init, which bump twv_cls_generation. checkObstacleSub still runs for the
+same actors in the same order on live positions, and ALINK still asks dKy_darkworld_check() at that
+moment. verify runs the original walk for the game, the fast path beside it, and a fresh walk
+against the kept list, and counts differences. Off (0) unless the Vita entry selects it; the counts
+go to platform/vita/runtime/fast_actors.cpp.
+
+--- a/src/SSystem/SComponent/c_node.cpp
++++ b/src/SSystem/SComponent/c_node.cpp
+@@ -6,7 +6,20 @@
+ #include "SSystem/SComponent/c_node.h"
+ #include <types.h>
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0031): every change to any node link or node list owner goes through the
++// functions below (and cLs_Init); each bumps this count, so a cache of a process walk taken at one
++// count is exact while the count stays. Atomic: other threads may use node lists too.
++extern "C" {
++unsigned int twv_cls_generation = 0;
++}
++#define TWV_CLS_CHANGED() __atomic_fetch_add(&twv_cls_generation, 1u, __ATOMIC_RELAXED)
++#else
++#define TWV_CLS_CHANGED() ((void)0)
++#endif
++
+ void cNd_Join(node_class* node_a, node_class* node_b) {
++    TWV_CLS_CHANGED();
+     node_a->mpNextNode = node_b;
+     node_b->mpPrevNode = node_a;
+ }
+@@ -51,6 +64,7 @@
+ }
+ 
+ void cNd_SingleCut(node_class* node) {
++    TWV_CLS_CHANGED();
+     node_class* prev = node->mpPrevNode;
+     node_class* next = node->mpNextNode;
+ 
+@@ -63,6 +77,7 @@
+ }
+ 
+ void cNd_Cut(node_class* node) {
++    TWV_CLS_CHANGED();
+     if (node->mpPrevNode)
+         node->mpPrevNode->mpNextNode = NULL;
+     node->mpPrevNode = NULL;
+@@ -85,6 +100,7 @@
+ }
+ 
+ void cNd_SetObject(node_class* node, void* data) {
++    TWV_CLS_CHANGED();
+     while (node) {
+         node->mpData = data;
+         node = NODE_GET_NEXT(node);
+@@ -96,12 +112,14 @@
+ }
+ 
+ void cNd_ForcedClear(node_class* node) {
++    TWV_CLS_CHANGED();
+     node->mpPrevNode = NULL;
+     node->mpNextNode = NULL;
+     node->mpData = NULL;
+ }
+ 
+ void cNd_Create(node_class* node, void* data) {
++    TWV_CLS_CHANGED();
+     node->mpPrevNode = NULL;
+     node->mpNextNode = NULL;
+     node->mpData = data;
+--- a/src/SSystem/SComponent/c_list.cpp
++++ b/src/SSystem/SComponent/c_list.cpp
+@@ -7,7 +7,15 @@
+ #include "SSystem/SComponent/c_node.h"
+ #include <types.h>
+ 
++#if TARGET_VITA
++// patches/dusklight/0031: c_node.cpp's change count (list heads change here too).
++extern "C" unsigned int twv_cls_generation;
++#endif
++
+ void cLs_Init(node_list_class* list) {
++#if TARGET_VITA
++    __atomic_fetch_add(&twv_cls_generation, 1u, __ATOMIC_RELAXED);
++#endif
+     list->mpHead = NULL;
+     list->mpTail = NULL;
+     list->mSize = 0;
+--- a/src/d/actor/d_a_npc_cd2.cpp
++++ b/src/d/actor/d_a_npc_cd2.cpp
+@@ -1100,13 +1100,132 @@
+     return NULL;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0031): --vita-fast-obstacle=off|on|verify (platform/vita/runtime/
++// fast_actors.cpp). s_sub walks every process of every layer for each passer, and hands
++// checkObstacleSub only the actors with the names above. The fast path keeps those actors, in the
++// walk's order, from one walk with the same test, and reuses the list while no node list anywhere
++// changed (twv_cls_generation, c_node.cpp): then the walk would find the same processes in the same
++// order. Per use, ALINK still needs !dKy_darkworld_check() at that moment (a pure read), and
++// checkObstacleSub reads positions live, as the walk would. verify: the original walk decides, the
++// fast path runs on a scratch result, and a fresh walk checks the kept list.
++#include <string.h>
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++extern "C" unsigned int twv_cls_generation;
++
++namespace {
++enum { TWV_FAST_OBSTACLE = 0 };
++
++struct ObstacleCandidates {
++    enum { MAX = 512 };
++    fopAc_ac_c* actors[MAX];
++    bool isLink[MAX];
++    int count;  // MAX + 1: more than MAX, unusable
++};
++
++ObstacleCandidates s_obstacleKept;
++unsigned int s_obstacleKeptGeneration;
++bool s_obstacleKeptValid = false;
++
++static void* s_collect(void* param_1, void* param_2) {
++    if (fopAcM_IsActor(param_1) &&
++        (fopAcM_GetName(param_1) == fpcNm_ALINK_e ||
++         fopAcM_GetName(param_1) == fpcNm_NPC_CD3_e || fopAcM_GetName(param_1) == fpcNm_NPC_PASSER_e ||
++         fopAcM_GetName(param_1) == fpcNm_NPC_GUARD_e || fopAcM_GetName(param_1) == fpcNm_NPC_FGUARD_e ||
++         fopAcM_GetName(param_1) == fpcNm_NPC_SHOE_e || fopAcM_GetName(param_1) == fpcNm_NPC_KASIHANA_e ||
++         fopAcM_GetName(param_1) == fpcNm_NPC_KASIKYU_e ||
++         fopAcM_GetName(param_1) == fpcNm_NPC_KASIMICH_e))
++    {
++        ObstacleCandidates* list = static_cast<ObstacleCandidates*>(param_2);
++        if (list->count < ObstacleCandidates::MAX) {
++            list->actors[list->count] = (fopAc_ac_c*)param_1;
++            list->isLink[list->count] = fopAcM_GetName(param_1) == fpcNm_ALINK_e;
++            list->count++;
++        } else {
++            list->count = ObstacleCandidates::MAX + 1;
++        }
++    }
++    return NULL;
++}
++
++static bool obstacle_collect(ObstacleCandidates* list) {
++    list->count = 0;
++    fpcM_Search(s_collect, list);
++    return list->count <= ObstacleCandidates::MAX;
++}
++
++// The kept list, walked again when a node list changed since. False: more than MAX candidates.
++static const ObstacleCandidates* obstacle_kept(bool* walked) {
++    *walked = false;
++    if (!s_obstacleKeptValid || s_obstacleKeptGeneration != twv_cls_generation) {
++        const unsigned int generation = twv_cls_generation;
++        s_obstacleKeptValid = obstacle_collect(&s_obstacleKept);
++        s_obstacleKeptGeneration = generation;
++        *walked = true;
++        if (!s_obstacleKeptValid) {
++            return NULL;
++        }
++    }
++    return &s_obstacleKept;
++}
++
++static void obstacle_fast(PathTrace_c* trace, const ObstacleCandidates* list) {
++    for (int i = 0; i < list->count; i++) {
++        // s_sub: (ALINK && !dKy_darkworld_check()) || one of the other names.
++        if (!list->isLink[i] || !dKy_darkworld_check()) {
++            trace->checkObstacleSub(list->actors[i]);
++        }
++    }
++}
++}  // namespace
++#endif
++
+ fopAc_ac_c* PathTrace_c::checkObstacle(fopAc_ac_c* param_0) {
+     mMyself = param_0;
+     mObstacle = NULL;
+     if (fopAcM_CheckCondition(mMyself, 4)) {
+         return NULL;
+     }
++#if TARGET_VITA
++    const int fastMode = twv_vita_fast_actor_mode(TWV_FAST_OBSTACLE);
++    if (fastMode == 1) {
++        bool walked;
++        const ObstacleCandidates* list = obstacle_kept(&walked);
++        if (list != NULL) {
++            obstacle_fast(this, list);
++        } else {
++            fpcM_Search(s_sub, this);
++        }
++        twv_vita_fast_actor_count(TWV_FAST_OBSTACLE, list != NULL ? (walked ? 2 : 1) : 0, -1);
++    } else {
++        fpcM_Search(s_sub, this);
++        if (fastMode == 2) {
++            fopAc_ac_c* original = mObstacle;
++            bool walked;
++            const ObstacleCandidates* list = obstacle_kept(&walked);
++            int mismatch = -1;
++            if (list != NULL) {
++                static ObstacleCandidates s_fresh;
++                mObstacle = NULL;
++                obstacle_fast(this, list);
++                mismatch = mObstacle != original;
++                if (!obstacle_collect(&s_fresh) || s_fresh.count != list->count ||
++                    memcmp(s_fresh.actors, list->actors, sizeof(list->actors[0]) * list->count) != 0 ||
++                    memcmp(s_fresh.isLink, list->isLink, sizeof(list->isLink[0]) * list->count) != 0)
++                {
++                    mismatch = 1;
++                }
++                mObstacle = original;
++            }
++            twv_vita_fast_actor_count(TWV_FAST_OBSTACLE, list != NULL ? (walked ? 2 : 1) : 0, mismatch);
++        } else {
++            twv_vita_fast_actor_count(TWV_FAST_OBSTACLE, 0, -1);
++        }
++    }
++#else
+     fpcM_Search(s_sub, this);
++#endif
+     if (mObstacle) {
+         setAvoidPoint();
+     }

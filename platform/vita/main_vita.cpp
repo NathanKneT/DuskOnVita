@@ -10,6 +10,8 @@
 #include "runtime/fast_shadow_collect.hpp"
 #include "runtime/startup_check.hpp"
 #include "ui/startup_screen.hpp"
+#include "runtime/fast_actors.hpp"
+#include "runtime/fast_painter.hpp"
 
 #include <psp2/io/dirent.h>
 #include <psp2/kernel/processmgr.h>
@@ -87,6 +89,18 @@ constexpr int FastShadowCollectPlay = twv::vita::FastShadowCollectOn;
 // main thread's wait for the GX worker went from 16.2 to 6.7 ms per frame. A Vita3K verify run found
 // no vertex array or static display list changed by the overlapped tick (632,213 and 789,040 checks).
 constexpr int FrameOverlapPlay = 1;
+// Exact actor execute fast paths (runtime/fast_actors.hpp) with the play profile when the command
+// line does not choose, per switch. Vita3K verify runs of the six bench-v2 places (idle and walk,
+// build 20fe19e) found no difference: search 933,888 searches, bg-list 1,974,272 terrain queries,
+// flow-bind 8,190+ bindings (no mismatch receipt anywhere). obstacle saw no difference either, but
+// only a few thousand uses (twilight Castle Town's passers are hidden, and checkObstacle returns
+// before searching for hidden ones), so it stays off until a light-world Castle Town verify run.
+constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
+    twv::vita::FastActorOff, // obstacle
+    twv::vita::FastActorOn,  // search
+    twv::vita::FastActorOn,  // bg-list
+    twv::vita::FastActorOn,  // flow-bind
+};
 
 // "<prefix><a>" -> choice 0, "<prefix><b>" -> choice 1 (returns 1); another value or a second
 // time -> -1; any other token -> 0.
@@ -467,12 +481,27 @@ int main(int, char**) {
     //   in every profile. auto: at boot, .gci files in ux0:data/twilight-vita/import/ and the save
     //   save (ux0:data/TwilitRealm/Dusklight/<region>/Card A) are copied into the card when they are
     //   saves for this disc and the card has no file of that name; never moved or overwritten.
+    // --vita-fast-<name>=off|on|verify (runtime/fast_actors.hpp): the same as the shadow collection,
+    //   per switch; default FastActorPlay with the profile, off otherwise.
     int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1, overlapChoice = -1, fastShadowChoice = -1;
     int importChoice = -1;
+    int fastActorChoices[twv::vita::FastActorSwitchCount];
+    for (int& choice : fastActorChoices) choice = -1;
+    // --vita-fast-<name>=off|on|verify (runtime/fast_painter.hpp): painter speed-ups, not renderer
+    //   choices either. Default: FastPainterPlay with the profile, off otherwise.
+    int fastPainterChoices[twv::vita::FastPainterOptionCount];
+    for (int& c : fastPainterChoices) c = -1;
     bool inputScript = false;
     if (haveArgs) {
         for (char* token = std::strtok(extra, " \t\r\n"); token; token = std::strtok(nullptr, " \t\r\n")) {
             argsToken = token;
+            if (const int choice = twv::vita::fastActorOption(token, fastActorChoices)) {
+                if (choice < 0) {
+                    argsError("--vita-fast-<name> needs off, on or verify, once per name");
+                    argsExit();
+                }
+                continue;
+            }
             if (std::strcmp(token, "--vita-frame-overlap=verify") == 0) {
                 if (overlapChoice >= 0) {
                     argsError("--vita-frame-overlap needs on, off or verify, once");
@@ -491,6 +520,13 @@ int main(int, char**) {
             if (const int choice = twv::vita::fastShadowCollectOption(token, fastShadowChoice)) {
                 if (choice < 0) {
                     argsError("--vita-fast-shadow-collect needs off, on or verify, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = twv::vita::fastPainterOption(token, fastPainterChoices)) {
+                if (choice < 0) {
+                    argsError("--vita-fast-<name> needs off, on or verify, once");
                     argsExit();
                 }
                 continue;
@@ -638,6 +674,30 @@ int main(int, char**) {
     // Save import: used when CARDInit mounts the card, inside game_main.
     twv_vita_save_import_select(importChoice != 0);
     twv::vita::telemetryText("save_import_mode", importChoice < 0 ? "default auto" : importChoice ? "auto" : "off");
+    for (int which = 0; which < twv::vita::FastActorSwitchCount; ++which) {
+        const int mode = fastActorChoices[which] >= 0 ? fastActorChoices[which] :
+            playProfile ? FastActorPlay[which] : int(twv::vita::FastActorOff);
+        if (!twv_vita_fast_actor_select(which, mode)) {
+            argsError("fast actor mode rejected");
+            argsExit();
+        }
+        char text[64];
+        std::snprintf(text, sizeof text, "%s=%s%s", twv::vita::FastActorSwitchNames[which],
+                      twv::vita::FastActorModeNames[mode], fastActorChoices[which] >= 0 ? "" : " (default)");
+        twv::vita::telemetryText("fast_actor", text);
+    }
+    for (unsigned option = 0; option < twv::vita::FastPainterOptionCount; ++option) {
+        const int choice = fastPainterChoices[option];
+        const int mode = choice >= 0 ? choice : playProfile ? twv::vita::FastPainterPlay[option] : int(twv::vita::FastOff);
+        if (!twv_vita_fast_painter_select(option, mode)) {
+            argsError("fast painter mode rejected");
+            argsExit();
+        }
+        char receipt[64];
+        std::snprintf(receipt, sizeof receipt, "%s=%s%s", twv::vita::FastPainterOptionNames[option],
+                      twv::vita::FastModeNames[mode], choice >= 0 ? "" : " (default)");
+        twv::vita::telemetryText("fast_painter", receipt);
+    }
     // Quiet receipts with the implicit profile (free play); sequence runs, explicit profiles and
     // renderer choices keep every receipt, and --vita-receipts decides either way.
     twv::vita::telemetryQuiet(receiptsChoice >= 0 ? receiptsChoice == 1 : implicitProfile);

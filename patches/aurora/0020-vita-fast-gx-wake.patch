@@ -1,0 +1,208 @@
+Vita: --vita-fast-gx-wake=off|on|verify (platform/vita/runtime/fast_painter.hpp). With the GX worker
+(0007) the game thread publishes after every draw (GXEnd, display list call) and wakes the worker,
+and the worker wakes a waiting game thread after every processed range, through std::atomic
+wait/notify: on this pthread layer each notify bumps a counter and locks a shared waiter-pool mutex
+(and broadcasts a condition when a thread waits). On (and verify), the same wakes happen at the
+same points with a flag per sleeper and a semaphore: the waker changes what the sleeper waits for
+(the published position or the stop flag, the processed position), then reads the sleeper's flag
+and takes it to signal only if the sleeper raised it; a sleeper raises its flag, re-reads what it
+waits for and only then blocks (a seq_cst fence between the write and the read on both sides, so
+one of them sees the other). The FIFO bytes, their order, every publish point, drain() and the
+frame overlap's waits are unchanged; only the mechanism that wakes a sleeping thread differs.
+verify times every sleep and counts a sleeper still holding its flag two timeouts after what it
+waits for changed (a lost wakeup, recovered by the timeout). Off (the default for now,
+fast_painter.hpp) keeps std::atomic wait/notify.
+
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -11,6 +11,9 @@
+ #if TWV_VITA_GFX_VGL
+ #include <pthread.h>
+ #endif
++#if defined(__vita__)
++#include <psp2/kernel/threadmgr.h>
++#endif
+ 
+ #include <tracy/Tracy.hpp>
+ 
+@@ -64,6 +67,69 @@
+ uint64_t sDrawDoneMark = 0;
+ uint64_t sWaitUs = 0;
+ uint64_t wait_clock() noexcept { return twv_vgl_time_us ? twv_vgl_time_us() : 0; }
++
++// --vita-fast-gx-wake (patches/aurora/0020, platform/vita/runtime/fast_painter.hpp): the same wakes
++// at the same points (every publish wakes a sleeping worker, every processed range wakes a waiting
++// game thread), each a fence and a flag test and, only for a thread that is really asleep, one
++// semaphore signal. std::atomic wait/notify (off) costs a counter update, a shared waiter-pool mutex
++// and a condition broadcast per call on this pthread layer, and the game thread publishes after
++// every draw. A sleeper raises its flag, then re-reads what it waits for (the published position and
++// the stop flag, or the processed position) and only then blocks; the waker changes that, then reads
++// the flag and takes it to signal (a seq_cst fence between the write and the read on both sides, so
++// one of them sees the other). verify (2): sleeps are timed, and a sleeper that still holds its flag
++// two timeouts after what it waits for changed counts a lost wakeup.
++extern "C" int twv_gx_fast_wake_mode() noexcept __attribute__((weak));
++int sFastWake = 0;
++SceUID sWorkerSema = -1, sWaiterSema = -1;
++std::atomic<uint32_t> sWorkerSleeping{0}, sWaiterSleeping{0};
++// Counts: [0] worker signals, [1] worker sleeps, [2] waiter signals, [3] waiter sleeps, [4] lost.
++std::atomic<uint32_t> sFastWakeCounts[5]{};
++constexpr SceUInt kVerifyTimeoutUs = 2000;
++
++void count_wake(unsigned i) noexcept { sFastWakeCounts[i].fetch_add(1, std::memory_order_relaxed); }
++
++// After what the sleeper waits for has changed: wake it if it raised its flag.
++void fast_signal(std::atomic<uint32_t>& sleeping, SceUID sema, unsigned counter) noexcept {
++  std::atomic_thread_fence(std::memory_order_seq_cst);
++  if (sleeping.load(std::memory_order_relaxed) != 0 && sleeping.exchange(0, std::memory_order_acq_rel) != 0) {
++    sceKernelSignalSema(sema, 1);
++    count_wake(counter);
++  }
++}
++
++// Sleeps until signalled unless changed() already holds after the flag is raised. A signal that
++// arrives after the sleeper gave up on sleeping only causes one early return of a later sleep.
++template <typename Changed>
++void fast_sleep(std::atomic<uint32_t>& sleeping, SceUID sema, unsigned counter, Changed&& changed) noexcept {
++  sleeping.store(1, std::memory_order_relaxed);
++  std::atomic_thread_fence(std::memory_order_seq_cst);
++  if (changed()) {
++    sleeping.exchange(0, std::memory_order_acq_rel);
++    return;
++  }
++  count_wake(counter);
++  if (sFastWake != 2) {
++    sceKernelWaitSema(sema, 1, nullptr);
++    return;
++  }
++  unsigned movedTimeouts = 0;
++  while (true) {
++    SceUInt timeout = kVerifyTimeoutUs;
++    if (sceKernelWaitSema(sema, 1, &timeout) >= 0) {
++      return;
++    }
++    if (!changed()) {
++      movedTimeouts = 0;
++      continue;
++    }
++    // The waker takes the flag before it signals: still holding it a whole timeout after the
++    // change was seen means no signal is on its way.
++    if (++movedTimeouts >= 2 && sleeping.exchange(0, std::memory_order_acq_rel) != 0) {
++      count_wake(4);
++      return;
++    }
++  }
++}
+ #endif
+ 
+ void dispatch_draw_done() noexcept {
+@@ -73,10 +139,29 @@
+ }
+ 
+ void wake_worker() noexcept {
++#if defined(__vita__)
++  if (sFastWake) {
++    // Every caller has just moved the published position or set the stop flag.
++    fast_signal(sWorkerSleeping, sWorkerSema, 0);
++    return;
++  }
++#endif
+   sWorkerWake.fetch_add(1, std::memory_order_release);
+   sWorkerWake.notify_all();
+ }
+ 
++// The game thread waits for the worker to move past processed (drain, frame overlap waits).
++void wait_progress(uint64_t processed) noexcept {
++#if defined(__vita__)
++  if (sFastWake) {
++    fast_sleep(sWaiterSleeping, sWaiterSema, 3,
++               [processed] { return sProcessed.load(std::memory_order_acquire) != processed; });
++    return;
++  }
++#endif
++  sProcessed.wait(processed, std::memory_order_acquire);
++}
++
+ void process_to(uint64_t target, std::memory_order order) noexcept {
+   uint64_t processed = sProcessed.load(std::memory_order_relaxed);
+   while (processed < target) {
+@@ -99,6 +184,12 @@
+     }
+     processed += result.bytesProcessed;
+     sProcessed.store(processed, order);
++#if defined(__vita__)
++    if (sFastWake) {
++      fast_signal(sWaiterSleeping, sWaiterSema, 2);
++      continue;
++    }
++#endif
+     if (kProcessingMode != ProcessingMode::Inline) sProcessed.notify_all();
+   }
+ }
+@@ -117,6 +208,14 @@
+     if (stopRequested()) {
+       break;
+     }
++#if defined(__vita__)
++    if (sFastWake) {
++      fast_sleep(sWorkerSleeping, sWorkerSema, 1, [processed, &stopRequested] {
++        return sPublished.load(std::memory_order_acquire) != processed || stopRequested();
++      });
++      continue;
++    }
++#endif
+     sWorkerWake.wait(event, std::memory_order_acquire);
+   }
+ }
+@@ -136,6 +235,21 @@
+   if (kProcessingMode != ProcessingMode::Thread || sVitaWorkerRunning) {
+     return;
+   }
++#if defined(__vita__)
++  // Chosen once, before the worker exists (Thread mode only).
++  sFastWake = twv_gx_fast_wake_mode ? twv_gx_fast_wake_mode() : 0;
++  if (sFastWake) {
++    if (sWorkerSema < 0) {
++      sWorkerSema = sceKernelCreateSema("aurora_gx_worker_wake", 0, 0, 1, nullptr);
++    }
++    if (sWaiterSema < 0) {
++      sWaiterSema = sceKernelCreateSema("aurora_gx_waiter_wake", 0, 0, 1, nullptr);
++    }
++    if (sWorkerSema < 0 || sWaiterSema < 0) {
++      sFastWake = 0;
++    }
++  }
++#endif
+   pthread_attr_t attr;
+   pthread_attr_init(&attr);
+   pthread_attr_setstacksize(&attr, kVitaWorkerStack);
+@@ -339,7 +453,7 @@
+       const uint64_t waitStart = wait_clock();
+ #endif
+       do {
+-        sProcessed.wait(processed, std::memory_order_acquire);
++        wait_progress(processed);
+         processed = sProcessed.load(std::memory_order_acquire);
+       } while (processed < target);
+ #if defined(__vita__)
+@@ -394,12 +508,20 @@
+   }
+   const uint64_t waitStart = wait_clock();
+   do {
+-    sProcessed.wait(processed, std::memory_order_acquire);
++    wait_progress(processed);
+     processed = sProcessed.load(std::memory_order_acquire);
+   } while (processed < target);
+   sWaitUs += wait_clock() - waitStart;
+ }
+ 
++// patches/aurora/0020 (--vita-fast-gx-wake): the mode in use and its counts, for the receipts.
++extern "C" int twv_gx_fast_wake_stats(uint32_t* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 5; ++i) {
++    counts[i] = sFastWakeCounts[i].load(std::memory_order_relaxed);
++  }
++  return sFastWake;
++}
++
+ void settle_frame(uint64_t end) noexcept {
+   wait_processed(end);
+   std::unique_lock lock{sBufferMutex, std::defer_lock};

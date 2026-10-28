@@ -1,0 +1,334 @@
+Vita (--vita-fast-bg-list=off|on|verify): terrain queries (cBgS::LineCross / GroundCross,
+dBgS::WallCorrect / WallCorrectSort / RoofChk / SplGrpChk / SphChk) with the same element tests in
+the same order. Each query tests all 256 check elements for ChkUsed() (wall corrections three times
+256), though a place registers a few dozen. A bitmap beside the element table, set and cleared
+where cBgS registers, releases and resets elements (the only writers of m_used), lists the used
+ones; the loop visits them in ascending order with the original body (an unused element's test has
+no effect). If a query's own work registers or releases an element, the loop goes on as the
+original from the next index. verify compares the bitmap with every element at each query and runs
+the original loop. Off (0) unless the Vita entry selects it; the counts go to
+platform/vita/runtime/fast_actors.cpp.
+
+--- a/src/d/d_bg_s.cpp
++++ b/src/d/d_bg_s.cpp
+@@ -24,6 +24,84 @@
+ #include "d/d_vita_shadow_fast.h"
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0033): --vita-fast-bg-list=off|on|verify (platform/vita/runtime/
++// fast_actors.cpp). Every terrain query (line, ground, wall, roof, water, sphere) tests all 256
++// check elements for ChkUsed() (walls three times), though a place uses a few dozen. A bitmap kept
++// beside the element table (set and cleared where cBgS registers, releases and resets elements,
++// the only writers of m_used) lists the used ones; the fast loop visits them in ascending order
++// with the original body, so the same elements are tested in the same order (an unused element's
++// test has no effect). If a query's own work registers or releases an element (the bitmap's count
++// moves), the loop goes on as the original from the next index. verify: the bitmap is compared
++// with every element's m_used at each query, and the original loop runs.
++#include <string.h>
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++
++namespace {
++enum { TWV_FAST_BG_LIST = 2 };
++
++const cBgS* s_bgListOwner = NULL;
++u32 s_bgListUsed[8];
++u32 s_bgListGeneration = 0;
++
++void bg_list_set(const cBgS* owner, int i, bool used) {
++    if (owner != s_bgListOwner || i < 0 || i >= 0x100) {
++        return;
++    }
++    if (used) {
++        s_bgListUsed[i >> 5] |= 1u << (i & 31);
++    } else {
++        s_bgListUsed[i >> 5] &= ~(1u << (i & 31));
++    }
++    s_bgListGeneration++;
++}
++
++void bg_list_reset(const cBgS* owner) {
++    s_bgListOwner = owner;
++    memset(s_bgListUsed, 0, sizeof(s_bgListUsed));
++    s_bgListGeneration++;
++}
++
++// The original loop "for (i = 0; i < 0x100; i++) body(i, &elements[i])" (body tests ChkUsed()).
++template <typename Body>
++inline void bg_list_for(const cBgS* owner, cBgS_ChkElm* elements, Body body) {
++    const int mode = twv_vita_fast_actor_mode(TWV_FAST_BG_LIST);
++    if (mode == 1 && owner == s_bgListOwner) {
++        const u32 generation = s_bgListGeneration;
++        for (int w = 0; w < 8; w++) {
++            u32 bits = s_bgListUsed[w];
++            while (bits != 0) {
++                const int i = (w << 5) + __builtin_ctz(bits);
++                bits &= bits - 1;
++                body(i, &elements[i]);
++                if (s_bgListGeneration != generation) {
++                    for (int j = i + 1; j < 0x100; j++) {
++                        body(j, &elements[j]);
++                    }
++                    twv_vita_fast_actor_count(TWV_FAST_BG_LIST, 2, -1);
++                    return;
++                }
++            }
++        }
++        twv_vita_fast_actor_count(TWV_FAST_BG_LIST, 1, -1);
++        return;
++    }
++    int mismatch = -1;
++    if (mode == 2) {
++        mismatch = owner != s_bgListOwner;
++        for (int i = 0; i < 0x100 && !mismatch; i++) {
++            mismatch = elements[i].ChkUsed() != ((s_bgListUsed[i >> 5] >> (i & 31)) & 1);
++        }
++    }
++    twv_vita_fast_actor_count(TWV_FAST_BG_LIST, 0, mismatch);
++    for (int i = 0; i < 0x100; i++) {
++        body(i, &elements[i]);
++    }
++}
++}  // namespace
++#endif
++
+ #if DEBUG
+ int g_ground_counter;
+ int g_line_counter;
+@@ -183,6 +261,9 @@
+     do {
+         if (!m_chk_element[i].ChkUsed()) {
+             m_chk_element[i].Regist2(pbgw, actor_id, pactor);
++#if TARGET_VITA
++            bg_list_set(this, i, true);
++#endif
+             pbgw->Regist(i);
+ 
+             l_SetCounter = i + 1;
+@@ -220,6 +301,9 @@
+         #endif
+ 
+         m_chk_element[id].Release();
++#if TARGET_VITA
++        bg_list_set(this, id, false);
++#endif
+         pbgw->Release();
+     } else {
+         #if DEBUG
+@@ -258,6 +342,9 @@
+     for (int i = 0; i < 0x100; i++) {
+         m_chk_element[i].Init();
+     }
++#if TARGET_VITA
++    bg_list_reset(this);
++#endif
+ 
+     #if DEBUG
+     lbl_8074C7F8 = 0;
+@@ -278,6 +365,9 @@
+     for (int i = 0; i < 0x100; i++) {
+         m_chk_element[i].Init();
+     }
++#if TARGET_VITA
++    bg_list_reset(this);
++#endif
+ }
+ 
+ bool cBgS::LineCross(cBgS_LinChk* plinchk) {
+@@ -285,6 +375,16 @@
+     plinchk->ClrHit();
+     plinchk->PreCalc();
+ 
++#if TARGET_VITA
++    bg_list_for(this, m_chk_element, [&](int i, cBgS_ChkElm* elm) {
++        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
++            !plinchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->LineCheck(plinchk))
++        {
++            plinchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
++            plinchk->SetHit();
++        }
++    });
++#else
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
+@@ -295,6 +395,7 @@
+         }
+         elm++;
+     }
++#endif
+ 
+     return plinchk->ChkHit();
+ }
+@@ -304,6 +405,15 @@
+     pgndchk->ClearPi();
+     pgndchk->PreCheck();
+ 
++#if TARGET_VITA
++    bg_list_for(this, m_chk_element, [&](int i, cBgS_ChkElm* elm) {
++        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
++            !pgndchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->GroundCross(pgndchk))
++        {
++            pgndchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
++        }
++    });
++#else
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
+@@ -313,6 +423,7 @@
+         }
+         elm++;
+     }
++#endif
+ 
+     return pgndchk->GetNowY();
+ }
+@@ -1199,6 +1310,20 @@
+     pacch->CalcMovePosWork();
+ 
+     for (int i = 0; i < 3; i++) {
++#if TARGET_VITA
++        bg_list_for(this, m_chk_element, [&](int j, cBgS_ChkElm* elm) {
++            if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
++                dBgW_Base* pbgw = elm->m_bgw_base_ptr;
++
++                if (pbgw->ChkPriority(i) && !pacch->ChkSameActorPid(elm->m_actor_id)) {
++                    if (!pacch->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
++                        pacch->SetNowActorInfo(j, elm->m_bgw_base_ptr, elm->m_actor_id);
++                        pbgw->WallCorrect(pacch);
++                    }
++                }
++            }
++        });
++#else
+         cBgS_ChkElm* elm = m_chk_element;
+ 
+         for (int j = 0; j < 0x100; j++) {
+@@ -1214,6 +1339,7 @@
+             }
+             elm++;
+         }
++#endif
+     }
+ 
+     #if DEBUG
+@@ -1243,6 +1369,20 @@
+     pacch->CalcMovePosWork();
+ 
+     for (int i = 0; i < 3; i++) {
++#if TARGET_VITA
++        bg_list_for(this, m_chk_element, [&](int j, cBgS_ChkElm* elm) {
++            if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
++                dBgW_Base* pbgw = elm->m_bgw_base_ptr;
++
++                if (pbgw->ChkPriority(i) && !pacch->ChkSameActorPid(elm->m_actor_id)) {
++                    if (!pacch->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
++                        pacch->SetNowActorInfo(j, elm->m_bgw_base_ptr, elm->m_actor_id);
++                        pbgw->WallCorrectSort(pacch);
++                    }
++                }
++            }
++        });
++#else
+         cBgS_ChkElm* elm = m_chk_element;
+ 
+         for (int j = 0; j < 0x100; j++) {
+@@ -1258,6 +1398,7 @@
+             }
+             elm++;
+         }
++#endif
+     }
+ 
+     #if DEBUG
+@@ -1285,6 +1426,19 @@
+ 
+     proof->Init();
+ 
++#if TARGET_VITA
++    bg_list_for(this, m_chk_element, [&](int i, cBgS_ChkElm* elm) {
++        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
++            if (!proof->ChkSameActorPid(elm->m_actor_id)) {
++                dBgW_Base* pbgw = elm->m_bgw_base_ptr;
++
++                if (pbgw->RoofChk(proof)) {
++                    proof->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
++                }
++            }
++        }
++    });
++#else
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+@@ -1298,6 +1452,7 @@
+         }
+         elm++;
+     }
++#endif
+ 
+     #if DEBUG
+     if (m_hio.ChkAcchWallTimer()) {
+@@ -1327,6 +1482,23 @@
+     bool ret = false;
+     pspl->Init();
+ 
++#if TARGET_VITA
++    bg_list_for(this, m_chk_element, [&](int i, cBgS_ChkElm* elm) {
++        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
++            if (!pspl->ChkSameActorPid(elm->m_actor_id)) {
++                dBgW_Base* pbgw = elm->m_bgw_base_ptr;
++
++                if (!pspl->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
++                    if (pbgw->SplGrpChk(pspl)) {
++                        ret = true;
++                        pspl->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
++                        pspl->OnFind();
++                    }
++                }
++            }
++        }
++    });
++#else
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+@@ -1344,6 +1516,7 @@
+         }
+         elm++;
+     }
++#endif
+ 
+     #if DEBUG
+     if (m_hio.ChkAcchWallTimer()) {
+@@ -1377,6 +1550,20 @@
+     bool ret = false;
+     psphchk->Init();
+ 
++#if TARGET_VITA
++    bg_list_for(this, m_chk_element, [&](int i, cBgS_ChkElm* elm) {
++        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
++            if (!psphchk->ChkSameActorPid(elm->m_actor_id)) {
++                dBgW_Base* pbgw = elm->m_bgw_base_ptr;
++
++                if (pbgw->SphChk(psphchk, param_1)) {
++                    psphchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
++                    ret = true;
++                }
++            }
++        }
++    });
++#else
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+@@ -1391,6 +1578,7 @@
+         }
+         elm++;
+     }
++#endif
+ 
+     #if DEBUG
+     if (m_hio.ChkAcchWallTimer()) {

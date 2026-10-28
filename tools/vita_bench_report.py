@@ -2,7 +2,7 @@
 """Bench v2 report: per run and phase (idle, walk), where the frame goes and what limits it.
 
     tools/vita_bench_report.py runtime.jsonl [--walk-start 30] [--settle 10] [--markdown out.md]
-                               [--actors] [--json rows.json]
+                               [--actors] [--painter] [--json rows.json]
 
 Built on vita_run_report.py: a run is one boot; steady windows are its 30-frame profile reports with
 the player present, --settle seconds after the player first appeared, and no shader stage compiled
@@ -12,7 +12,8 @@ first step-1 receipt (input_script_step = 1); without one, --walk-start seconds 
 
 Verdict per phase, from per-frame means (ms):
 - main thread = game execute + painter, minus the wait for the GX worker when the frame overlap is on
-  (its settle sits inside execute); with the overlap off the wait is the frame-end drain, outside both;
+  (its settle sits inside execute; with the overlap off the wait is the frame-end drain, outside both)
+  and minus the game's frame limiter sleeping inside the painter (JFWDisplay::beginRender, pacing);
 - GX worker = FIFO processing; GPU = busy time (only with --vita-gxm-gpu-timing=on).
 The limit is the largest of the three; if even that one is under 75 % of the frame time, the frame is
 lost to synchronisation or pacing rather than to one thread's work. Shader compiles in play are
@@ -38,8 +39,9 @@ def overlap_on(switch_text):
 
 
 def main_work(costs, overlap):
-    """Main thread work per frame (ms): execute + painter, less the settle wait inside execute (overlap)."""
-    work = costs.get('exec_ms', 0.0) + costs.get('painter_ms', 0.0)
+    """Main thread work per frame (ms): execute + painter, less the settle wait inside execute (overlap)
+    and the frame limiter's sleep inside the painter (builds before the painter profile lack it)."""
+    work = costs.get('exec_ms', 0.0) + costs.get('painter_ms', 0.0) - costs.get('painter_sleep_ms', 0.0)
     return max(0.0, work - (costs.get('gx_wait_ms', 0.0) if overlap else 0.0))
 
 
@@ -186,6 +188,134 @@ def actor_profile(boot, t0, t1):
     return out
 
 
+PAINTPROF_COUNTS = ('frames', 'sampled_frames', 'painter_us', 'sleep_us', 'sleep_calls', 'publish_us',
+                    'publish_calls', 'finish_us', 'finish_calls', 'static_dl_us', 'static_dl_calls', 'dl_us',
+                    'dl_calls', 'reads')
+# Painter sections (runtime/painter_profile_stats.hpp names) by subsystem, for the report's groups.
+PAINTER_GROUPS = (
+    ('sky', ('sky_opa', 'sky_xlu')),
+    ('BG lists', ('bg_opa', 'bg_opa_dark', 'middle_opa', 'bg_xlu', 'bg_xlu_dark')),
+    ('object lists', ('opa', 'opa_dark', 'opa_packet', 'xlu', 'xlu_dark')),
+    ('other J3D lists', ('opa_invisible', 'xlu_invisible', 'zxlu', 'filter', 'ind_screen', 'xlu_2dscreen',
+                         'opa_3dlast')),
+    ('shadows', ('image_shadow', 'shadow')),
+    ('particles 3D', ('pa_fog_pri0_b', 'pa_normal_pri0_b', 'pa_fog_pri0_a', 'pa_normal_pri0_a', 'pa_fog_pri4',
+                      'pa_projection', 'pa_fog_pri1', 'pa_normal', 'pa_fog_pri2', 'pa_fog', 'pa_fog_pri3', 'pa_p1',
+                      'pa_darkworld', 'pa_screen')),
+    ('particles 2D', ('pa_2dgame', 'pa_2dback', 'pa_2dmenu_back', 'pa_2dfore', 'pa_2dmenu_fore')),
+    ('2D lists', ('copy2d', '2d_opa', '2d_opa_top', '2d_xlu')),
+    ('light, GX init, wipe', ('set_light', 'j3d_init', 'calc_wipe')),
+    ('other (render begin/end, motion blur, depth, captures, bloom, fade, item 3D, GX calls; limiter sleep apart)',
+     ('other',)),
+)
+
+
+def painter_profile(boot, t0, t1):
+    """Painter profile windows (runtime/painter_profile.cpp) reported in [t0, t1) ms, summed; ms per
+    sampled frame (one painted frame in four). Sections are the outermost wrapped painter calls,
+    'other' the painter time outside them; the frame limiter's sleep is inside 'other' (JFWDisplay::
+    beginRender is a virtual call) and is reported apart.
+    JPA resources and 2D draw classes are each window's top 16 (a key outside a window's top 16 is
+    missing from that window; the totals cover every key). Returns None without windows."""
+    total = {k: 0 for k in PAINTPROF_COUNTS}
+    parts, jpa, d2 = {}, {}, {}
+    jpa_total, d2_total = {'us': 0, 'c': 0, 'p': 0}, {'us': 0, 'c': 0}
+    windows, current = 0, False
+    for _, r in boot['records']:
+        name, ms = r.get('event', ''), r.get('ms', 0)
+        if not name.startswith('paintprof_'):
+            continue
+        key = name[len('paintprof_'):]
+        if key == 'window':
+            current = t0 <= ms < t1
+            windows += bool(current)
+            continue
+        if not current:
+            continue
+        if key in total and isinstance(r.get('value'), (int, float)):
+            total[key] += r['value']
+        elif 'text' in r and key in ('part', 'jpa', '2d', 'jpa_total', '2d_total'):
+            f = _fields(r['text'])
+            if key == 'part':
+                p = parts.setdefault(f['n'], {'us': 0, 'c': 0})
+            elif key == 'jpa':
+                p = jpa.setdefault(int(f['id']), {'us': 0, 'c': 0, 'p': 0})
+            elif key == '2d':
+                p = d2.setdefault(f['n'], {'us': 0, 'c': 0})
+            else:
+                p = jpa_total if key == 'jpa_total' else d2_total
+            for k in p:
+                p[k] += int(f.get(k, 0))
+    if not windows:
+        return None
+    n = total['sampled_frames']
+
+    def per(v):
+        return round(v / n / 1000.0, 3) if n else None
+
+    def count(v):
+        return round(v / n, 1) if n else None
+
+    sections = {k: {'ms': per(v['us']), 'calls': count(v['c'])} for k, v in
+                sorted(parts.items(), key=lambda kv: -kv[1]['us'])}
+    groups = []
+    for label, names in PAINTER_GROUPS:
+        us = sum(parts.get(k, {}).get('us', 0) for k in names)
+        if names == ('other',):
+            us = max(0, us - total['sleep_us'])
+        groups.append({'group': label, 'ms': per(us)})
+    groups.append({'group': 'frame limiter sleep (pacing, not work)', 'ms': per(total['sleep_us'])})
+    groups.sort(key=lambda g: -(g['ms'] or 0))
+    return {
+        'windows': windows, 'frames': total['frames'], 'sampled_frames': n,
+        'painter_ms': per(total['painter_us']), 'sleep_ms': per(total['sleep_us']),
+        'sleep_calls': count(total['sleep_calls']), 'groups': groups, 'sections': sections,
+        # FIFO hand-over to the GX worker inside the sections (publish: display lists, draw done;
+        # finish_draw: every GXEnd), each a worker wake.
+        'publish_ms': per(total['publish_us'] + total['finish_us']),
+        'publish_calls': count(total['publish_calls'] + total['finish_calls']),
+        # Display list calls (static: J3D by reference; plain: copied), their publish included.
+        'static_dl_ms': per(total['static_dl_us']), 'static_dl_calls': count(total['static_dl_calls']),
+        'dl_ms': per(total['dl_us']), 'dl_calls': count(total['dl_calls']),
+        'jpa_ms': per(jpa_total['us']), 'jpa_draws': count(jpa_total['c']), 'jpa_particles': count(jpa_total['p']),
+        'jpa': [{'id': k, 'ms': per(v['us']), 'draws': count(v['c']), 'particles': count(v['p'])}
+                for k, v in sorted(jpa.items(), key=lambda kv: -kv[1]['us'])],
+        'd2_ms': per(d2_total['us']), 'd2_draws': count(d2_total['c']),
+        'd2': [{'class': k, 'ms': per(v['us']), 'draws': count(v['c'])}
+               for k, v in sorted(d2.items(), key=lambda kv: -kv[1]['us'])],
+        'reads_per_frame': count(total['reads']),
+    }
+
+
+def painter_markdown(rows, top=10):
+    """Per run and phase: the painter split by subsystem, its largest sections, JPA resources and 2D classes."""
+    out = []
+    for r in rows:
+        p = r.get('painter')
+        if not p:
+            continue
+        out.append(f"### {r['label']} {r['phase']}: painter {fmt(p['painter_ms'])} ms per sampled frame "
+                   f"({p['sampled_frames']} of {p['frames']} frames, {p['windows']} windows)")
+        out.append('| Group | ms |')
+        out.append('|---|---:|')
+        for g in p['groups']:
+            if g['ms']:
+                out.append(f"| {g['group']} | {fmt(g['ms'])} |")
+        out.append('- largest sections: ' + ', '.join(
+            f"{k} {fmt(v['ms'])} ({fmt(v['calls'])} calls)" for k, v in list(p['sections'].items())[:top]))
+        out.append(f"- JPA: {fmt(p['jpa_ms'])} ms, {fmt(p['jpa_draws'])} emitter draws, {fmt(p['jpa_particles'])} "
+                   "particles; top: " + ', '.join(f"{j['id']} {fmt(j['ms'])} ({fmt(j['draws'])}/{fmt(j['particles'])})"
+                                                    for j in p['jpa'][:top]))
+        out.append(f"- 2D entries: {fmt(p['d2_ms'])} ms, {fmt(p['d2_draws'])} draws; top: " + ', '.join(
+            f"{d['class']} {fmt(d['ms'])} ({fmt(d['draws'])})" for d in p['d2'][:top]))
+        out.append(f"- FIFO hand-over to the GX worker (inside the sections): {fmt(p['publish_ms'])} ms, "
+                   f"{fmt(p['publish_calls'])} calls; display lists by reference {fmt(p['static_dl_ms'])} ms "
+                   f"({fmt(p['static_dl_calls'])}), copied {fmt(p['dl_ms'])} ms ({fmt(p['dl_calls'])})")
+        out.append(f"- probe clock reads per sampled frame {fmt(p['reads_per_frame'])}")
+        out.append('')
+    return '\n'.join(out) + ('\n' if out else '')
+
+
 def phase(boot, settle, start_s, end_s):
     """vita_run_report's summary of the windows between start_s and end_s after the player appears."""
     first = rr.summarize(boot, settle)[0].get('player_first_ms')
@@ -232,11 +362,16 @@ def bench(lines, settle, walk_start):
                 'overlap': overlap, 'main_ms': round(main_work(costs, overlap), 2),
                 'worker_ms': costs.get('fifo_ms'), 'gpu_ms': costs.get('gpu_busy_ms'),
                 'wait_ms': costs.get('gx_wait_ms'), 'frame_ms': round(frame, 2), 'limit': limit,
+                # Every frame: the painter, the frame limiter's sleep inside it, and the rest (its work).
+                'painter_ms': costs.get('painter_ms'), 'painter_sleep_ms': costs.get('painter_sleep_ms'),
+                'painter_work_ms': (round(costs['painter_ms'] - costs.get('painter_sleep_ms', 0.0), 2)
+                                    if costs.get('painter_ms') is not None else None),
                 'tick': tick_parts(boot, t0, t1),
                 'worker_parts': {k: v['ms'] for k, v in run.get('decode', {}).get('classes', {}).items()},
                 'compiles': whole.get('shader_play_slow_compiles'),
                 'compile_max_ms': round((whole.get('shader_play_compile_max_us') or 0) / 1000.0, 1),
                 'actors': actor_profile(boot, t0, t1),
+                'painter': painter_profile(boot, t0, t1),
             })
     return rows
 
@@ -307,12 +442,15 @@ def main():
     ap.add_argument('--walk-start', type=float, default=30.0, help='seconds after the player appears')
     ap.add_argument('--markdown', type=Path)
     ap.add_argument('--actors', action='store_true', help='add the main-thread actor profile per run and phase')
-    ap.add_argument('--json', type=Path, help='write the rows (with the actor profile) as JSON')
+    ap.add_argument('--painter', action='store_true', help='add the painter profile per run and phase')
+    ap.add_argument('--json', type=Path, help='write the rows (with the actor and painter profiles) as JSON')
     a = ap.parse_args()
     rows = bench(a.receipt.read_bytes().decode('utf-8', 'replace').splitlines(), a.settle, a.walk_start)
     text = markdown(rows)
     if a.actors:
         text += '\n' + actor_markdown(rows)
+    if a.painter:
+        text += '\n' + painter_markdown(rows)
     if a.json:
         a.json.write_text(json.dumps(rows, indent=1), encoding='utf-8')
     if a.markdown:

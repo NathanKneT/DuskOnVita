@@ -25,6 +25,8 @@ INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusiv
              'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms',
              # Game thread blocked on the GX worker (drain, or the --vita-frame-overlap settle).
              'prof_gx_wait_us': 'gx_wait_ms',
+             # The game's frame limiter sleeping inside the painter (pacing, not painter work).
+             'prof_painter_sleep_us': 'painter_sleep_ms',
              # GXM --vita-gxm-gpu-timing (platform/vita/gfx_gxm/gxm_timing.hpp): per-frame means;
              # the two *_max_ms are the largest frame of any window.
              'gxm_gpu_busy_us': 'gpu_busy_ms', 'gxm_gpu_busy_max_us': 'gpu_busy_max_ms',

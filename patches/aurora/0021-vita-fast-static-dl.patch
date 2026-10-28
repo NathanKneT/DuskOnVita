@@ -1,0 +1,161 @@
+Vita: --vita-fast-static-dl=off|on|verify (platform/vita/runtime/fast_painter.hpp). With display
+lists by reference (0006, --vita-static-geometry=on in the play profile) every J3D material and shape
+list call locks sStaticListMutex (which the GX worker also takes for its array checks) and looks the
+list up in an unordered_map for its id. On (and verify), the id the map gives is remembered in a
+direct-mapped cache with the map's generation: every change to the map (a new id, an erase, starting
+over) moves the generation on under the lock, and a cached id is used only for the same pointer,
+the same size and the same generation, when the map would give that very id. The FIFO bytes are the
+same (same id, hash 0 in mode 1); only the lookup differs. The cache needs no lock: only the thread
+that writes the FIFO (whose buffer has none) calls GXCallDisplayListStatic. With the static lists'
+own verify mode (2, hashes) the cache is not used. verify: every call also asks the map, writes the
+map's id and counts calls whose cached id differs. Off (the default for now,
+fast_painter.hpp) keeps the map lookup.
+
+--- a/lib/dolphin/gx/GXDispList.cpp
++++ b/lib/dolphin/gx/GXDispList.cpp
+@@ -30,6 +30,38 @@
+ std::atomic<u32> sDynamicArrayGen{1};
+ u32 sDynamicArrayEpoch = 0;
+ constexpr size_t MaxDynamicArrays = 4096;
++
++// --vita-fast-static-dl (patches/aurora/0021, platform/vita/runtime/fast_painter.hpp): with lists by
++// reference (mode 1), the ids sStaticLists hands out are remembered in a direct-mapped cache, so a
++// list the map already knows takes no lock and no map lookup. Every change to the map (a new id, an
++// erase, starting over) moves sStaticListGen on under the lock, and a cached id is used only with
++// the generation it was read at, the same pointer and the same size: the map would give that id.
++// Only the thread that writes the FIFO calls GXCallDisplayListStatic (the FIFO buffer itself has no
++// lock), so the cache needs none; erases from other threads move the generation under the lock.
++// verify (2): both ways, the map's id is written, different ids counted.
++extern "C" int twv_gx_fast_static_dl_mode() noexcept __attribute__((weak));
++std::atomic<u32> sStaticListGen{1};
++struct StaticCacheEntry {
++  const void* data;
++  u32 size;
++  u32 id;
++  u32 gen;
++};
++constexpr u32 StaticCacheSlots = 2048;
++StaticCacheEntry sStaticCache[StaticCacheSlots];
++int sFastStaticMode = -1;  // read at the first call
++// [0] calls taken from the cache, [1] map lookups, [2] verified calls, [3] mismatches. One writer
++// (the FIFO thread), read for the receipts elsewhere: plain loads and stores, no read-modify-write.
++std::atomic<u32> sFastStaticCounts[4]{};
++inline void count_static(unsigned i) {
++  sFastStaticCounts[i].store(sFastStaticCounts[i].load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
++}
++
++inline StaticCacheEntry& static_cache_slot(const void* data) {
++  const auto p = reinterpret_cast<uintptr_t>(data);
++  return sStaticCache[((p >> 5) ^ (p >> 16)) & (StaticCacheSlots - 1)];
++}
++
+ } // namespace
+ 
+ // platform/vita/gfx_vgl (weak: absent without the Vita backend): the start-up mode, 0 off (every
+@@ -38,6 +70,31 @@
+ // invalidation.
+ extern "C" int twv_gx_static_dl_mode() noexcept __attribute__((weak));
+ extern "C" void twv_gfx_static_dl_changed() noexcept __attribute__((weak));
++
++namespace {
++// The original lookup (under the lock): the id for data, and the generation after it.
++u32 static_list_id(const void* data, u32 nbytes, int mode, u32& hash, u32& gen) {
++  std::lock_guard lock{sStaticListMutex};
++  if (sStaticLists.size() >= MaxStaticLists) {
++    sStaticLists.clear();
++    sStaticListGen.fetch_add(1, std::memory_order_relaxed);
++  }
++  auto& list = sStaticLists[data];
++  hash = 0;
++  if (mode == 2) {
++    hash = XXH32(data, nbytes, 0) | 1;
++    if (list.id != 0 && list.size == nbytes && list.hash != hash && twv_gfx_static_dl_changed) {
++      twv_gfx_static_dl_changed();
++    }
++  }
++  if (list.id == 0 || list.size != nbytes || list.hash != hash) {
++    list = {nbytes, ++sStaticListId, hash};
++    sStaticListGen.fetch_add(1, std::memory_order_relaxed);
++  }
++  gen = sStaticListGen.load(std::memory_order_relaxed);
++  return list.id;
++}
++} // namespace
+ #endif
+ 
+ static __GXData_struct sSavedGXData;
+@@ -110,25 +167,35 @@
+   if (*reinterpret_cast<u32*>(&__gx->vNum) != 0) {
+     __GXSendFlushPrim();
+   }
+-  u32 id;
+-  u32 hash;
+-  {
+-    std::lock_guard lock{sStaticListMutex};
+-    if (sStaticLists.size() >= MaxStaticLists) {
+-      sStaticLists.clear();
+-    }
+-    auto& list = sStaticLists[data];
+-    hash = 0;
+-    if (mode == 2) {
+-      hash = XXH32(data, nbytes, 0) | 1;
+-      if (list.id != 0 && list.size == nbytes && list.hash != hash && twv_gfx_static_dl_changed) {
+-        twv_gfx_static_dl_changed();
++  if (sFastStaticMode < 0) {
++    sFastStaticMode = twv_gx_fast_static_dl_mode ? twv_gx_fast_static_dl_mode() : 0;
++  }
++  u32 id = 0;
++  u32 hash = 0;
++  bool cached = false;
++  StaticCacheEntry* slot = nullptr;
++  if (mode == 1 && sFastStaticMode != 0) {
++    slot = &static_cache_slot(data);
++    cached = slot->data == data && slot->size == nbytes &&
++             slot->gen == sStaticListGen.load(std::memory_order_acquire);
++    id = slot->id;
++  }
++  if (cached && sFastStaticMode == 1) {
++    count_static(0);
++  } else {
++    u32 gen;
++    const u32 mapId = static_list_id(data, nbytes, mode, hash, gen);
++    if (slot != nullptr) {
++      count_static(1);
++      if (cached) {
++        count_static(2);
++        if (id != mapId) {
++          count_static(3);
++        }
+       }
++      *slot = {data, nbytes, mapId, gen};
+     }
+-    if (list.id == 0 || list.size != nbytes || list.hash != hash) {
+-      list = {nbytes, ++sStaticListId, hash};
+-    }
+-    id = list.id;
++    id = mapId;
+   }
+   GX_WRITE_AURORA(GX_AURORA_CALL_DL_STATIC);
+   GX_WRITE_U64(reinterpret_cast<uintptr_t>(data));
+@@ -145,6 +212,7 @@
+ #if defined(__vita__)
+   std::lock_guard lock{sStaticListMutex};
+   sStaticLists.erase(data);
++  sStaticListGen.fetch_add(1, std::memory_order_release);
+ #else
+   (void)data;
+ #endif
+@@ -167,6 +235,13 @@
+ }
+ 
+ #if defined(__vita__)
++// patches/aurora/0021 (--vita-fast-static-dl): the mode in use and its counts, for the receipts.
++extern "C" int twv_gx_fast_static_dl_stats(u32* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 4; ++i) {
++    counts[i] = sFastStaticCounts[i].load(std::memory_order_relaxed);
++  }
++  return sFastStaticMode < 0 ? 0 : sFastStaticMode;
++}
+ // platform/vita/gfx_vgl: whether GXInvalidateArrayStatic named an array, with the generation and epoch
+ // the answer holds for; and the generation alone, without the lock. An array named after the answer
+ // moves the generation on before its new bytes are written.

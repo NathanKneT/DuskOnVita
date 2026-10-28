@@ -211,11 +211,28 @@ extern "C" int __wrap__ZN7dDemo_c6updateEv() {
     return __real__ZN7dDemo_c6updateEv();
 }
 // Collision detail, timed only with full receipts (diagnostic runs): ground and line queries come
-// by the hundred per tick, so free play (quiet receipts) pays one flag test per call instead.
+// by the hundred per tick, so free play (quiet receipts) pays one flag test per call instead. On the
+// actor profile's sub frames the same calls are also charged to the executing process's profile.
+extern "C" unsigned char twv_actsub_on __attribute__((weak));
+extern "C" unsigned long long twv_actsub_begin(unsigned sub) __attribute__((weak));
+extern "C" void twv_actsub_end(unsigned sub,unsigned long long start) __attribute__((weak));
+namespace {
+// runtime/actor_profile_stats.hpp Sub numbers.
+enum : unsigned {SubAcch=3,SubGround=4,SubLine=5};
+struct ActSubScope {
+    explicit ActSubScope(unsigned s):sub(s),start(&twv_actsub_on&&twv_actsub_on?twv_actsub_begin(s):0) {}
+    ~ActSubScope() {if(start)twv_actsub_end(sub,start);}
+    ActSubScope(const ActSubScope&)=delete;
+    ActSubScope& operator=(const ActSubScope&)=delete;
+    unsigned sub;
+    unsigned long long start;
+};
+}
 extern "C" void __real__ZN9dBgS_Acch6CrrPosER4dBgS(void*,void*);
 extern "C" void __wrap__ZN9dBgS_Acch6CrrPosER4dBgS(void* self,void* bgs) {
     if(twv::vita::telemetryIsQuiet()) {__real__ZN9dBgS_Acch6CrrPosER4dBgS(self,bgs);return;}
     twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_ACCH);
+    ActSubScope sub(SubAcch);
     __real__ZN9dBgS_Acch6CrrPosER4dBgS(self,bgs);
 }
 extern "C" float __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(void*,void*);
@@ -223,6 +240,7 @@ extern "C" float __wrap__ZN4cBgS11GroundCrossEP11cBgS_GndChk(void* self,void* ch
     if(twv::vita::telemetryIsQuiet())return __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(self,chk);
     twv_vgl_profile_add(TWV_PROFILE_TICK_BG_QUERIES,1);
     twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_GROUND);
+    ActSubScope sub(SubGround);
     return __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(self,chk);
 }
 extern "C" bool __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(void*,void*);
@@ -230,6 +248,7 @@ extern "C" bool __wrap__ZN4cBgS9LineCrossEP11cBgS_LinChk(void* self,void* chk) {
     if(twv::vita::telemetryIsQuiet())return __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(self,chk);
     twv_vgl_profile_add(TWV_PROFILE_TICK_BG_QUERIES,1);
     twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_LINE);
+    ActSubScope sub(SubLine);
     return __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(self,chk);
 }
 extern "C" void __real__ZN4dCcS4MoveEv(void*);
@@ -242,10 +261,27 @@ extern "C" void __wrap__Z14mDoAud_Executev() {
     twv::vgl::ProfileScope timer(TWV_PROFILE_GAME_AUDIO);
     __real__Z14mDoAud_Executev();
 }
+namespace {bool sInPainter=false;}
 extern "C" void __real__Z15cAPIGph_Painterv();
 extern "C" void __wrap__Z15cAPIGph_Painterv() {
     PhaseScope timer(TWV_PROFILE_PAINTER,2);
+    sInPainter=true;
     __real__Z15cAPIGph_Painterv();
+    sInPainter=false;
+}
+// The game's frame limiter inside the painter (JFWDisplay::beginRender -> waitForTick -> Limiter::
+// Sleep, Dusklight's src/dusk/time.h): its sleep is pacing, not painter work. The main loop's own
+// limiter (outside the painter) is not counted. Sampled painter frames also get it in the painter
+// profile (runtime/painter_profile.cpp, weak).
+extern "C" void twv_paintprof_sleep(uint64_t us) __attribute__((weak));
+extern "C" void __real_SDL_DelayPrecise(uint64_t);
+extern "C" void __wrap_SDL_DelayPrecise(uint64_t ns) {
+    if(!sInPainter) {__real_SDL_DelayPrecise(ns);return;}
+    const uint64_t start=twv_vgl_time_us();
+    __real_SDL_DelayPrecise(ns);
+    const uint64_t us=twv_vgl_time_us()-start;
+    twv_vgl_profile_add(TWV_PROFILE_PAINTER_SLEEP,us);
+    if(twv_paintprof_sleep)twv_paintprof_sleep(us);
 }
 extern "C" void __real_VIWaitForRetrace();
 extern "C" void __wrap_VIWaitForRetrace() {

@@ -1,0 +1,168 @@
+Vita (--vita-fast-flow-bind=off|on|verify): dusk::flow::bind_resource with the same binding.
+It parses the whole message resource (every message entry, flow node and edge) on each call, and
+the knob doors call it every tick through dMsgFlow_c::init (setActionFromFlow -> checkOpenDoor),
+a PC-port cost the original game does not have. A successful binding is kept per (resource,
+group): while no message resource was set since (dMeter2Info_setMsgResource /
+setStageMsgResource, where the game installs and drops the BMGs it binds), the resource's first
+16 bytes are the same, no mod patch exists and s_resources still holds exactly the kept entry,
+the parse would store the same entry and return true, so the call returns at once. Failed parses
+always run (and log) as before. verify runs the original call and compares it with what the kept
+binding would have answered. Off (0) unless the Vita entry selects it; the counts go to
+platform/vita/runtime/fast_actors.cpp.
+
+--- a/src/dusk/mods/svc/flow.cpp
++++ b/src/dusk/mods/svc/flow.cpp
+@@ -701,9 +701,118 @@
+     }
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0034): --vita-fast-flow-bind=off|on|verify (platform/vita/runtime/
++// fast_actors.cpp). bind_resource parses the whole message resource (every entry, node and edge)
++// on each call, and the doors call it every tick through dMsgFlow_c::init. A successful binding is
++// kept per (resource, group): while no message resource was set since (dMeter2Info_set*Resource,
++// where the game installs and drops the BMGs it binds), the resource's first 16 bytes are the
++// same, no mod patch exists, and s_resources still holds exactly the kept entry, the parse would
++// store the same entry and return true, so the call returns at once. verify: the original call,
++// compared with what the kept binding would have answered.
++enum { TWV_FAST_FLOW_BIND = 3 };
++unsigned int s_twvFlowEpoch = 0;
++
++struct BindKeep {
++    const void* bmg = nullptr;
++    uint16_t group = 0;
++    unsigned int epoch = 0;
++    uint8_t header[16] = {};
++    ResourceInfo info;
++};
++BindKeep s_bindKeep[4];
++unsigned int s_bindKeepNext = 0;
++
++bool same_resource(const ResourceInfo& a, const ResourceInfo& b) {
++    return a.bmg == b.bmg && a.group == b.group && a.nodes == b.nodes && a.edges == b.edges &&
++           a.nodeCount == b.nodeCount && a.edgeCount == b.edgeCount && a.entries == b.entries &&
++           a.entryCount == b.entryCount && a.entrySize == b.entrySize && a.textBegin == b.textBegin &&
++           a.textEnd == b.textEnd && a.valid == b.valid;
++}
++
++// The kept binding that answers this call, or nullptr.
++const BindKeep* bind_kept(const void* bmgData, uint16_t group) {
++    if (!s_patches.empty()) {
++        return nullptr;
++    }
++    for (const auto& keep : s_bindKeep) {
++        if (keep.bmg != bmgData || keep.group != group || keep.epoch != s_twvFlowEpoch ||
++            std::memcmp(keep.header, bmgData, sizeof keep.header) != 0)
++        {
++            continue;
++        }
++        const auto found = s_resources.find(bmgData);
++        return found != s_resources.end() && same_resource(found->second, keep.info) ? &keep : nullptr;
++    }
++    return nullptr;
++}
++
++void bind_keep(const void* bmgData, uint16_t group) {
++    const auto found = s_resources.find(bmgData);
++    if (found == s_resources.end()) {
++        return;
++    }
++    BindKeep* slot = nullptr;
++    for (auto& keep : s_bindKeep) {
++        if (keep.bmg == bmgData && keep.group == group) {
++            slot = &keep;
++        }
++    }
++    if (slot == nullptr) {
++        slot = &s_bindKeep[s_bindKeepNext++ % 4];
++    }
++    slot->bmg = bmgData;
++    slot->group = group;
++    slot->epoch = s_twvFlowEpoch;
++    std::memcpy(slot->header, bmgData, sizeof slot->header);
++    slot->info = found->second;
++}
++
++bool bind_resource_original(const void* bmgData, uint16_t group);
++#endif
++
+ }  // namespace
+ 
++#if TARGET_VITA
++}  // namespace dusk::flow
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++extern "C" void twv_flow_resources_changed(void) {
++    dusk::flow::s_twvFlowEpoch++;
++}
++namespace dusk::flow {
++
+ bool bind_resource(const void* bmgData, uint16_t group) {
++    const int mode = twv_vita_fast_actor_mode(TWV_FAST_FLOW_BIND);
++    if (mode == 0 || bmgData == nullptr || !valid_group(group)) {
++        return bind_resource_original(bmgData, group);
++    }
++    const BindKeep* keep = bind_kept(bmgData, group);
++    if (mode == 1 && keep != nullptr) {
++        twv_vita_fast_actor_count(TWV_FAST_FLOW_BIND, 1, -1);
++        return true;
++    }
++    // Copied before the call: the original may store a different entry.
++    const bool kept = keep != nullptr;
++    const ResourceInfo keptInfo = kept ? keep->info : ResourceInfo{};
++    const bool ok = bind_resource_original(bmgData, group);
++    int mismatch = -1;
++    if (mode == 2 && kept) {
++        const auto found = s_resources.find(bmgData);
++        mismatch = !ok || found == s_resources.end() || !same_resource(found->second, keptInfo);
++    }
++    if (ok) {
++        bind_keep(bmgData, group);
++    }
++    twv_vita_fast_actor_count(TWV_FAST_FLOW_BIND, mode == 1 && ok ? 2 : 0, mismatch);
++    return ok;
++}
++
++namespace {
++bool bind_resource_original(const void* bmgData, uint16_t group) {
++#else
++bool bind_resource(const void* bmgData, uint16_t group) {
++#endif
+     if (bmgData == nullptr || !valid_group(group)) {
+         return false;
+     }
+@@ -737,6 +846,9 @@
+     }
+     return true;
+ }
++#if TARGET_VITA
++}  // namespace
++#endif
+ 
+ bool resolve_node(const void* bmgData, uint16_t nodeIndex, FlowNodeData& outNode) {
+     const auto* resource = find_resource(bmgData);
+--- a/src/d/d_meter2_info.cpp
++++ b/src/d/d_meter2_info.cpp
+@@ -2104,11 +2104,22 @@
+     return g_meter2_info.getWindowStatus();
+ }
+ 
++#if TARGET_VITA
++// patches/dusklight/0034: a new message resource ends every kept flow binding (dusk/mods/svc/flow.cpp).
++extern "C" void twv_flow_resources_changed(void);
++#endif
++
+ void dMeter2Info_setMsgResource(void* i_res) {
++#if TARGET_VITA
++    twv_flow_resources_changed();
++#endif
+     g_meter2_info.setMsgResource(i_res);
+ }
+ 
+ void dMeter2Info_setStageMsgResource(void* i_res) {
++#if TARGET_VITA
++    twv_flow_resources_changed();
++#endif
+     g_meter2_info.setStageMsgResource(i_res);
+ }
+ 

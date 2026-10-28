@@ -12,6 +12,7 @@
 // One owner at a time: calls are serialised by the FIFO drain, as for vitaGL.
 #include "gfx_vgl/gpu_backend.h"
 #include "gfx_vgl/frame_capture.hpp"
+#include "gfx_vgl/gpu_common.hpp"
 #include "gfx_vgl/sampler_state.hpp"
 #include "gfx_vgl/shader_preparation.hpp"
 #include "gfx_vgl/staging_policy.hpp"
@@ -31,6 +32,7 @@
 #include <psp2/shacccg.h>
 #include <shacccg_ext.h>
 #include <sys/stat.h>
+#include <malloc.h>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -100,6 +102,7 @@ unsigned frontBuffer=0,backBuffer=1;
 uint32_t errors=0,draws=0,frames=0;
 uint64_t frameWaits=0,frameWaitUs=0,captureWaits=0;
 uint64_t stageCompiles=0,stageDiskHits=0,stageDiskRejects=0,stageMemoryHits=0,stageFailures=0;
+uint64_t stageGxpBytes=0; // GXP bytes the stage map holds (kept for the whole session, warm-up included)
 uint64_t programCacheHits=0,uniquePrograms=0,vertexVariants=0,fragmentVariants=0,genericAttributeVariants=0;
 uint64_t uniformReserveFailures=0,missingTextureBinds=0,textureAllocFailures=0,textureCopies=0,textureCopyBytes=0;
 uint64_t ringFailures=0,drawsSkipped=0,clears=0;
@@ -219,8 +222,19 @@ SceShaccCgSourceFile compileSource{};
 SceShaccCgSourceFile* open_source(const char*,const SceShaccCgSourceLocation*,const SceShaccCgCompileOptions*,const char**) {
     return &compileSource;
 }
-void* compiler_malloc(unsigned int size){return std::malloc(size);}
-void compiler_free(void* p){std::free(p);}
+// What the compiler holds between compiles (malloc'd through these callbacks, usable sizes).
+uint64_t compilerLiveBytes=0,compilerPeakBytes=0,compilerReleasedBytes=0;
+void* compiler_malloc(unsigned int size) {
+    void* p=std::malloc(size);
+    if(p){compilerLiveBytes+=malloc_usable_size(p);if(compilerLiveBytes>compilerPeakBytes)compilerPeakBytes=compilerLiveBytes;}
+    return p;
+}
+void compiler_free(void* p) {
+    if(!p)return;
+    const size_t n=malloc_usable_size(p);
+    compilerLiveBytes=n<=compilerLiveBytes?compilerLiveBytes-n:0;
+    std::free(p);
+}
 bool load_compiler() {
     const char* paths[]={"ur0:/data/libshacccg.suprx","ur0:data/external/libshacccg.suprx"};
     for(const char* path:paths) {
@@ -271,6 +285,9 @@ std::vector<unsigned char> compile_gxp(uint32_t stage,const char* source) {
         if(out->programData && out->programSize)blob.assign(out->programData,out->programData+out->programSize);
         sceShaccCgDestroyCompileOutput(out);
     }
+    // The heap grows about 43 KB per compiled stage (Vita3K: 390 -> 510 warm-up stages cost 5.3 MB
+    // for 1.06 KB of GXP each). sceShaccCgReleaseCompiler after a compile hung the next compile in
+    // Vita3K, so it is not called; gxm_compiler_live_bytes shows whether the compiler holds it.
     return blob;
 }
 bool valid_gxp(const std::vector<unsigned char>& blob) {
@@ -329,6 +346,7 @@ Stage* acquire_stage(uint32_t stage,const char* source) {
     }
     if(!ok(sceGxmShaderPatcherRegisterProgram(patcher,entry->program(),&entry->id),"RegisterProgram"))return nullptr;
     twv::vgl::observe_shader_compile(twv::vita::processTimeUs()-start);
+    stageGxpBytes+=entry->gxp.size();
     return stages.emplace(key,std::move(entry)).first->second.get();
 }
 
@@ -941,6 +959,8 @@ int gxm_init() {
     // warm-up receipts are untouched (drawing time: startup_progress_draw_us).
     static uint64_t compilesBefore;static uint32_t warmupDone,warmupTotal;
     compilesBefore=stageCompiles;
+    // What the warm-up keeps resident (malloc heap and the stage map's GXP bytes), for bundle sizing.
+    const auto heapBefore=twv::gpu::cpu_heap_usage();
     twv::vita::startupProgressBegin(displayMemory[frontBuffer].base,0);
     twv::vgl::prepare_shader_cache(twv::vgl::shader_bundle_path(),
         [](uint32_t stage,const char* source)->uint32_t{return acquire_stage(stage,source)?1u:0u;},[](uint32_t){},
@@ -949,6 +969,15 @@ int gxm_init() {
             twv::vita::startupProgressUpdate(done,total,stageCompiles>compilesBefore);
         });
     twv::vita::startupProgressEnd(warmupDone,warmupTotal);
+    const auto heapAfter=twv::gpu::cpu_heap_usage();
+    if(heapBefore.valid && heapAfter.valid) {
+        twv::vita::telemetryEvent("shader_warmup_heap_before_bytes",heapBefore.used);
+        twv::vita::telemetryEvent("shader_warmup_heap_after_bytes",heapAfter.used);
+    }
+    twv::vita::telemetryEvent("shader_warmup_stages_resident",stages.size());
+    twv::vita::telemetryEvent("shader_warmup_gxp_bytes",stageGxpBytes);
+    twv::vita::telemetryEvent("shader_warmup_compiler_live_bytes",compilerLiveBytes);
+    twv::vita::telemetryEvent("shader_warmup_compiler_released_bytes",compilerReleasedBytes);
     twv::vgl::begin_shader_source_capture("ux0:data/twilight-vita/shader_sources");
     return 1;
 }
@@ -1072,6 +1101,11 @@ void gxm_report() {
     twv::vita::telemetryEvent("gxm_stage_disk_rejects",stageDiskRejects);
     twv::vita::telemetryEvent("gxm_stage_memory_hits",stageMemoryHits);
     twv::vita::telemetryEvent("gxm_stage_failures",stageFailures);
+    twv::vita::telemetryEvent("gxm_stages_resident",stages.size());
+    twv::vita::telemetryEvent("gxm_stage_gxp_bytes",stageGxpBytes);
+    twv::vita::telemetryEvent("gxm_compiler_live_bytes",compilerLiveBytes);
+    twv::vita::telemetryEvent("gxm_compiler_peak_bytes",compilerPeakBytes);
+    twv::vita::telemetryEvent("gxm_compiler_released_bytes",compilerReleasedBytes);
     twv::vita::telemetryEvent("gxm_vertex_programs",vertexVariants);
     twv::vita::telemetryEvent("gxm_fragment_programs",fragmentVariants);
     twv::vita::telemetryEvent("gxm_generic_attribute_programs",genericAttributeVariants);

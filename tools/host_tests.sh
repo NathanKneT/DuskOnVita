@@ -60,7 +60,7 @@ for mode,reason in [('--coordinates-only','sample.divide==referenceDivide'),
     assert 'AddressSanitizer:' not in result.stderr and 'runtime error:' not in result.stderr,result.stderr
     print('Expected V59 shader assertion:',mode)
 PY
-for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy fast_shadow_collect; do
+for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy fast_shadow_collect fast_actors fast_painter; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$repo/platform/vita" "$repo/tests/${test}_test.cpp" -o "$out/${test}_test"
   "$out/${test}_test"
@@ -666,3 +666,7 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 # Save safety (patches/aurora/0011, docs/ARCHITECTURE.md): backups, the boot check and the
 # Save import on real folders, and the real patched card with and without the port's hooks.
 TWV_WORK="$work" bash "$repo/tools/save_safety_tests.sh" "$out/save-safety"
+# Painter profile: section names, sampling phase, keyed detail tables, top-N choice, receipt text.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/painter_profile_stats_test.cpp" -o "$out/painter_profile_stats_test"
+"$out/painter_profile_stats_test"

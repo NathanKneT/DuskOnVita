@@ -107,7 +107,7 @@ int main(int argc,char** argv) {
     begin_shader_source_capture(capture.c_str());
     const auto second=capture/"run-000000000000007B-01";
     for(unsigned i=0;i<=ShaderStageLimit;++i)capture_shader_source(1,"v");
-    assert(read(firstFile)==original && !std::filesystem::exists(second/"1024-v.cg"));
+    assert(read(firstFile)==original && !std::filesystem::exists(second/(std::to_string(ShaderStageLimit)+"-v.cg")));
     assert(std::distance(std::filesystem::directory_iterator(second),std::filesystem::directory_iterator{})==long(ShaderStageLimit));
     begin_shader_source_capture(capture.c_str());
     std::string huge(65537,'x');capture_shader_source(1,huge.c_str());

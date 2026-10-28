@@ -57,6 +57,8 @@ struct EntryState {
     int overlap = -1;
     int fastShadow = -1; // twv_vita_fast_shadow_collect_select's argument, -1 when not called
     int saveImport = -1; // twv_vita_save_import_select's argument, -1 when not called
+    std::map<int, int> fastActors; // twv_vita_fast_actor_select's arguments by switch
+    std::vector<int> fastPainter; // twv_vita_fast_painter_select's modes, by option
 } state;
 const char* axes[]{"arm", "bus", "gpu", "gpu_xbar"};
 constexpr std::array<int, 4> initial{321, -17, 111, INT_MIN};
@@ -241,6 +243,15 @@ extern "C" int twv_vita_fast_shadow_collect_select(int mode) {
 extern "C" int twv_vita_save_import_select(int mode) {
     assert(state.saveImport == -1); state.saveImport = mode; return 1;
 }
+extern "C" int twv_vita_fast_actor_select(int which, int mode) {
+    assert(!state.fastActors.count(which)); state.fastActors[which] = mode;
+    return which >= 0 && which < twv::vita::FastActorSwitchCount && mode >= 0 && mode <= 2;
+}
+// The painter speed-ups (runtime/fast_painter.hpp) are not renderer choices either: one call per
+// option, in order.
+extern "C" int twv_vita_fast_painter_select(unsigned option, int mode) {
+    assert(option == state.fastPainter.size()); state.fastPainter.push_back(mode); return mode >= 0 && mode <= 2;
+}
 extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memory) {
     state.calls.emplace_back("bundle"); ++state.bundleCalls;
     state.bundleFeatures = features; state.memoryProfile = memory; return state.bundleAvailable;
@@ -282,6 +293,13 @@ int main() {
         (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
     assert(state.fastShadow == FastShadowCollectPlay &&
            state.text.at("fast_shadow_collect_default") == twv::vita::FastShadowCollectNames[FastShadowCollectPlay]);
+    assert(state.fastPainter == std::vector<int>(std::begin(twv::vita::FastPainterPlay), std::end(twv::vita::FastPainterPlay)));
+    // --vita-fast-<name> is not a renderer choice: the implicit profile stays on.
+    fixedTicks = -1;
+    assert(run("--vita-fast-gx-wake=verify") == 7 && state.text.at("play_profile") == "on");
+    assert(state.fastPainter.size() == twv::vita::FastPainterOptionCount &&
+           state.fastPainter[twv::vita::FastGxWake] == 2 && state.selections.at("gx_thread") == 1);
+    assert(state.fastPainter[twv::vita::FastStaticDl] == twv::vita::FastPainterPlay[twv::vita::FastStaticDl]);
     // --vita-fast-shadow-collect is not a renderer choice: the implicit profile stays on.
     fixedTicks = -1;
     assert(run("--vita-fast-shadow-collect=verify --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
@@ -291,6 +309,24 @@ int main() {
     assert(run("--vita-import-saves=off") == 7 && state.text.at("play_profile") == "on" && state.saveImport == 0);
     assert(run("--vita-profile=off --vita-fast-shadow-collect=on") == 7 && state.fastShadow == 1);
     assert(state.text.at("play_profile") == "off" && state.selections.empty());
+    // --vita-fast-<name>: every switch selected once, the play profile's default unless typed.
+    assert(int(state.fastActors.size()) == twv::vita::FastActorSwitchCount && state.fastActors.at(0) == 0);
+    fixedTicks = -1;
+    assert(run("--vita-fast-obstacle=verify --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
+    assert(state.fastActors.at(twv::vita::FastObstacle) == 2 &&
+           state.fastActors.at(twv::vita::FastSearch) == FastActorPlay[twv::vita::FastSearch]);
+    constexpr int lastSwitch = twv::vita::FastActorSwitchCount - 1;
+    assert(state.text.at("fast_actor") == std::string(twv::vita::FastActorSwitchNames[lastSwitch]) + "=" +
+           twv::vita::FastActorModeNames[FastActorPlay[lastSwitch]] + " (default)");
+    fixedTicks = -1;
+    const std::string typed = std::string("--stage R_SP01,4,2,0 --vita-fast-search=on --vita-fast-") +
+        twv::vita::FastActorSwitchNames[lastSwitch] + "=verify";
+    assert(run(typed.c_str()) == 7 && state.fastActors.at(twv::vita::FastObstacle) == FastActorPlay[0] &&
+           state.fastActors.at(twv::vita::FastSearch) == 1 && state.fastActors.at(lastSwitch) == 2 &&
+           state.text.at("fast_actor") == std::string(twv::vita::FastActorSwitchNames[lastSwitch]) + "=verify");
+    for (const char* bad : {"--vita-fast-obstacle=ON", "--vita-fast-obstacle=", "--vita-fast-obstacle",
+                            "--vita-fast-obstacle=on --vita-fast-obstacle=off"})
+        checkRejected(run(bad));
     fixedTicks = -1;
     assert(run("--stage R_SP01,4,2,0 --cvar video.maxFrameRate=20") == 7 && state.text.at("play_profile") == "on");
     assert(fixedTicks == 2 && std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
@@ -399,6 +435,12 @@ int main() {
     assert(state.exitAfter == 0 && !state.events.count("sequence_index") && !state.events.count("sequence_complete"));
     // No play profile in this build: the fast shadow collection is off unless chosen.
     assert(state.fastShadow == 0 && state.text.at("fast_shadow_collect_default") == "off");
+    assert(state.fastPainter == std::vector<int>(twv::vita::FastPainterOptionCount, 0));
+    assert(run("--vita-fast-static-dl=on --vita-fast-gx-wake=verify") == 7);
+    assert(state.fastPainter[twv::vita::FastGxWake] == 2 && state.fastPainter[twv::vita::FastStaticDl] == 1);
+    for (const char* bad : {"--vita-fast-gx-wake=ON", "--vita-fast-static-dl=onx",
+                            "--vita-fast-gx-wake=off --vita-fast-gx-wake=on"})
+        checkRejected(run(bad));
     assert(run("--vita-fast-shadow-collect=on --vita-clocks=system") == 7); checkClocks(false, true);
     assert(state.fastShadow == 1 && state.text.at("fast_shadow_collect_requested") == "on" && state.gameArgs.size() == 5);
     for (const char* bad : {"--vita-fast-shadow-collect=ON", "--vita-fast-shadow-collect=onx",

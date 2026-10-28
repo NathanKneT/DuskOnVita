@@ -1,0 +1,339 @@
+Vita (--vita-fast-search=off|on|verify): process searches (fpcLyIt_AllJudge: fpcM_Search,
+fpcEx_Search, fpcM_SearchByName, fpcEx_SearchByID) and actor queue searches (fopAcIt_Judge:
+fopAcM_SearchByID, fopAcM_SearchByName, fopAcM_Search) with the same judge calls in the same order.
+The original chases every layer's node lists (node, next node, tag data) for each search; the fast
+path keeps one walk's tags and tag data in arrays and hands the judge the data from there while no
+node list anywhere changed (twv_cls_generation, patches/dusklight/0031). The count is read after
+every judge call: once a judge changed a list, the search goes on exactly as the original loop
+would from that point (the next node it had already read, then live links, the layer's remaining
+lists, the remaining layers). verify runs the original walk for the game (judges may have side
+effects, so they run once) and compares the kept arrays with a fresh walk. Off (0) unless the Vita
+entry selects it; the counts go to platform/vita/runtime/fast_actors.cpp.
+
+--- a/src/f_pc/f_pc_layer_iter.cpp
++++ b/src/f_pc/f_pc_layer_iter.cpp
+@@ -50,6 +50,167 @@
+     return cTrIt_Judge(&i_layer->node_tree, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, &iter);
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0032): --vita-fast-search=off|on|verify (platform/vita/runtime/
++// fast_actors.cpp). fpcLyIt_AllJudge chases every layer's node lists (node -> next node -> tag data)
++// to hand each process to the judge. The fast path keeps the processes of one such walk in an array,
++// in the same order, and hands them to the judge from there while no node list anywhere changed
++// (twv_cls_generation, c_node.cpp): the walk would then meet the same tags with the same data. The
++// count is checked after every judge call; once a judge changed a list, the walk goes on exactly as
++// the original loop would from that point: the next node it had already read (the kept array's next
++// node of the same list), then live links, the layer's remaining lists, the remaining layers.
++// verify: the original walk for the game (judges may have side effects, so they run once), and the
++// kept array compared with a fresh walk of the same lists.
++#include "SSystem/SComponent/c_list_iter.h"
++#include "SSystem/SComponent/c_node.h"
++#include "SSystem/SComponent/c_tag.h"
++#include <string.h>
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++extern "C" unsigned int twv_cls_generation;
++
++namespace {
++enum { TWV_FAST_SEARCH = 1 };
++
++struct WalkKeep {
++    enum { MAX_TAGS = 2048, MAX_LISTS = 256, MAX_LAYERS = 32 };
++    create_tag_class* tags[MAX_TAGS];
++    void* data[MAX_TAGS];
++    int listEnd[MAX_LISTS];            // one past the list's last tag
++    layer_class* layers[MAX_LAYERS];
++    node_list_class* layerLists[MAX_LAYERS];
++    int layerListCount[MAX_LAYERS];
++    int tagCount, listCount, layerCount;
++};
++
++WalkKeep s_walkKeep;
++WalkKeep s_walkFresh;
++unsigned int s_walkKeepGeneration;
++bool s_walkKeepValid = false;
++
++// The original walk's order without judges: every layer from the root, each of its lists (as
++// cTrIt_Judge, from the tree's list array), each list's nodes from the head (cLsIt_Judge with
++// mSize > 0, then cNdIt_Judge's links). False: more than the arrays hold.
++static bool walk_collect(WalkKeep* keep) {
++    keep->tagCount = keep->listCount = keep->layerCount = 0;
++    for (layer_class* layer = fpcLy_RootLayer(); layer != NULL; layer = (layer_class*)layer->node.mpNextNode) {
++        if (keep->layerCount >= WalkKeep::MAX_LAYERS) {
++            return false;
++        }
++        node_list_class* list = layer->node_tree.mpLists;
++        int count = layer->node_tree.mNumLists;
++        keep->layers[keep->layerCount] = layer;
++        keep->layerLists[keep->layerCount] = list;
++        keep->layerListCount[keep->layerCount] = count;
++        keep->layerCount++;
++        for (; count-- > 0; list++) {
++            if (keep->listCount >= WalkKeep::MAX_LISTS) {
++                return false;
++            }
++            if (list->mSize > 0) {
++                for (node_class* node = list->mpHead; node != NULL; node = node->mpNextNode) {
++                    if (keep->tagCount >= WalkKeep::MAX_TAGS) {
++                        return false;
++                    }
++                    keep->tags[keep->tagCount] = (create_tag_class*)node;
++                    keep->data[keep->tagCount] = ((create_tag_class*)node)->mpTagData;
++                    keep->tagCount++;
++                }
++            }
++            keep->listEnd[keep->listCount++] = keep->tagCount;
++        }
++    }
++    return true;
++}
++
++static bool walk_same(const WalkKeep* a, const WalkKeep* b) {
++    return a->tagCount == b->tagCount && a->listCount == b->listCount && a->layerCount == b->layerCount &&
++           memcmp(a->tags, b->tags, sizeof(a->tags[0]) * a->tagCount) == 0 &&
++           memcmp(a->data, b->data, sizeof(a->data[0]) * a->tagCount) == 0 &&
++           memcmp(a->listEnd, b->listEnd, sizeof(a->listEnd[0]) * a->listCount) == 0 &&
++           memcmp(a->layers, b->layers, sizeof(a->layers[0]) * a->layerCount) == 0 &&
++           memcmp(a->layerLists, b->layerLists, sizeof(a->layerLists[0]) * a->layerCount) == 0 &&
++           memcmp(a->layerListCount, b->layerListCount, sizeof(a->layerListCount[0]) * a->layerCount) == 0;
++}
++
++// The kept walk, taken again when a node list changed since. NULL: more than the arrays hold.
++static const WalkKeep* walk_kept(bool* walked) {
++    *walked = false;
++    if (!s_walkKeepValid || s_walkKeepGeneration != twv_cls_generation) {
++        const unsigned int generation = twv_cls_generation;
++        s_walkKeepValid = walk_collect(&s_walkKeep);
++        s_walkKeepGeneration = generation;
++        *walked = true;
++    }
++    return s_walkKeepValid ? &s_walkKeep : NULL;
++}
++
++// cNdIt_Judge from the node the loop had already read as next, reading links live.
++static void* walk_resume_nodes(node_class* node, layer_iter* iter) {
++    node_class* pNext = NODE_GET_NEXT(node);
++    while (node) {
++        void* ret = cTgIt_JudgeFilter((create_tag_class*)node, (judge_filter*)iter);
++        if (ret != NULL) {
++            return ret;
++        }
++        node = pNext;
++        pNext = NODE_GET_NEXT(pNext);
++    }
++    return NULL;
++}
++
++// Every entry is read before the judge runs: a judge's own search may take the kept walk again
++// (only once a list changed, and then this walk leaves the array at once).
++static void* walk_fast(const WalkKeep* keep, layer_iter* iter) {
++    const unsigned int generation = twv_cls_generation;
++    fpcLyIt_JudgeFunc func = (fpcLyIt_JudgeFunc)iter->func;
++    const int layerCount = keep->layerCount;
++    int tag = 0;
++    int listNo = 0;
++    for (int a = 0; a < layerCount; a++) {
++        layer_class* const layerA = keep->layers[a];
++        node_list_class* const listsA = keep->layerLists[a];
++        const int lists = keep->layerListCount[a];
++        for (int li = 0; li < lists; li++, listNo++) {
++            const int end = keep->listEnd[listNo];
++            for (; tag < end; tag++) {
++                void* const data = keep->data[tag];
++                node_class* const next = tag + 1 < end ? &keep->tags[tag + 1]->mpNode : NULL;
++                void* ret = func(data, iter->data);
++                if (ret != NULL) {
++                    return ret;
++                }
++                if (twv_cls_generation != generation) {
++                    // The judge changed a list: on as the original loop from here.
++                    ret = walk_resume_nodes(next, iter);
++                    if (ret != NULL) {
++                        return ret;
++                    }
++                    node_list_class* list = listsA + li + 1;
++                    for (int i = lists - li - 1; i-- > 0;) {
++                        ret = cLsIt_Judge(list++, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
++                        if (ret != NULL) {
++                            return ret;
++                        }
++                    }
++                    for (layer_class* layer = (layer_class*)layerA->node.mpNextNode; layer != NULL;
++                         layer = (layer_class*)layer->node.mpNextNode)
++                    {
++                        ret = cTrIt_Judge(&layer->node_tree, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
++                        if (ret != NULL) {
++                            return ret;
++                        }
++                    }
++                    return NULL;
++                }
++            }
++        }
++    }
++    return NULL;
++}
++}  // namespace
++#endif
++
+ void* fpcLyIt_AllJudge(fpcLyIt_JudgeFunc i_func, void* i_data) {
+     void* ret;
+ 
+@@ -58,6 +219,29 @@
+     iter.func = (void*)i_func;
+     iter.data = i_data;
+ 
++#if TARGET_VITA
++    const int fastMode = twv_vita_fast_actor_mode(TWV_FAST_SEARCH);
++    if (fastMode == 1) {
++        bool walked;
++        const WalkKeep* keep = walk_kept(&walked);
++        if (keep != NULL) {
++            twv_vita_fast_actor_count(TWV_FAST_SEARCH, walked ? 2 : 1, -1);
++            return walk_fast(keep, &iter);
++        }
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
++    } else if (fastMode == 2) {
++        bool walked;
++        const WalkKeep* keep = walk_kept(&walked);
++        int mismatch = -1;
++        if (keep != NULL) {
++            mismatch = !walk_collect(&s_walkFresh) || !walk_same(keep, &s_walkFresh);
++        }
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, keep != NULL ? (walked ? 2 : 1) : 0, mismatch);
++    } else {
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
++    }
++#endif
++
+     for (layer = fpcLy_RootLayer(); layer != NULL; layer = (layer_class*)layer->node.mpNextNode) {
+         ret = cTrIt_Judge(&layer->node_tree, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, &iter);
+         if (ret != NULL) {
+--- a/src/f_op/f_op_actor_iter.cpp
++++ b/src/f_op/f_op_actor_iter.cpp
+@@ -19,6 +19,93 @@
+     return cLsIt_Method(&g_fopAcTg_Queue, (cNdIt_MethodFunc)cTgIt_MethodCall, &userData);
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0032): --vita-fast-search, the actor queue's searches (fopAcM_SearchByID,
++// fopAcM_SearchByName, fopAcM_Search). Same rule as fpcLyIt_AllJudge (f_pc_layer_iter.cpp): the
++// queue's tags and tag data from one walk, handed to the judge from an array while no node list
++// anywhere changed (twv_cls_generation); once a judge changed one, the loop goes on as cNdIt_Judge
++// from the next node it had already read. verify: the original loop, and the kept array compared
++// with a fresh walk.
++#include "SSystem/SComponent/c_node.h"
++#include "SSystem/SComponent/c_tag.h"
++#include <string.h>
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++extern "C" unsigned int twv_cls_generation;
++
++namespace {
++enum { TWV_FAST_SEARCH = 1 };
++
++struct ActorQueueKeep {
++    enum { MAX_TAGS = 1024 };
++    create_tag_class* tags[MAX_TAGS];
++    void* data[MAX_TAGS];
++    int count;
++};
++
++ActorQueueKeep s_actorKeep;
++ActorQueueKeep s_actorFresh;
++unsigned int s_actorKeepGeneration;
++bool s_actorKeepValid = false;
++
++// cLsIt_Judge's order without judges: nothing when mSize is 0, else the head and its links.
++static bool actor_collect(ActorQueueKeep* keep) {
++    keep->count = 0;
++    if (g_fopAcTg_Queue.mSize > 0) {
++        for (node_class* node = g_fopAcTg_Queue.mpHead; node != NULL; node = node->mpNextNode) {
++            if (keep->count >= ActorQueueKeep::MAX_TAGS) {
++                return false;
++            }
++            keep->tags[keep->count] = (create_tag_class*)node;
++            keep->data[keep->count] = ((create_tag_class*)node)->mpTagData;
++            keep->count++;
++        }
++    }
++    return true;
++}
++
++static const ActorQueueKeep* actor_kept(bool* walked) {
++    *walked = false;
++    if (!s_actorKeepValid || s_actorKeepGeneration != twv_cls_generation) {
++        const unsigned int generation = twv_cls_generation;
++        s_actorKeepValid = actor_collect(&s_actorKeep);
++        s_actorKeepGeneration = generation;
++        *walked = true;
++    }
++    return s_actorKeepValid ? &s_actorKeep : NULL;
++}
++
++// Every entry is read before the judge runs (a judge's own search may take the kept walk again,
++// only once a list changed, and then this loop leaves the array at once).
++static void* actor_fast(const ActorQueueKeep* keep, fopAcIt_JudgeFunc func, void* userData) {
++    const unsigned int generation = twv_cls_generation;
++    const int count = keep->count;
++    for (int i = 0; i < count; i++) {
++        void* const data = keep->data[i];
++        node_class* node = i + 1 < count ? &keep->tags[i + 1]->mpNode : NULL;
++        void* ret = func(data, userData);
++        if (ret != NULL) {
++            return ret;
++        }
++        if (twv_cls_generation != generation) {
++            // cNdIt_Judge from the node it had already read as next, links read live.
++            node_class* pNext = NODE_GET_NEXT(node);
++            while (node) {
++                ret = func(((create_tag_class*)node)->mpTagData, userData);
++                if (ret != NULL) {
++                    return ret;
++                }
++                node = pNext;
++                pNext = NODE_GET_NEXT(pNext);
++            }
++            return NULL;
++        }
++    }
++    return NULL;
++}
++}  // namespace
++#endif
++
+ void* fopAcIt_Judge(fopAcIt_JudgeFunc i_judgeFunc, void* i_data) {
+     struct {
+         fopAcIt_JudgeFunc func;
+@@ -27,5 +114,30 @@
+     userData.func = i_judgeFunc;
+     userData.data = i_data;
+ 
++#if TARGET_VITA
++    const int fastMode = twv_vita_fast_actor_mode(TWV_FAST_SEARCH);
++    if (fastMode == 1) {
++        bool walked;
++        const ActorQueueKeep* keep = actor_kept(&walked);
++        if (keep != NULL) {
++            twv_vita_fast_actor_count(TWV_FAST_SEARCH, walked ? 2 : 1, -1);
++            return actor_fast(keep, i_judgeFunc, i_data);
++        }
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
++    } else if (fastMode == 2) {
++        bool walked;
++        const ActorQueueKeep* keep = actor_kept(&walked);
++        int mismatch = -1;
++        if (keep != NULL) {
++            mismatch = !actor_collect(&s_actorFresh) || s_actorFresh.count != keep->count ||
++                       memcmp(s_actorFresh.tags, keep->tags, sizeof(keep->tags[0]) * keep->count) != 0 ||
++                       memcmp(s_actorFresh.data, keep->data, sizeof(keep->data[0]) * keep->count) != 0;
++        }
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, keep != NULL ? (walked ? 2 : 1) : 0, mismatch);
++    } else {
++        twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
++    }
++#endif
++
+     return cLsIt_Judge(&g_fopAcTg_Queue, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, &userData);
+ }

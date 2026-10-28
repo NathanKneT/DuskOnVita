@@ -8,8 +8,9 @@
 #include <span>
 
 namespace twv::vgl {
-// A whole session's stages: V61 compiled 51-95 per scene, distinct across scenes.
-constexpr size_t ShaderSourceLimit=4*1024*1024,ShaderStageLimit=1024;
+// A whole session's stages: V61 compiled 51-95 per scene, distinct across scenes; the whole-game
+// tour found more than the bench scenes' 1024.
+constexpr size_t ShaderSourceLimit=8*1024*1024,ShaderStageLimit=2048;
 constexpr size_t ShaderBundleLimit=24+ShaderSourceLimit+ShaderStageLimit*9;
 constexpr uint32_t VertexSourceTag=1,FragmentSourceTag=2;
 inline uint32_t source_crc32(std::span<const uint8_t> bytes) {

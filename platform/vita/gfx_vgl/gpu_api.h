@@ -85,7 +85,10 @@ constexpr uint32_t TWV_PROFILE_VERTEX = 0, TWV_PROFILE_SUBMIT = 1,
     TWV_PROFILE_TICK_BG_ACCH = 18, TWV_PROFILE_TICK_BG_GROUND = 19, TWV_PROFILE_TICK_BG_LINE = 20,
     TWV_PROFILE_TICK_CC_MOVE = 21, TWV_PROFILE_TICK_BG_QUERIES = 22,
     // Game thread blocked on the GX worker (FIFO drain, or the --vita-frame-overlap settle).
-    TWV_PROFILE_GX_WAIT = 23, TWV_PROFILE_COUNT = 24;
+    TWV_PROFILE_GX_WAIT = 23,
+    // The game's frame limiter sleeping inside the painter (JFWDisplay::beginRender -> waitForTick,
+    // nested in PAINTER): pacing, not painter work.
+    TWV_PROFILE_PAINTER_SLEEP = 24, TWV_PROFILE_COUNT = 25;
 uint64_t twv_vgl_time_us(void);
 void twv_vgl_profile_add(uint32_t category, uint64_t microseconds);
 uint32_t twv_vgl_program(const char* vertex, const char* fragment);

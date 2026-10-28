@@ -41,12 +41,27 @@ int main() {
     PartStats sum; sum.add(s); sum.add(s);
     CHECK(sum.us[PartCalc] == 1800 && sum.calls[PartView] == 60);
 
-    unsigned actors = 0, j3d = 0;
+    unsigned actors = 0, j3d = 0, sub = 0;
     for (unsigned f = 1; f <= 80; ++f) {
         actors += frame_mode(f) == ModeActors;
         j3d += frame_mode(f) == ModeJ3D;
+        sub += frame_mode(f) == ModeSub;
     }
-    CHECK(actors == 10 && j3d == 10 && frame_mode(1) == ModeActors && frame_mode(5) == ModeJ3D);
+    CHECK(actors == 10 && j3d == 10 && sub == 10 && frame_mode(1) == ModeActors && frame_mode(5) == ModeJ3D &&
+          frame_mode(3) == ModeSub);
+
+    uint32_t us[SubCount] = {}, calls[SubCount] = {};
+    unsigned next = 0;
+    CHECK(sub_text(text, sizeof text, 7, us, calls, &next) == 0 && next == SubCount);
+    us[SubJ3dCalc] = 900; calls[SubJ3dCalc] = 40; us[SubSearchAll] = 12; calls[SubSearchAll] = 3;
+    next = 0;
+    CHECK(sub_text(text, sizeof text, 254, us, calls, &next) > 0 && next == SubCount);
+    CHECK(std::strcmp(text, "p=254;0:900/40,9:12/3") == 0);
+    for (unsigned k = 0; k < SubCount; ++k) {us[k] = 4000000000u; calls[k] = 4000000000u;}
+    next = 0;
+    unsigned lines = 0;
+    while (sub_text(text, sizeof text, 1022, us, calls, &next)) {CHECK(std::strlen(text) <= 230); ++lines;}
+    CHECK(lines >= 2 && next == SubCount);
     std::puts("actor_profile_stats_test: ok");
     return 0;
 }

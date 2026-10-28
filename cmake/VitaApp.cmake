@@ -24,6 +24,8 @@ add_library(twv_vita_runtime STATIC
         platform/vita/runtime/run_control.cpp
         platform/vita/runtime/gx_thread.cpp
         platform/vita/runtime/fast_shadow_collect.cpp
+        platform/vita/runtime/fast_actors.cpp
+        platform/vita/runtime/fast_painter.cpp
         platform/vita/gfx_vgl/bundle_options.cpp
         platform/vita/gfx_vgl/gx_fast_control.cpp
         platform/vita/audio/audio_out.cpp)
@@ -143,6 +145,49 @@ target_link_options(twv_game INTERFACE -Wl,-u,twv_actprof_phase
     -Wl,--wrap=_Z13fpcEx_ExecuteP18base_process_class -Wl,--wrap=_Z13fpcDw_ExecuteP18base_process_class
     -Wl,--wrap=_Z19fopAcM_cullingCheckPK10fopAc_ac_c -Wl,--wrap=_Z17fpcM_DrawIteraterPFiPvS_E
     -Wl,--wrap=_ZNK13J3DDrawBuffer4drawEv)
+# Execute detail on sub frames (actor_profile.cpp, patches/dusklight/0030): calls across translation
+# units, timed per profile; outside sub frames one flag test per call.
+target_link_options(twv_game INTERFACE
+    -Wl,--wrap=_ZN8J3DModel4calcEv -Wl,--wrap=_ZN12J3DJointTree4calcEP12J3DMtxBufferRK3VecRA3_A4_Kf
+    -Wl,--wrap=_ZN12J3DMtxBuffer21calcWeightEnvelopeMtxEv -Wl,--wrap=_ZN4dBgS6SphChkEP11dBgS_SphChkPv
+    -Wl,--wrap=_ZN4dBgS11WallCorrectEP9dBgS_Acch -Wl,--wrap=_ZN4dBgS15WallCorrectSortEP9dBgS_Acch
+    -Wl,--wrap=_ZN4dBgS7RoofChkEP12dBgS_RoofChk -Wl,--wrap=_Z16fpcLyIt_AllJudgePFPvS_S_ES_
+    -Wl,--wrap=_Z13fopAcIt_JudgePFPvS_S_ES_ -Wl,--wrap=_ZN16mDoExt_McaMorfSO4playEja
+    -Wl,--wrap=_ZN14mDoExt_McaMorf4playEP3Vecja -Wl,--wrap=_ZN15mDoExt_McaMorf24playEja
+    -Wl,--wrap=_ZN10Z2Creature9frameworkEja -Wl,--wrap=_ZN4cCcS3SetEP8cCcD_Obj
+    -Wl,--wrap=_ZN10dMsgFlow_c4initEP10fopAc_ac_ciiPS1_ -Wl,--wrap=_ZN4dusk4flow13bind_resourceEPKvt)
+
+# Painter profile (measurement only, full receipts only): the painter's draw lists, particle groups,
+# shadows and 2D lists, the FIFO hand-over to the GX worker, JPA resources and 2D draw classes.
+target_sources(twv_game PRIVATE platform/vita/runtime/painter_profile.cpp)
+set_property(SOURCE platform/vita/runtime/painter_profile.cpp APPEND PROPERTY
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita/runtime")
+set(TWV_PAINTPROF_WRAPS
+    _Z19dComIfGd_drawCopy2Dv
+    _Z24dComIfGd_imageDrawShadowPA4_f _Z12dKy_setLightv _Z23dComIfGd_drawOpaListSkyv
+    _Z23dComIfGd_drawXluListSkyv _Z22dComIfGd_drawOpaListBGv _Z26dComIfGd_drawOpaListDarkBGv
+    _Z26dComIfGd_drawOpaListMiddlev _Z31dComIfGp_particle_drawFogPri0_BP11JPADrawInfo
+    _Z34dComIfGp_particle_drawNormalPri0_BP11JPADrawInfo _Z19dComIfGd_drawShadowPA4_f
+    _Z20dComIfGd_drawOpaListv _Z24dComIfGd_drawOpaListDarkv _Z26dComIfGd_drawOpaListPacketv
+    _Z22dComIfGd_drawXluListBGv _Z26dComIfGd_drawXluListDarkBGv _Z31dComIfGp_particle_drawFogPri0_AP11JPADrawInfo
+    _Z34dComIfGp_particle_drawNormalPri0_AP11JPADrawInfo _Z20dComIfGd_drawXluListv _Z24dComIfGd_drawXluListDarkv
+    _ZN6J3DSys8drawInitEv _ZN6J3DSys8reinitGXEv _Z29dComIfGd_drawOpaListInvisiblev
+    _Z29dComIfGd_drawXluListInvisiblev _Z29dComIfGp_particle_drawFogPri4P11JPADrawInfo
+    _Z32dComIfGp_particle_drawProjectionP11JPADrawInfo _Z21dComIfGd_drawListZxluv _Z26dComIfGd_drawOpaListFilterv
+    _Z29dComIfGp_particle_drawFogPri1P11JPADrawInfo _Z22dComIfGp_particle_drawP11JPADrawInfo
+    _Z29dComIfGp_particle_drawFogPri2P11JPADrawInfo _Z25dComIfGp_particle_drawFogP11JPADrawInfo
+    _Z29dComIfGp_particle_drawFogPri3P11JPADrawInfo _Z24dComIfGp_particle_drawP1P11JPADrawInfo
+    _Z31dComIfGp_particle_drawDarkworldP11JPADrawInfo _Z28dComIfGp_particle_drawScreenP11JPADrawInfo
+    _Z22dComIfGd_drawIndScreenv _Z28dComIfGd_drawXluList2DScreenv _Z26dComIfGd_drawOpaList3Dlastv
+    _Z28dComIfGp_particle_draw2DgameP11JPADrawInfo _ZN12dDlst_list_c8calcWipeEv
+    _Z28dComIfGp_particle_draw2DbackP11JPADrawInfo _Z32dComIfGp_particle_draw2DmenuBackP11JPADrawInfo
+    _Z18dComIfGd_draw2DOpav _Z21dComIfGd_draw2DOpaTopv _Z18dComIfGd_draw2DXluv
+    _Z28dComIfGp_particle_draw2DforeP11JPADrawInfo _Z32dComIfGp_particle_draw2DmenuForeP11JPADrawInfo
+    _ZN11JPAResource4drawEP18JPAEmitterWorkDataP14JPABaseEmitter
+    _ZN12dDlst_list_c4drawEPP12dDlst_base_cS2_ _ZN6aurora2gx4fifo7publishEv _ZN6aurora2gx4fifo11finish_drawEv
+    GXCallDisplayListStatic GXCallDisplayList)
+list(TRANSFORM TWV_PAINTPROF_WRAPS PREPEND "-Wl,--wrap=")
+target_link_options(twv_game INTERFACE ${TWV_PAINTPROF_WRAPS})
 
 if(TWV_VITA_GFX_VGL)
     include(cmake/VitaGL.cmake)

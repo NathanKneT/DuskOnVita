@@ -8,6 +8,8 @@
 #include "d/actor/d_a_e_oc.h"
 #include "f_op/f_op_camera_mng.h"
 #include "m_Do/m_Do_controller_pad.h"
+#include "m_Do/m_Do_ext.h"
+#include "JSystem/JKernel/JKRExpHeap.h"
 #include "telemetry.hpp"
 #include "simulation_probe.hpp"
 #include "target_probe.hpp"
@@ -41,6 +43,42 @@ int observe_actor(void* raw,void* data) {
     }
     return 1;
 }
+// The game's own heaps (JKR, carved from the fixed MEM1/ARAM reserves): "name=free/largest/size"
+// bytes. A long-play leak inside them shows here and not in the malloc receipts (cpu_heap_*).
+// Sampled at every probe call (every 10 frames with full receipts, 300 when quiet); "jkr_heaps" is
+// the sample at the report, "jkr_heaps_low" the lowest free and largest block since the previous
+// report (loads peak between reports). Read-only: each query takes the heap's lock and walks its free list.
+constexpr unsigned HeapCount=7;
+long heapLowFree[HeapCount],heapLowLargest[HeapCount];
+bool heapLowValid=false;
+void heap_receipts(bool report) {
+    struct Heap {const char* name;JKRHeap* heap;};
+    const Heap heaps[HeapCount]={{"root",JKRHeap::getRootHeap()},{"system",JKRHeap::getSystemHeap()},
+        {"zelda",mDoExt_getZeldaHeap()},{"game",mDoExt_getGameHeap()},{"archive",mDoExt_getArchiveHeap()},
+        {"j2d",mDoExt_getJ2dHeap()},{"command",mDoExt_getCommandHeap()}};
+    char text[400],low[400];std::size_t used=0,lowUsed=0;
+    for(unsigned i=0;i<HeapCount;++i) {
+        const auto& h=heaps[i];
+        if(!h.heap)continue;
+        const long free=long(h.heap->getTotalFreeSize()),largest=long(h.heap->getFreeSize());
+        if(!heapLowValid || free<heapLowFree[i])heapLowFree[i]=free;
+        if(!heapLowValid || largest<heapLowLargest[i])heapLowLargest[i]=largest;
+        if(!report)continue;
+        if(used<sizeof text) {
+            const int n=std::snprintf(text+used,sizeof text-used,"%s%s=%ld/%ld/%lu",used?";":"",h.name,free,largest,
+                static_cast<unsigned long>(h.heap->getHeapSize()));
+            if(n>0)used+=std::size_t(n);
+        }
+        if(lowUsed<sizeof low) {
+            const int n=std::snprintf(low+lowUsed,sizeof low-lowUsed,"%s%s=%ld/%ld/%lu",lowUsed?";":"",h.name,
+                heapLowFree[i],heapLowLargest[i],static_cast<unsigned long>(h.heap->getHeapSize()));
+            if(n>0)lowUsed+=std::size_t(n);
+        }
+    }
+    heapLowValid=!report;
+    if(used)twv::vita::telemetryText("jkr_heaps",text);
+    if(lowUsed)twv::vita::telemetryText("jkr_heaps_low",low);
+}
 }
 
 extern "C" void twv_vita_scene_probe(unsigned frame) {
@@ -65,6 +103,7 @@ extern "C" void twv_vita_scene_probe(unsigned frame) {
                       int(player->shape_angle.y), int(player->shape_angle.z), int(player->current.roomNo));
         twv::vita::telemetryText("player_state", value);
     }
+    heap_receipts(frame % twv::vita::QuietReceiptFrames == 0); // reported about every 10 s, either mode
     if (quiet) {
         twv::vita::telemetryEvent("simulation_execute_calls",twv::vita::simulationExecuteCalls);
         twv::vita::telemetryEvent("presentation_interpolating",dusk::game_clock::g_frameTiming.interpolating);

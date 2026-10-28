@@ -1,0 +1,213 @@
+Vita: measurement only (the main-thread actor profile's execute detail, platform/vita/runtime/
+actor_profile.cpp). daAlink_c::execute, camera_execute and dMeter2_c::_execute open segments that
+the port times on sampled sub frames (one frame in eight, full receipts only) and charges to the
+executing process's profile; calls across translation units are timed by link wrappers instead.
+Outside sampled frames each segment pays one flag test. No game behaviour changes: same calls, same
+order, same results.
+
+--- a/src/d/actor/d_a_alink.cpp
++++ b/src/d/actor/d_a_alink.cpp
+@@ -57,6 +57,7 @@
+ #include "dusk/interp/sight.h"
+ #include "dusk/settings.h"
+ #include "res/Object/Alink.h"
++#include "d/d_vita_actsub.h"
+ #include <cstring>
+ #include <helpers/string.hpp>
+ 
+@@ -18015,9 +18016,11 @@
+         checkWolfLockData();
+     }
+ 
++    unsigned long long twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_PRE);
+     setAtnList();
+     setDemoData();
+     setStickData();
++    TWV_ACTSUB_END(TWV_ACTSUB_LINK_PRE, twvSub);
+ 
+     if (mFastShotTime < 0) {
+         mFastShotTime = 0;
+@@ -18233,7 +18236,9 @@
+             mItemTrigger = 0;
+         }
+ 
++        twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_ANIME);
+         allAnimePlay();
++        TWV_ACTSUB_END(TWV_ACTSUB_LINK_ANIME, twvSub);
+ 
+         if (mDamageTimer != 0) {
+             damageTimerCount();
+@@ -18305,7 +18310,9 @@
+         }
+ 
+         checkLightSwordMtrl();
++        twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_PROC);
+         (this->*mpProcFunc)();
++        TWV_ACTSUB_END(TWV_ACTSUB_LINK_PROC, twvSub);
+ 
+         if (!checkEndResetFlg0(ERFLG0_UNK_2000) && checkWindDashAnime()) {
+             resetUpperAnime(UPPER_2, 3.0f);
+@@ -18315,6 +18322,7 @@
+ 
+         {
+             cXyz old_pos = current.pos;
++            twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_BG);
+             posMove();
+ 
+             if (checkWolf()) {
+@@ -18340,6 +18348,8 @@
+             iceSlipBgCheck();
+             setWaterY();
+             autoGroundHit();
++            TWV_ACTSUB_END(TWV_ACTSUB_LINK_BG, twvSub);
++            twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_GROUND);
+ 
+             if (checkNoResetFlg0(FLG0_WATER_IN_MOVE) ||
+                 (checkPossibleWaterInMode() && !checkNoResetFlg0(FLG0_SWIM_UP)))
+@@ -18543,6 +18553,8 @@
+                 }
+             }
+ 
++            TWV_ACTSUB_END(TWV_ACTSUB_LINK_GROUND, twvSub);
++            twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_MATRIX);
+             setMatrix();
+             setNeckAngle();
+ 
+@@ -18626,6 +18638,8 @@
+ 
+                 setWolfItemMatrix();
+             }
++            TWV_ACTSUB_END(TWV_ACTSUB_LINK_MATRIX, twvSub);
++            twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_LINK_TAIL);
+ 
+             if (checkFmChainGrabAnime()) {
+                 mNowAnmPackUpper[2].setRatio(1.0f);
+@@ -18657,6 +18671,7 @@
+ 
+             mSight.update();
+             setGrabItemPos();
++            TWV_ACTSUB_END(TWV_ACTSUB_LINK_TAIL, twvSub);
+ 
+             checkRoofRestart();
+             mExitID = 0x3F;
+--- a/src/d/d_camera.cpp
++++ b/src/d/d_camera.cpp
+@@ -42,6 +42,7 @@
+ 
+ #include <imgui.h>
+ #endif
++#include "d/d_vita_actsub.h"
+ 
+ namespace {
+ 
+@@ -11395,12 +11396,15 @@
+ 
+     dComIfGp_offCameraAttentionStatus(0, 0x40);
+ 
++    unsigned long long twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_CAMERA_RUN);
+     if (i_this->mCamera.Active()) {
+         i_this->mCamera.Run();
+     } else {
+         i_this->mCamera.NotRun();
+     }
++    TWV_ACTSUB_END(TWV_ACTSUB_CAMERA_RUN, twvSub);
+ 
++    twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_CAMERA_VIEW);
+     i_this->mCamera.CalcTrimSize();
+ 
+     store(i_this);
+@@ -11436,6 +11440,7 @@
+ #endif
+ 
+     view_setup(i_this);
++    TWV_ACTSUB_END(TWV_ACTSUB_CAMERA_VIEW, twvSub);
+     return 1;
+ }
+ 
+--- a/src/d/d_meter2.cpp
++++ b/src/d/d_meter2.cpp
+@@ -23,6 +23,7 @@
+ #include "f_op/f_op_msg_mng.h"
+ #include "d/actor/d_a_horse.h"
+ #include <cstring>
++#include "d/d_vita_actsub.h"
+ 
+ #if TARGET_PC
+ #include "dusk/memory.h"
+@@ -286,9 +287,12 @@
+         dComIfGs_onCollectCrystal(3);
+     }
+ 
++    unsigned long long twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_METER_DRAW);
+     checkStatus();
+     mpMeterDraw->exec(mStatus);
++    TWV_ACTSUB_END(TWV_ACTSUB_METER_DRAW, twvSub);
+ 
++    twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_METER_MOVES);
+     moveLife();
+     moveKantera();
+     moveOxygen();
+@@ -309,15 +313,20 @@
+     moveArrowNum();
+     movePachinkoNum();
+     moveBottleNum();
++    TWV_ACTSUB_END(TWV_ACTSUB_METER_MOVES, twvSub);
+ 
++    twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_METER_MAP);
+     if (mpMap != NULL) {
+         mpMap->_move(mStatus);
+     } else {
+         dMeterMap_c::meter_map_move(mStatus);
+     }
++    TWV_ACTSUB_END(TWV_ACTSUB_METER_MAP, twvSub);
+ 
++    twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_METER_SUB);
+     moveSubContents();
+     move2DContents();
++    TWV_ACTSUB_END(TWV_ACTSUB_METER_SUB, twvSub);
+ 
+     if (!dComIfGp_isPauseFlag() && !dComIfGp_event_runCheck()) {
+         dMeter2Info_decHotSpringTimer();
+--- /dev/null
++++ b/include/d/d_vita_actsub.h
+@@ -0,0 +1,40 @@
++#ifndef D_VITA_ACTSUB_H
++#define D_VITA_ACTSUB_H
++
++// Vita (patches/dusklight/0030): measurement only. Execute detail for the main-thread actor profile
++// (platform/vita/runtime/actor_profile.cpp, actor_profile_stats.hpp Sub numbers): on sampled frames a
++// segment's time is charged to the executing process's profile; otherwise one flag test. No game
++// behaviour changes: same calls, same order, same results.
++#if TARGET_VITA
++extern "C" unsigned char twv_actsub_on;
++extern "C" unsigned long long twv_actsub_begin(unsigned sub);
++extern "C" void twv_actsub_end(unsigned sub, unsigned long long start);
++#define TWV_ACTSUB_BEGIN(sub) (twv_actsub_on ? twv_actsub_begin(sub) : 0ULL)
++#define TWV_ACTSUB_END(sub, start)                                                                 \
++    do {                                                                                           \
++        if ((start) != 0) {                                                                        \
++            twv_actsub_end((sub), (start));                                                        \
++        }                                                                                          \
++    } while (0)
++#else
++#define TWV_ACTSUB_BEGIN(sub) 0ULL
++#define TWV_ACTSUB_END(sub, start) ((void)(start))
++#endif
++
++enum {
++    TWV_ACTSUB_LINK_PRE = 16,
++    TWV_ACTSUB_LINK_ANIME = 17,
++    TWV_ACTSUB_LINK_PROC = 18,
++    TWV_ACTSUB_LINK_BG = 19,
++    TWV_ACTSUB_LINK_GROUND = 20,
++    TWV_ACTSUB_LINK_MATRIX = 21,
++    TWV_ACTSUB_LINK_TAIL = 22,
++    TWV_ACTSUB_METER_DRAW = 23,
++    TWV_ACTSUB_METER_MOVES = 24,
++    TWV_ACTSUB_METER_MAP = 25,
++    TWV_ACTSUB_METER_SUB = 26,
++    TWV_ACTSUB_CAMERA_RUN = 27,
++    TWV_ACTSUB_CAMERA_VIEW = 28,
++};
++
++#endif /* D_VITA_ACTSUB_H */

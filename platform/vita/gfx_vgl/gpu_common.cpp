@@ -41,7 +41,7 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
         "prof_tick_execute_inclusive_us", "prof_tick_draw_inclusive_us", "prof_tick_particle3d_us",
         "prof_tick_shadow_collect_us", "prof_tick_demo_us", "prof_tick_shadow_collect_calls_x1000",
         "prof_tick_bg_acch_us", "prof_tick_bg_ground_us", "prof_tick_bg_line_us", "prof_tick_cc_move_us",
-        "prof_tick_bg_queries", "prof_gx_wait_us"};
+        "prof_tick_bg_queries", "prof_gx_wait_us", "prof_painter_sleep_us"};
     static_assert(sizeof names/sizeof names[0]==TWV_PROFILE_COUNT);
     twv::vita::telemetryEvent("prof_frame_samples",pacing.frames);
     twv::vita::telemetryEvent("prof_draw_timers_enabled",TWV_VITA_DRAW_TIMERS);

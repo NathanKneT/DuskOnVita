@@ -4,6 +4,7 @@
 // script; once the script ends, the real pad is read untouched again.
 #include "input_script.hpp"
 #include "telemetry.hpp"
+#include "d/d_com_inf_game.h"
 #include <dolphin/pad.h>
 #include <cstdio>
 
@@ -16,11 +17,11 @@ static_assert(PAD_BUTTON_A==twv::vita::ScriptButtonA && PAD_BUTTON_B==twv::vita:
               PAD_BUTTON_LEFT==twv::vita::ScriptButtonLeft && PAD_BUTTON_RIGHT==twv::vita::ScriptButtonRight);
 twv::vita::InputScript script;
 bool active=false;
-unsigned reads=0,lastStep=~0u;
+unsigned reads=0,lastStep=~0u,lastLoops=0;
 }
 
 extern "C" int twv_vita_input_script_load(const char* path) {
-    static char text[16384];
+    static char text[65536];
     FILE* file=std::fopen(path,"rb");
     if(!file)return 0;
     const auto n=std::fread(text,1,sizeof text-1,file);
@@ -42,8 +43,19 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
         twv::vita::telemetryEvent("input_script_done",reads);
         return;
     }
+    if(script.loops!=lastLoops){lastLoops=script.loops;twv::vita::telemetryEvent("input_script_loops",script.loops);}
     if(script.index!=lastStep){lastStep=script.index;twv::vita::telemetryEvent("input_script_step",script.index);}
     ++reads;
+    if(step->kind==twv::vita::StepWarp) {
+        // The request a loading zone makes; the play scene takes it on its next execute.
+        char text[48];
+        std::snprintf(text,sizeof text,"%s,%d,%d,%d",step->stage,step->room,step->point,step->layer);
+        twv::vita::telemetryText("input_script_warp",text);
+        dComIfGp_setNextStage(step->stage,s16(step->point),s8(step->room),s8(step->layer));
+    } else if(step->kind==twv::vita::StepDarkClear && script.used==1) {
+        twv::vita::telemetryEvent("input_script_darkclear",step->layer);
+        dComIfGs_onDarkClearLV(step->layer);
+    }
     auto& p=status[0];p={};p.err=PAD_ERR_NONE;
     p.button=static_cast<u16>(step->buttons);
     p.stickX=static_cast<s8>(step->x);p.stickY=static_cast<s8>(step->y);

@@ -65,6 +65,8 @@ struct Texture {
 };
 static TextureConversionCache conversionCache;
 void count(const char*,uint32_t=1){}
+// textures.cpp's pool relief (patches/aurora/0010) is outside the extracted functions: one attempt.
+template<class Allocate> uint32_t allocate_or_relieve(Allocate allocate){return allocate();}
 }
 namespace aurora::gfx {using TextureHandle=std::shared_ptr<twv::vgl::Texture>;}
 #include "texture_upload_functions.inc"

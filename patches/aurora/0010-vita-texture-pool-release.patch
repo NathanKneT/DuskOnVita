@@ -1,0 +1,71 @@
+Vita: textures of earlier stages are released from the 32 MiB GXM texture pool.
+
+Aurora keeps every converted texture alive in its content cache up to 128 MiB, sized for desktop
+VRAM. On the Vita the GXM pool is 32 MiB, so after a few stage changes the pool stayed full of
+earlier stages' textures (only the cache held them) and new ones failed to allocate: black
+textures (Vita3K soak: gxm_texture_alloc_failures 10,104 by 405 s; every tour run since 100-200 s).
+On the Vita the content cache keeps 8 MiB, and release_idle() lets the platform drop the
+object-cache entries not bound in the last frames plus the content cache when a GPU texture
+allocation fails, then retry it. Textures in use stay; nothing else changes.
+
+--- a/lib/gx/texture.hpp
++++ b/lib/gx/texture.hpp
+@@ -24,7 +24,12 @@
+ const TextureStats& texture_stats() noexcept;
+ 
+ namespace texture {
++#if defined(__vita__)
++// Vita: textures live in a 32 MiB GXM pool, so the content cache keeps a small reuse window.
++constexpr uint64_t ContentCacheBudgetBytes = 8ull * 1024ull * 1024ull;
++#else
+ constexpr uint64_t ContentCacheBudgetBytes = 128ull * 1024ull * 1024ull;
++#endif
+ constexpr uint64_t ObjectCacheIdleFrames = 600;
+ constexpr bool AsyncTextureReplacements = true;
+ constexpr uint32_t ReplacementThumbnailDim = 64;
+@@ -39,6 +44,12 @@
+ void end_frame() noexcept;
+ void shutdown() noexcept;
+ void set_content_cache_budget_for_testing(uint64_t bytes) noexcept;
++#if defined(__vita__)
++// GPU texture memory pressure (Vita): drops the object-cache entries not bound in the last
++// idleFrames frames and the whole content cache, so textures only these caches still hold
++// (earlier stages) are destroyed and their pool memory returns. Bound textures stay.
++void release_idle(uint64_t idleFrames) noexcept;
++#endif
+ 
+ // Internal resolvers exposed for cache tests.
+ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj);
+--- a/lib/gx/texture.cpp
++++ b/lib/gx/texture.cpp
+@@ -465,9 +465,9 @@
+   }
+ }
+ 
+-void sweep_object_caches() {
+-  const auto expired = [](uint64_t lastUsedFrame) {
+-    return s_frameCount > lastUsedFrame && s_frameCount - lastUsedFrame > texture::ObjectCacheIdleFrames;
++void sweep_object_caches(uint64_t idleFrames = texture::ObjectCacheIdleFrames) {
++  const auto expired = [idleFrames](uint64_t lastUsedFrame) {
++    return s_frameCount > lastUsedFrame && s_frameCount - lastUsedFrame > idleFrames;
+   };
+ 
+   for (auto it = s_textureObjectCaches.begin(); it != s_textureObjectCaches.end();) {
+@@ -740,6 +740,17 @@
+   s_stats = {};
+ }
+ 
++#if defined(__vita__)
++void release_idle(uint64_t idleFrames) noexcept {
++  sweep_object_caches(idleFrames);
++  s_contentCache.clear();
++  s_contentLru.clear();
++  s_contentCacheBytes = 0;
++  s_stats.contentCacheBytes = 0;
++  s_stats.contentCacheEntries = 0;
++}
++#endif
++
+ void set_content_cache_budget_for_testing(uint64_t bytes) noexcept {
+   s_contentCacheBudgetBytes = bytes;
+   while (s_contentCacheBytes > s_contentCacheBudgetBytes && !s_contentLru.empty()) {

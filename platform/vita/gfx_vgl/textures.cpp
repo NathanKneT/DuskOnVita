@@ -16,18 +16,33 @@ bool g_bcTexturesSupported=false;
 }
 namespace twv::vgl {
 static TextureConversionCache conversionCache;
+static bool relieving=false;
+// GXM texture pool full: Aurora drops the textures only its caches still hold (earlier stages:
+// not bound in the last two frames), which frees their pool memory, then the allocation is tried
+// once more (patches/aurora/0010). Without this the pool stayed full of earlier stages' textures.
+template<class Allocate> uint32_t allocate_or_relieve(Allocate allocate) {
+    uint32_t id=allocate();
+    if(id)return id;
+    relieving=true;
+    aurora::gx::texture::release_idle(2);
+    relieving=false;
+    count("texture_pool_relief");
+    return allocate();
+}
 Texture::Texture(uint32_t w,uint32_t h,uint32_t mips,uint32_t format,bool deferred)
  :TextureRef({}, {}, {}, wgpu::Extent3D{w,h,1},wgpu::TextureFormat::RGBA8Unorm,mips,format) {
     deferredUpload=deferred;
     if(!deferred) {
-        gpu=twv_vgl_texture(w,h,mips);
+        gpu=allocate_or_relieve([&]{return twv_vgl_texture(w,h,mips);});
         if(!gpu) count("texture_allocation_failure");
     }
 }
 Texture::~Texture() {
     // Serialized resource teardown also ends the tiny conversion-cache lifetime.
     // This covers room resource unloading without guessing a stage transition.
-    conversionCache.clear();twv_vgl_texture_delete(gpu);
+    // Not during a pool relief: the upload that asked for it may be reading a cached conversion.
+    if(!relieving)conversionCache.clear();
+    twv_vgl_texture_delete(gpu);
 }
 void upload(Texture& texture,aurora::ArrayRef<uint8_t> source) {
     const bool optimized=twv_vita_bundle_feature(TWV_BUNDLE_TEXTURE_UPLOAD)!=0;
@@ -72,15 +87,16 @@ void upload(Texture& texture,aurora::ArrayRef<uint8_t> source) {
     }
     texture.hasArbitraryMips=arbitrary;
     if(!texture.gpu&&optimized&&texture.deferredUpload) {
-        texture.gpu=twv_vgl_texture_static_rgba(texture.size.width,texture.size.height,
-            texture.mipCount,data,size);
+        texture.gpu=allocate_or_relieve([&]{return twv_vgl_texture_static_rgba(texture.size.width,
+            texture.size.height,texture.mipCount,data,size);});
         if(texture.gpu) {
             texture.deferredUpload=false;
             count("texture_static_direct_upload");count("textures_uploaded");
             count("texture_upload_bytes",uint32_t(required));return;
         }
     }
-    if(!texture.gpu)texture.gpu=twv_vgl_texture(texture.size.width,texture.size.height,texture.mipCount);
+    if(!texture.gpu)texture.gpu=allocate_or_relieve([&]{
+        return twv_vgl_texture(texture.size.width,texture.size.height,texture.mipCount);});
     texture.deferredUpload=false;
     if(!texture.gpu){count("texture_allocation_failure");return;}
     size_t offset=0;
@@ -123,7 +139,7 @@ TextureHandle new_static_texture_2d(uint32_t w,uint32_t h,uint32_t mips,u32 fmt,
     }
     // Deferred ownership never escapes without initialized storage, including
     // unsupported formats, truncated sources, and bridge allocation failures.
-    if(deferred&&!texture->gpu)texture->gpu=twv_vgl_texture(w,h,mips);
+    if(deferred&&!texture->gpu)texture->gpu=twv::vgl::allocate_or_relieve([&]{return twv_vgl_texture(w,h,mips);});
     texture->deferredUpload=false;
     return texture;
 }
