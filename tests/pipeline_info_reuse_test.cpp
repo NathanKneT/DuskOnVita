@@ -67,6 +67,9 @@ void telemetryFlush() {}
 }
 extern "C" int twv_vita_gx_fast_enabled(void) noexcept{return selected;}
 extern "C" void twv_vita_gx_fast_disable(unsigned reason) noexcept{selected=false;disableReason=reason;}
+#include "gfx_vgl/gpu_api.h"
+uint32_t gpuFeatures=0; // the start-up GPU features the callback reads (the pipeline memo bit)
+extern "C" uint32_t twv_gpu_features(void){return gpuFeatures;}
 #include "pipeline_info_callback.inc"
 
 namespace aurora::gx {
@@ -123,6 +126,7 @@ static void reset(){
  twv::vgl::pipelines.clear();aurora::gx::fifo::sDrawCache={};g_gxState={};nextConfig={};
  events.clear();textureCalls=uniformCalls=bindCalls=storageCalls=disableReason=0;
  gfx::drawCalls=gfx::pipelineCalls=0;gfx::layoutKey=1;selected=false;bindGeneration=17;sPipelineInfoReuse={};
+ gpuFeatures=0;
  test_pipeline_info_copy=twv_vita_pipeline_info_copy;
 }
 static PipelineConfig config(unsigned iteration){
@@ -176,11 +180,12 @@ static void compare_frontend(){
   assert(!sPipelineInfoReuse.fallback);
  }
 }
-static void lifecycle_and_sampling(){
- reset();selected=true;nextConfig=config(7);
+static void lifecycle_and_sampling(bool memo=false){
+ reset();selected=true;nextConfig=config(7);gpuFeatures=memo?TwvGpuFeaturePipelineMemo:0;
  for(unsigned i=0;i<512;++i){g_gxState.dirty|=DirtyPipeline;draw();}
  assert(twv::vgl::pipelines.size()==1&&gfx::pipelineCalls==512&&gfx::drawCalls==512);
  assert(sPipelineInfoReuse.reused==(FrontendReuseCompiled?512u:0u));
+ assert(sPipelineInfoReuse.memoHits==(FrontendReuseCompiled&&memo?511u:0u));
  assert(sPipelineInfoReuse.oracleChecks==(FrontendReuseCompiled?5u:0u)); // 1,128,256,384,512
  assert(sPipelineInfoReuse.built==(FrontendReuseCompiled?5u:0u));
  const auto saved=aurora::gx::fifo::sDrawCache.shaderInfo;
@@ -246,6 +251,32 @@ static void mutation_death(unsigned kind){
  int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status));
  assert(WEXITSTATUS(status)==(kind>=15?103:102));
 }
+// --vita-gxm-pipeline-memo: only an equal config for the pipeline checked last is answered from the copies.
+static void pipeline_memo(){
+ const auto a=config(21),b=config(22);
+ reset();gpuFeatures=TwvGpuFeaturePipelineMemo;
+ twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ twv::vgl::pipelines.push_back({b,build_shader_info(b.shaderConfig)});
+ ShaderInfo out{};
+ const auto check=[&](uint32_t pipeline,const PipelineConfig& c,uint64_t hits){
+  out={};assert(twv_vita_pipeline_info_copy(pipeline,&c,&out));
+  assert(same_shader_info(out,twv::vgl::pipelines[pipeline].info)&&sPipelineInfoReuse.memoHits==hits);
+ };
+ check(0,a,0);check(0,a,1);check(1,b,1);check(0,a,1);check(0,a,2);check(0,a,3);
+ assert(sPipelineInfoReuse.reused==6&&sPipelineInfoReuse.oracleChecks==1);
+ // Off: never answered from the copies.
+ reset();twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ check(0,a,0);check(0,a,0);check(0,a,0);
+ // A config other than the copy goes through the stored-config check, and its abort.
+ reset();gpuFeatures=TwvGpuFeaturePipelineMemo;twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ check(0,a,0);check(0,a,1);
+ const auto child=fork();assert(child>=0);
+ if(child==0){
+  std::signal(SIGABRT,[](int){_exit(disableReason==3?103:1);});
+  twv_vita_pipeline_info_copy(0,&b,&out);_exit(2);
+ }
+ int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==103);
+}
 static void bounded_corruption_death(){
  reset();nextConfig=config(13);twv::vgl::pipelines.push_back({nextConfig,build_shader_info(nextConfig.shaderConfig)});
  ShaderInfo output{};
@@ -260,8 +291,9 @@ static void bounded_corruption_death(){
  int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==102);
 }
 int main(){
- compare_frontend();lifecycle_and_sampling();texture_transitions();pipeline_invalidations();fallback_and_off();
+ compare_frontend();lifecycle_and_sampling();lifecycle_and_sampling(true);texture_transitions();
+ pipeline_invalidations();fallback_and_off();
  for(unsigned mutation=0;mutation<17;++mutation)mutation_death(mutation);
- bounded_corruption_death();
- std::printf("pipeline_info_reuse_test: compile=%d; real builder fields/config cases, frontend submission/texture transitions, cache hits/growth/clear, bounded oracle and 17 corruption deaths passed\n",TWV_VITA_GX_FAST_DECODE);
+ bounded_corruption_death();pipeline_memo();
+ std::printf("pipeline_info_reuse_test: compile=%d; real builder fields/config cases, frontend submission/texture transitions, cache hits/growth/clear, bounded oracle, 17 corruption deaths and the pipeline memo passed\n",TWV_VITA_GX_FAST_DECODE);
 }

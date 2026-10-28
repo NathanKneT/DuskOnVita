@@ -42,6 +42,11 @@ int main(){
     }
     RendererOptions prefix;assert(prefix.consume("--vita-memory-pools-x=ram64")==0);
     assert(prefix.consume("--vita-opt-bundlex=on")==0 && prefix.consume("--stage")==0);
+    // Play profile (main_vita.cpp): any renderer option is a choice, the shader-source capture is not.
+    assert(!prefix.any_choice() && defaults.any_choice());
+    {RendererOptions c;assert(c.consume("--vita-shader-capture=on")==18 && !c.any_choice());}
+    {RendererOptions c;assert(c.consume("--vita-gx-thread=off")==17 && c.any_choice());}
+    {RendererOptions c;assert(c.consume("--vita-resident-geometry=off")==8 && c.any_choice());}
     assert(prefix.consume(nullptr)==-1);
     std::puts("render_bundle_control_test: defaults, full mask/profile matrix, late/invalid/duplicate rejection, order-independent overrides and diagnostic default passed");
 }

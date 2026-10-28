@@ -34,7 +34,7 @@ for mode in off on ref; do
   if [[ "$mode" == ref ]]; then reference=1; fi
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DTWV_VITA_GX_FAST_DECODE=$compiled -DTWV_GX_DECODE_REF=$reference \
-    -I "$repo/external/dusklight/extern/aurora/include" -I "$out" \
+    -I "$repo/external/dusklight/extern/aurora/include" -I "$out" -I "$repo/platform/vita" \
     "$repo/tests/pipeline_info_reuse_test.cpp" -o "$out/pipeline_info_reuse_$mode"
   "$out/pipeline_info_reuse_$mode"
 done
@@ -72,6 +72,11 @@ for benchmark in 0 1; do
     "$repo/tests/clock_entry_test.cpp" -o "$out/clock_entry_test_$benchmark"
   "$out/clock_entry_test_$benchmark"
 done
+# Play profile: the same entry in a build with a GPU selector (every profile path present).
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -DTWV_VITA_BENCHMARK=0 -DTWV_TEST_PLAY_PROFILE=1 -I "$repo/platform/vita" -I "$out" \
+  "$repo/tests/clock_entry_test.cpp" -o "$out/clock_entry_test_profile"
+"$out/clock_entry_test_profile"
 python3 "$repo/tools/copy_stream_test_fixture.py" --output-dir "$out/copy-stream"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -DTARGET_VITA=1 \
   -I "$out/copy-stream" "$repo/tests/copy_stream_test.cpp" -o "$out/copy_stream_test"
@@ -578,3 +583,26 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/gxm_timing_test.cpp" -o "$out/gxm_timing_test"
 "$out/gxm_timing_test"
+# Vita fixed game ticks (patches/dusklight/0015) on the pinned game clock and Aurora's clock.
+mkdir -p "$out/clock/src/dusk" "$out/clock/src/m_Do"
+cp "$repo/external/dusklight/src/dusk/game_clock.cpp" "$repo/external/dusklight/src/dusk/game_clock.h" "$out/clock/src/dusk/"
+cp "$repo/external/dusklight/src/m_Do/m_Do_main.cpp" "$out/clock/src/m_Do/"
+patch -s -p1 -d "$out/clock" < "$repo/patches/dusklight/0015-vita-fixed-game-ticks.patch"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -DTARGET_VITA=1 \
+  -I "$out/clock/src" -I "$repo/external/dusklight/extern/aurora/include" \
+  -I "$repo/external/dusklight/extern/aurora/lib" -I "$repo/tests/fake_sdl" \
+  "$repo/tests/game_clock_test.cpp" "$repo/external/dusklight/extern/aurora/lib/time.cpp" -o "$out/game_clock_test"
+"$out/game_clock_test"
+# Test-only scripted pad input (--vita-input-script).
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/input_script_test.cpp" -o "$out/input_script_test"
+"$out/input_script_test"
+# Front touch for the menu pointer: finger tracking and the drawn area it maps to.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/touch_test.cpp" -o "$out/touch_test"
+"$out/touch_test" "$repo/platform/vita/gfx_vgl/backend.cpp"
+# game.buttonPrompts=playstation: glyphs drawn in code as GX textures (patches/dusklight/0016).
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/platform/vita/ui/ps_glyphs.cpp" "$repo/tests/ps_glyphs_test.cpp" \
+  -o "$out/ps_glyphs_test"
+"$out/ps_glyphs_test"

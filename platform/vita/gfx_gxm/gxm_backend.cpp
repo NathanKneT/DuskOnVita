@@ -561,9 +561,24 @@ void set_cull(uint32_t cull) {
     if(shadow.valid && cull==shadow.cull)return;
     sceGxmSetCullMode(ctx,SceGxmCullMode(cull));shadow.cull=cull;
 }
+// G3 first step (--vita-gxm-uniform-reuse): a draw whose patched programs and default-uniform
+// bytes equal the ones last reserved reuses that reservation, which the context keeps until the
+// next one, instead of reserving and copying again (uncached ring memory). Setting that program
+// again (even the same one), a BeginScene or a clear ends the reuse; the byte comparison makes it
+// exact.
+bool uniformReuse=false;
+const SceGxmVertexProgram* reservedVertexProgram=nullptr;
+const SceGxmFragmentProgram* reservedFragmentProgram=nullptr;
+std::vector<uint8_t> reservedVertexBytes,reservedFragmentBytes;
+uint64_t uniformVertexReuses=0,uniformFragmentReuses=0,uniformVertexUploads=0,uniformFragmentUploads=0;
+void uniform_reservations_end() {reservedVertexProgram=nullptr;reservedFragmentProgram=nullptr;}
 void set_programs(const SceGxmVertexProgram* vertex,const SceGxmFragmentProgram* fragment) {
-    if(!shadow.valid || vertex!=shadow.vertex){sceGxmSetVertexProgram(ctx,vertex);shadow.vertex=vertex;}
-    if(!shadow.valid || fragment!=shadow.fragment){sceGxmSetFragmentProgram(ctx,fragment);shadow.fragment=fragment;}
+    if(!shadow.valid || vertex!=shadow.vertex) {
+        sceGxmSetVertexProgram(ctx,vertex);shadow.vertex=vertex;reservedVertexProgram=nullptr;
+    }
+    if(!shadow.valid || fragment!=shadow.fragment) {
+        sceGxmSetFragmentProgram(ctx,fragment);shadow.fragment=fragment;reservedFragmentProgram=nullptr;
+    }
 }
 void finish_state() {shadow.valid=true;}
 
@@ -601,6 +616,7 @@ void draw_clear(float r,float g,float b,float a,float depth,unsigned mask,int x,
         sceGxmSetFrontFragmentProgramEnable(ctx,SCE_GXM_FRAGMENT_PROGRAM_DISABLED);
         sceGxmSetBackFragmentProgramEnable(ctx,SCE_GXM_FRAGMENT_PROGRAM_DISABLED);
     }
+    uniform_reservations_end(); // the clear reserves its own default uniforms
     void* buffer=nullptr;
     if(ok(sceGxmReserveVertexDefaultUniformBuffer(ctx,&buffer),"ReserveVertexDefaultUniformBuffer clear"))
         sceGxmSetUniformDataF(buffer,clearDepthParam,0,1,&q.z);
@@ -771,6 +787,8 @@ int gxm_init() {
         if(!timingOn){++errors;twv::vita::telemetryText("gxm_error","GPU timing monitor thread");}
         twv::vita::telemetryEvent("gxm_gpu_timing",timingOn);
     }
+    uniformReuse=(twv_gpu_features()&TwvGpuFeatureUniformReuse)!=0;
+    if(uniformReuse)twv::vita::telemetryEvent("gxm_uniform_reuse",1);
     if(timingOn && (twv_gpu_features()&TwvGpuFeatureSplit)) {
         splitScenes=std::min<uint32_t>(twv_gpu_split_scenes(),MaxTimedScenes);
         for(unsigned i=0;i<FrameRing::Slots*MaxTimedScenes;++i)notifications[SceneNotificationBase+i]=0;
@@ -871,7 +889,7 @@ void gxm_begin() {
     frameScene=0;frameDraws=0;
     if(!ok(sceGxmBeginScene(ctx,0,target,nullptr,nullptr,displaySync[backBuffer],&displaySurface[backBuffer],
                             frameSplits>1?&depthFirst:&depthSurface),"sceGxmBeginScene"))return;
-    inScene=true;shadow.valid=false;
+    inScene=true;shadow.valid=false;uniform_reservations_end();
     // Physical pillarbox and depth reset, as the vitaGL backend's full-screen glClear.
     draw_clear(0,0,0,1,1.f,7,0,0,DisplayWidth,DisplayHeight);
 }
@@ -968,6 +986,10 @@ void gxm_report() {
     twv::vita::telemetryEvent("gxm_patcher_buffer_bytes",sceGxmShaderPatcherGetBufferMemAllocated(patcher));
     twv::vita::telemetryEvent("gxm_patcher_vusse_bytes",sceGxmShaderPatcherGetVertexUsseMemAllocated(patcher));
     twv::vita::telemetryEvent("gxm_patcher_fusse_bytes",sceGxmShaderPatcherGetFragmentUsseMemAllocated(patcher));
+    twv::vita::telemetryEvent("gxm_uniform_vertex_uploads",uniformVertexUploads);
+    twv::vita::telemetryEvent("gxm_uniform_vertex_reuses",uniformVertexReuses);
+    twv::vita::telemetryEvent("gxm_uniform_fragment_uploads",uniformFragmentUploads);
+    twv::vita::telemetryEvent("gxm_uniform_fragment_reuses",uniformFragmentReuses);
     twv::vita::telemetryEvent("gxm_resident_used",residentAllocator.used());
     twv::vita::telemetryEvent("gxm_resident_peak",residentAllocator.peak());
     twv::vita::telemetryEvent("gxm_resident_allocs",residentAllocs);
@@ -1036,7 +1058,7 @@ void split_scene() {
     ++frameScene;rec.main.scenes=frameScene+1;
     inScene=ok(sceGxmBeginScene(ctx,0,target,nullptr,nullptr,displaySync[backBuffer],&displaySurface[backBuffer],&depthNext),
                "sceGxmBeginScene split");
-    shadow.valid=false;
+    shadow.valid=false;uniform_reservations_end();
     if(!inScene) { // not expected with these surfaces: drop the frame, never leave its fence unwritten
         splitScenes=0;frameSplits=1;sceGxmFinish(ctx);
         notifications[frame%FrameRing::Slots]=unsigned(frame);
@@ -1095,14 +1117,30 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
         if(s->texgen_vectors)uniform4(p,p.vertexUniforms[10],int(s->texgen_vectors),s->texgen_rows);
     }
     if(!p.vertexDefaults.empty()) {
-        void* buffer=nullptr;
-        if(!ok(sceGxmReserveVertexDefaultUniformBuffer(ctx,&buffer),"ReserveVertexDefaultUniformBuffer")){++uniformReserveFailures;return;}
-        std::memcpy(buffer,p.vertexDefaults.data(),p.vertexDefaults.size());
+        if(uniformReuse && reservedVertexProgram==vertex->program && reservedVertexBytes==p.vertexDefaults) {
+            ++uniformVertexReuses;
+        } else {
+            void* buffer=nullptr;
+            if(!ok(sceGxmReserveVertexDefaultUniformBuffer(ctx,&buffer),"ReserveVertexDefaultUniformBuffer")) {
+                ++uniformReserveFailures;uniform_reservations_end();return;
+            }
+            std::memcpy(buffer,p.vertexDefaults.data(),p.vertexDefaults.size());
+            ++uniformVertexUploads;
+            if(uniformReuse){reservedVertexProgram=vertex->program;reservedVertexBytes=p.vertexDefaults;}
+        }
     }
     if(!p.fragmentDefaults.empty()) {
-        void* buffer=nullptr;
-        if(!ok(sceGxmReserveFragmentDefaultUniformBuffer(ctx,&buffer),"ReserveFragmentDefaultUniformBuffer")){++uniformReserveFailures;return;}
-        std::memcpy(buffer,p.fragmentDefaults.data(),p.fragmentDefaults.size());
+        if(uniformReuse && reservedFragmentProgram==fragment && reservedFragmentBytes==p.fragmentDefaults) {
+            ++uniformFragmentReuses;
+        } else {
+            void* buffer=nullptr;
+            if(!ok(sceGxmReserveFragmentDefaultUniformBuffer(ctx,&buffer),"ReserveFragmentDefaultUniformBuffer")) {
+                ++uniformReserveFailures;uniform_reservations_end();return;
+            }
+            std::memcpy(buffer,p.fragmentDefaults.data(),p.fragmentDefaults.size());
+            ++uniformFragmentUploads;
+            if(uniformReuse){reservedFragmentProgram=fragment;reservedFragmentBytes=p.fragmentDefaults;}
+        }
     }
     for(unsigned i=0;i<8;++i)if(p.textureIndex[i]>=0) {
         Texture* t=find_texture(s->textures[i]);
@@ -1190,6 +1228,7 @@ const TwvGpuBackend gxmBackend{
     gxm_texture_write,gxm_texture_delete,gxm_texture_sampler,gxm_texture_sampler_unit,gxm_clear,
     gxm_resident_available,gxm_resident_alloc,gxm_resident_release,
     TwvGpuFeaturePrimitives|TwvGpuFeatureCompact|TwvGpuFeatureCompactColors|TwvGpuFeatureResident|
-    TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50};
+    TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50|
+    TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo}; // the memo is front-end only, offered with GXM
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}

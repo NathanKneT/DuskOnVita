@@ -42,6 +42,8 @@ target_link_libraries(twv_vita_runtime PUBLIC
         SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub SceProcessmgr_stub SceSysmem_stub ScePower_stub
         SceAudio_stub)
 set_source_files_properties(platform/vita/main_vita.cpp platform/vita/compat/newlib_gaps.c PROPERTIES COMPILE_OPTIONS -fshort-enums)
+# patches/dusklight/0016: game.buttonPrompts=playstation draws its button glyphs here (no artwork).
+target_sources(twv_vita_runtime PRIVATE platform/vita/ui/ps_glyphs.cpp)
 
 # Dusklight's own platform/UI layer (src/dusk: OS threads/queues, settings,
 # config, audio DSP emulation, menus). Linked; what it needs from Aurora,
@@ -55,7 +57,9 @@ set(TWV_DUSK_AUDIO_FILES
         ${DUSK_ROOT}/src/dusk/imgui/ImGuiAudio.cpp)
 # patches/dusklight/0004: the mods gfx service (WebGPU device access) is not built on the Vita.
 list(REMOVE_ITEM DUSK_FILES "${DUSK_ROOT}/src/dusk/mods/svc/gfx.cpp")
-add_library(twv_dusk STATIC ${DUSK_FILES} ${TWV_DUSK_AUDIO_FILES} platform/vita/dusk/mods_gfx_vita.cpp)
+# platform/vita/touch.cpp: front touch to the menu pointer (patches/dusklight/0017).
+add_library(twv_dusk STATIC ${DUSK_FILES} ${TWV_DUSK_AUDIO_FILES} platform/vita/dusk/mods_gfx_vita.cpp
+        platform/vita/touch.cpp)
 # patches/dusklight/0003: DuskAudioSystem.cpp includes the Vita output header (plain types only).
 set_property(SOURCE ${DUSK_ROOT}/src/dusk/audio/DuskAudioSystem.cpp APPEND PROPERTY
         INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita")
@@ -97,6 +101,13 @@ if(TWV_VITA_BENCHMARK)
         INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita")
     set_property(SOURCE platform/vita/main_vita.cpp platform/vita/aurora/aurora_vita.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_BENCHMARK=1)
+else()
+    # Test-only scripted pad input (--vita-input-script), on the same pad hook as the fixture.
+    target_sources(twv_game PRIVATE platform/vita/runtime/input_script.cpp)
+    set_property(SOURCE platform/vita/runtime/input_script.cpp APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita/runtime")
+    # main_vita.cpp and the pad hook refer to it weakly, which never pulls an archive member in.
+    target_link_options(twv_game INTERFACE -Wl,-u,twv_vita_input_script_load)
 endif()
 
 option(TWV_VITA_SCENE_PROBE "Read-only stage/player receipts after FIFO drain" OFF)

@@ -43,6 +43,10 @@ extern "C" int twv_vita_gpu_select(int backend, int digest, uint32_t digest_firs
 #if TWV_VITA_BENCHMARK
 extern "C" int twv_vita_benchmark_enable(const char*);
 #endif
+// Test-only scripted pad input (runtime/input_script.cpp); absent in benchmark builds.
+extern "C" int twv_vita_input_script_load(const char* path) __attribute__((weak));
+// patches/dusklight/0015: fixed 30 Hz game ticks, at most N per loop (game clock, plain C entry).
+extern "C" void dusk_vita_fixed_ticks(int max_ticks_per_loop) __attribute__((weak));
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
 // MEM1/ARAM reserves are bounded independently in the Aurora adapter.
@@ -54,6 +58,27 @@ namespace {
 // SDK output-buffer ABI (from a data abort on a Vita 1000): arm-vita-eabi uses short enums,
 // so out-parameters are structs of the pinned size or word-sized buffers only.
 static_assert(sizeof(SceKernelFreeMemorySizeInfo) == 0x10, "sceKernelGetFreeMemorySize output");
+
+// The play profile: g2c's GXM line, applied when the command
+// line chooses no renderer option and no GPU backend or feature. Diagnostics (digest, captures,
+// GPU timing, shader capture) do not count as a choice. --vita-profile=off keeps every path off.
+constexpr const char* PlayProfile[] = {
+    "--vita-opt-bundle=on", "--vita-memory-pools=ram64", "--vita-gx-decode=on", "--vita-lazy-vertex-plan=on",
+    "--vita-stream-decode=on", "--vita-small-packets=on", "--vita-uncached-staging=on",
+    "--vita-static-geometry=on", "--vita-gx-thread=on", "--vita-shadow-image-skip=on", "--vita-pipeline-fast=on",
+    "--vita-gpu=gxm", "--vita-gxm-resident=on", "--vita-gxm-compact=colors", "--vita-gxm-primitives=on"};
+
+// "<prefix><a>" -> choice 0, "<prefix><b>" -> choice 1 (returns 1); another value or a second
+// time -> -1; any other token -> 0.
+int wordOption(const char* token, const char* prefix, const char* a, const char* b, int& choice) {
+    const std::size_t n = std::strlen(prefix);
+    if (std::strncmp(token, prefix, n) != 0) return 0;
+    if (choice >= 0) return -1;
+    if (std::strcmp(token + n, a) == 0) choice = 0;
+    else if (std::strcmp(token + n, b) == 0) choice = 1;
+    else return -1;
+    return 1;
+}
 
 void logFreeMemory(const char* phase) {
     SceKernelFreeMemorySizeInfo info{};
@@ -138,7 +163,7 @@ int main(int, char**) {
     // A test sequence (run_sequence.hpp) takes precedence over args.txt until
     // its last run has been launched.
     static char sequenceText[twv::vita::SequenceFileLimit + 1];
-    bool haveArgs = false;
+    bool haveArgs = false, fromSequence = false;
     if (FILE* file = std::fopen(twv::vita::SequenceFile, "rb")) {
         const auto n = std::fread(sequenceText, 1, sizeof sequenceText - 1, file);
         const bool tooLong = n == sizeof sequenceText - 1 && std::fgetc(file) != EOF;
@@ -161,7 +186,7 @@ int main(int, char**) {
                 twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
             }
             std::snprintf(extra, sizeof extra, "%s", run.args);
-            haveArgs = true;
+            haveArgs = fromSequence = true;
             // Advance before starting, so a crash moves on at the next launch.
             bool saved = false;
             if (FILE* stateFile = std::fopen(twv::vita::SequenceStateFile, "wb")) {
@@ -183,6 +208,7 @@ int main(int, char**) {
             std::fclose(file);
             if (tooLong) {
                 twv::vita::telemetryText("args_error", "args.txt exceeds 511 bytes");
+                twv::vita::telemetryFlush();
                 sceKernelExitProcess(2);
                 return 2;
             }
@@ -190,138 +216,237 @@ int main(int, char**) {
             haveArgs = true;
         }
     }
+    // Port-owned option: 1 consumed, 0 not ours (a game argument), -1 rejected (the receipt is
+    // written; the caller exits). Typed options and the play profile go through the same path.
+    const auto portOption = [&](const char* token) -> int {
+        const int clockOption = clockOptions.consume(token);
+        if (clockOption < 0) {
+            twv::vita::telemetryText("args_error", "clock mode invalid or selected more than once; use --vita-clocks=system|legacy444");
+            return -1;
+        }
+        if (clockOption > 0) return 1;
+        const int exitOption = exitAfter.consume(token);
+        if (exitOption < 0) {
+            twv::vita::telemetryText("args_error", "--vita-exit-after needs 10..3600 seconds, once");
+            return -1;
+        }
+        if (exitOption > 0) return 1;
+        const int gpuOption = gpuOptions.consume(token);
+        if (gpuOption < 0) {
+            twv::vita::telemetryText("args_error", "GPU option invalid or selected more than once; see runtime/gpu_options.hpp");
+            return -1;
+        }
+        if (gpuOption > 0) {
+            twv::vita::telemetryText("gpu_option", token);
+            return 1;
+        }
+        const int rendererOption=rendererOptions.consume(token);
+        const bool unavailable=(rendererOption==1 && (!twv_vita_stream_decode_select ||
+                !twv_vita_stream_decode_select(rendererOptions.streamDecode))) ||
+            (rendererOption==2 && (!twv_vita_neon_compare_select ||
+                !twv_vita_neon_compare_select(rendererOptions.neonCompare))) ||
+            (rendererOption==3 && (!twv_vita_shadow_image_skip_select ||
+                !twv_vita_shadow_image_skip_select(rendererOptions.shadowImageSkip))) ||
+            (rendererOption==4 && (!twv_vita_vertex_cull_select ||
+                !twv_vita_vertex_cull_select(rendererOptions.vertexCull))) ||
+            (rendererOption==5 && (!twv_vita_sparse_spans_select ||
+                !twv_vita_sparse_spans_select(rendererOptions.sparseSpans))) ||
+            (rendererOption==12 && (!twv_vita_small_packets_select ||
+                !twv_vita_small_packets_select(rendererOptions.smallPackets))) ||
+            (rendererOption==13 && (!twv_vita_uncached_staging_select ||
+                !twv_vita_uncached_staging_select(rendererOptions.uncachedStaging))) ||
+            (rendererOption==14 && (!twv_vita_gx_fast_select ||
+                !twv_vita_gx_fast_select(rendererOptions.gxDecode))) ||
+            (rendererOption==15 && (!twv_vita_lazy_vertex_plan_select ||
+                !twv_vita_lazy_vertex_plan_select(rendererOptions.lazyVertexPlan))) ||
+            (rendererOption==16 && (!twv_vita_static_geometry_select ||
+                !twv_vita_static_geometry_select(rendererOptions.staticGeometry))) ||
+            (rendererOption==17 && (!twv_vita_gx_thread_select ||
+                !twv_vita_gx_thread_select(rendererOptions.gxThread))) ||
+            (rendererOption==18 && (!twv_vita_shader_capture_select ||
+                !twv_vita_shader_capture_select(rendererOptions.shaderCapture))) ||
+            (rendererOption==19 && (!twv_vita_neon_decode_select ||
+                !twv_vita_neon_decode_select(rendererOptions.neonDecode))) ||
+            (rendererOption==20 && (!twv_vita_pipeline_fast_select ||
+                !twv_vita_pipeline_fast_select(rendererOptions.pipelineFast)));
+        if(rendererOption<0 || unavailable) {
+            twv::vita::telemetryText("args_error","renderer option unavailable, invalid or selected more than once");
+            return -1;
+        }
+        if(rendererOption==1) {
+            twv::vita::telemetryText("vertex_stream_requested",rendererOptions.streamDecode?"on":"off");
+            return 1;
+        }
+        if(rendererOption==2) {
+            twv::vita::telemetryText("geometry_neon_requested",rendererOptions.neonCompare?"on":"off");
+            return 1;
+        }
+        if(rendererOption==3) {
+            twv::vita::telemetryText("shadow_image_skip_requested",rendererOptions.shadowImageSkip?"on":"off");
+            return 1;
+        }
+        if(rendererOption==4) {
+            twv::vita::telemetryText("vertex_cull_requested",rendererOptions.vertexCull?"on":"off");
+            return 1;
+        }
+        if(rendererOption==5) {
+            twv::vita::telemetryText("sparse_spans_requested",rendererOptions.sparseSpans?"on":"off");
+            return 1;
+        }
+        if(rendererOption==12 || rendererOption==13) {
+            twv::vita::telemetryText(rendererOption==12?"small_packets_requested":"uncached_staging_requested",
+                (rendererOption==12?rendererOptions.smallPackets:rendererOptions.uncachedStaging)?"on":"off");
+            return 1;
+        }
+        if(rendererOption==14) {
+            twv::vita::telemetryText("gx_decode_requested",rendererOptions.gxDecode?"on":"off");
+            return 1;
+        }
+        if(rendererOption==15) {
+            twv::vita::telemetryText("lazy_vertex_plan_requested",rendererOptions.lazyVertexPlan?"on":"off");
+            return 1;
+        }
+        if(rendererOption==19) {
+            const char* names[]={"off","on","verify"};
+            twv::vita::telemetryText("neon_decode_requested",names[rendererOptions.neonDecode]);
+            return 1;
+        }
+        if(rendererOption==20) {
+            const char* names[]={"off","on","verify"};
+            twv::vita::telemetryText("pipeline_fast_requested",names[rendererOptions.pipelineFast]);
+            return 1;
+        }
+        if(rendererOption==18) {
+            twv::vita::telemetryText("shader_capture_requested",rendererOptions.shaderCapture?"on":"off");
+            return 1;
+        }
+        if(rendererOption==17) {
+            twv::vita::telemetryText("gx_thread_requested",rendererOptions.gxThread?"on":"off");
+            return 1;
+        }
+        if(rendererOption==16) {
+            const char* names[]={"off","on","verify"};
+            twv::vita::telemetryText("static_geometry_requested",names[rendererOptions.staticGeometry]);
+            return 1;
+        }
+        if(rendererOption>=6) {
+            twv::vita::telemetryText("render_bundle_option",token);
+            return 1;
+        }
+        return 0;
+    };
+    // Read here only:
+    // --vita-profile=play|off: the play profile. Implicit (play) for no args.txt, or one that chooses
+    //   no renderer option, GPU backend or feature and no --vita-ticks (clocks, exit timers, receipts,
+    //   input scripts and diagnostics do not count); never for a sequence.txt run. Explicitly with
+    //   diagnostics only.
+    // --vita-ticks=fixed|frames: game ticks at a fixed 30 Hz, at most 2 per loop (patches/dusklight/
+    //   0015), or one per presented frame as before. Default fixed with the play profile.
+    // --vita-receipts=full|quiet: default quiet with the implicit play profile (free play).
+    int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1;
+    bool inputScript = false;
     if (haveArgs) {
         for (char* token = std::strtok(extra, " \t\r\n"); token; token = std::strtok(nullptr, " \t\r\n")) {
-            const int clockOption = clockOptions.consume(token);
-            if (clockOption < 0) {
-                twv::vita::telemetryText("args_error", "clock mode invalid or selected more than once; use --vita-clocks=system|legacy444");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
-            }
-            if (clockOption > 0) continue;
-            const int exitOption = exitAfter.consume(token);
-            if (exitOption < 0) {
-                twv::vita::telemetryText("args_error", "--vita-exit-after needs 10..3600 seconds, once");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
-            }
-            if (exitOption > 0) continue;
-            const int gpuOption = gpuOptions.consume(token);
-            if (gpuOption < 0) {
-                twv::vita::telemetryText("args_error", "GPU option invalid or selected more than once; see runtime/gpu_options.hpp");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
-            }
-            if (gpuOption > 0) {
-                twv::vita::telemetryText("gpu_option", token);
+            if (const int choice = wordOption(token, "--vita-ticks=", "frames", "fixed", ticksChoice)) {
+                if (choice < 0) {
+                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed or frames, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
                 continue;
             }
-            const int rendererOption=rendererOptions.consume(token);
-            const bool unavailable=(rendererOption==1 && (!twv_vita_stream_decode_select ||
-                    !twv_vita_stream_decode_select(rendererOptions.streamDecode))) ||
-                (rendererOption==2 && (!twv_vita_neon_compare_select ||
-                    !twv_vita_neon_compare_select(rendererOptions.neonCompare))) ||
-                (rendererOption==3 && (!twv_vita_shadow_image_skip_select ||
-                    !twv_vita_shadow_image_skip_select(rendererOptions.shadowImageSkip))) ||
-                (rendererOption==4 && (!twv_vita_vertex_cull_select ||
-                    !twv_vita_vertex_cull_select(rendererOptions.vertexCull))) ||
-                (rendererOption==5 && (!twv_vita_sparse_spans_select ||
-                    !twv_vita_sparse_spans_select(rendererOptions.sparseSpans))) ||
-                (rendererOption==12 && (!twv_vita_small_packets_select ||
-                    !twv_vita_small_packets_select(rendererOptions.smallPackets))) ||
-                (rendererOption==13 && (!twv_vita_uncached_staging_select ||
-                    !twv_vita_uncached_staging_select(rendererOptions.uncachedStaging))) ||
-                (rendererOption==14 && (!twv_vita_gx_fast_select ||
-                    !twv_vita_gx_fast_select(rendererOptions.gxDecode))) ||
-                (rendererOption==15 && (!twv_vita_lazy_vertex_plan_select ||
-                    !twv_vita_lazy_vertex_plan_select(rendererOptions.lazyVertexPlan))) ||
-                (rendererOption==16 && (!twv_vita_static_geometry_select ||
-                    !twv_vita_static_geometry_select(rendererOptions.staticGeometry))) ||
-                (rendererOption==17 && (!twv_vita_gx_thread_select ||
-                    !twv_vita_gx_thread_select(rendererOptions.gxThread))) ||
-                (rendererOption==18 && (!twv_vita_shader_capture_select ||
-                    !twv_vita_shader_capture_select(rendererOptions.shaderCapture))) ||
-                (rendererOption==19 && (!twv_vita_neon_decode_select ||
-                    !twv_vita_neon_decode_select(rendererOptions.neonDecode))) ||
-                (rendererOption==20 && (!twv_vita_pipeline_fast_select ||
-                    !twv_vita_pipeline_fast_select(rendererOptions.pipelineFast)));
-            if(rendererOption<0 || unavailable) {
-                twv::vita::telemetryText("args_error","renderer option unavailable, invalid or selected more than once");
-                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
-            }
-            if(rendererOption==1) {
-                twv::vita::telemetryText("vertex_stream_requested",rendererOptions.streamDecode?"on":"off");
+            if (const int choice = wordOption(token, "--vita-profile=", "off", "play", profileChoice)) {
+                if (choice < 0) {
+                    twv::vita::telemetryText("args_error", "--vita-profile needs play or off, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
                 continue;
             }
-            if(rendererOption==2) {
-                twv::vita::telemetryText("geometry_neon_requested",rendererOptions.neonCompare?"on":"off");
+            if (const int choice = wordOption(token, "--vita-receipts=", "full", "quiet", receiptsChoice)) {
+                if (choice < 0) {
+                    twv::vita::telemetryText("args_error", "--vita-receipts needs full or quiet, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
                 continue;
             }
-            if(rendererOption==3) {
-                twv::vita::telemetryText("shadow_image_skip_requested",rendererOptions.shadowImageSkip?"on":"off");
+            if (std::strncmp(token, "--vita-input-script=", 20) == 0) {
+                // A file in the data folder: letters, digits, '.', '_' and '-' only.
+                const char* name = token + 20;
+                bool valid = *name && std::strlen(name) <= 64 && !inputScript;
+                for (const char* c = name; valid && *c; ++c)
+                    valid = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+                            *c == '.' || *c == '_' || *c == '-';
+                char path[160];
+                std::snprintf(path, sizeof path, "%s/%s", twv::vita::DataRoot, name);
+                if (!valid || !twv_vita_input_script_load || !twv_vita_input_script_load(path)) {
+                    twv::vita::telemetryText("args_error", "--vita-input-script needs one readable, valid script in the data folder");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
+                inputScript = true;
+                twv::vita::telemetryText("input_script", name);
                 continue;
             }
-            if(rendererOption==4) {
-                twv::vita::telemetryText("vertex_cull_requested",rendererOptions.vertexCull?"on":"off");
-                continue;
-            }
-            if(rendererOption==5) {
-                twv::vita::telemetryText("sparse_spans_requested",rendererOptions.sparseSpans?"on":"off");
-                continue;
-            }
-            if(rendererOption==12 || rendererOption==13) {
-                twv::vita::telemetryText(rendererOption==12?"small_packets_requested":"uncached_staging_requested",
-                    (rendererOption==12?rendererOptions.smallPackets:rendererOptions.uncachedStaging)?"on":"off");
-                continue;
-            }
-            if(rendererOption==14) {
-                twv::vita::telemetryText("gx_decode_requested",rendererOptions.gxDecode?"on":"off");
-                continue;
-            }
-            if(rendererOption==15) {
-                twv::vita::telemetryText("lazy_vertex_plan_requested",rendererOptions.lazyVertexPlan?"on":"off");
-                continue;
-            }
-            if(rendererOption==19) {
-                const char* names[]={"off","on","verify"};
-                twv::vita::telemetryText("neon_decode_requested",names[rendererOptions.neonDecode]);
-                continue;
-            }
-            if(rendererOption==20) {
-                const char* names[]={"off","on","verify"};
-                twv::vita::telemetryText("pipeline_fast_requested",names[rendererOptions.pipelineFast]);
-                continue;
-            }
-            if(rendererOption==18) {
-                twv::vita::telemetryText("shader_capture_requested",rendererOptions.shaderCapture?"on":"off");
-                continue;
-            }
-            if(rendererOption==17) {
-                twv::vita::telemetryText("gx_thread_requested",rendererOptions.gxThread?"on":"off");
-                continue;
-            }
-            if(rendererOption==16) {
-                const char* names[]={"off","on","verify"};
-                twv::vita::telemetryText("static_geometry_requested",names[rendererOptions.staticGeometry]);
-                continue;
-            }
-            if(rendererOption>=6) {
-                twv::vita::telemetryText("render_bundle_option",token);
-                continue;
-            }
+            const int port = portOption(token);
+            if (port < 0) {twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;}
+            if (port > 0) continue;
             if(std::strncmp(token,"--vita-benchmark=",17)==0) {
 #if TWV_VITA_BENCHMARK
                 if(twv_vita_benchmark_enable(token+17))continue;
 #endif
                 twv::vita::telemetryText("args_error","benchmark unavailable, unknown or selected more than once");
-                sceKernelExitProcess(2);return 2;
+                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
             }
             if (gameArgc == 31) {
                 twv::vita::telemetryText("args_error", "too many arguments");
-                sceKernelExitProcess(2);
+                twv::vita::telemetryFlush();sceKernelExitProcess(2);
                 return 2;
             }
             gameArgs[gameArgc++] = token;
             twv::vita::telemetryText("extra_arg", token);
         }
     }
+    // Play profile, through the same parse-and-select path as typed options: it applies only when
+    // no renderer or backend option was typed, so each selector still runs once. Only in builds
+    // with every path it needs (the perf build); elsewhere the old all-off defaults stay.
+    const bool explicitRenderer = rendererOptions.any_choice() || gpuOptions.any_choice();
+    const bool profileBuilt = twv_vita_stream_decode_select && twv_vita_shadow_image_skip_select &&
+        twv_vita_small_packets_select && twv_vita_uncached_staging_select && twv_vita_gx_fast_select &&
+        twv_vita_lazy_vertex_plan_select && twv_vita_static_geometry_select && twv_vita_gx_thread_select &&
+        twv_vita_pipeline_fast_select && twv_vita_gpu_select;
+    if (profileChoice == 1 && (explicitRenderer || !profileBuilt)) {
+        twv::vita::telemetryText("args_error", "--vita-profile=play with explicit renderer options or in a build without its paths");
+        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+    }
+    const bool implicitProfile = profileChoice < 0 && !fromSequence && !explicitRenderer && ticksChoice < 0 &&
+        profileBuilt;
+    const bool playProfile = profileChoice == 1 || implicitProfile;
+    if (playProfile)
+        for (const char* token : PlayProfile)
+            if (portOption(token) != 1) {
+                twv::vita::telemetryText("args_error", "play profile option rejected");
+                twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+            }
+    twv::vita::telemetryText("play_profile", implicitProfile ? "on" : playProfile ? "on (explicit)" :
+                             profileChoice == 0 ? "off" : fromSequence ? "off (sequence run)" :
+                             explicitRenderer ? "off (renderer or GPU options given)" :
+                             ticksChoice >= 0 ? "off (--vita-ticks given)" : "not in this build");
+    // Fixed 30 Hz game ticks with the play profile: real game speed below 30 FPS. The frame cap is
+    // a --cvar before the user's own arguments, so config.json is never rewritten and a later
+    // --cvar still wins.
+    const bool fixedTicks = ticksChoice >= 0 ? ticksChoice == 1 : playProfile;
+    if (fixedTicks) {
+        static char cvar[] = "--cvar", frameCap[] = "video.maxFrameRate=30";
+        if (gameArgc + 2 > 31 || !dusk_vita_fixed_ticks) {
+            twv::vita::telemetryText("args_error", "fixed ticks unavailable in this build, or too many arguments");
+            twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+        }
+        for (int i = gameArgc - 1; i >= 5; --i) gameArgs[i + 2] = gameArgs[i];
+        gameArgs[5] = cvar;gameArgs[6] = frameCap;gameArgc += 2;
+        dusk_vita_fixed_ticks(2);
+    }
+    twv::vita::telemetryEvent("fixed_game_ticks", fixedTicks ? 2 : 0);
+    // Quiet receipts with the implicit profile (free play); sequence runs, explicit profiles and
+    // renderer choices keep every receipt, and --vita-receipts decides either way.
+    twv::vita::telemetryQuiet(receiptsChoice >= 0 ? receiptsChoice == 1 : implicitProfile);
     gameArgs[gameArgc] = nullptr;
     if(!twv_vita_bundle_select(rendererOptions.bundle_features(),rendererOptions.memoryProfile)) {
         twv::vita::telemetryText("args_error","render bundle unavailable or selected after first use");

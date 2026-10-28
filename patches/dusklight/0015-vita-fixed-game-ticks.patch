@@ -1,0 +1,194 @@
+Vita: game ticks at a fixed 30 Hz without frame interpolation, so the game keeps its real speed
+when frames take longer than 33 ms (today ticks equal presented frames: 20 FPS is 2/3 speed).
+Upstream's separate-tick path (the time-scale path, painting skipped inside ticks) runs at most N
+ticks per loop (dusk_vita_fixed_ticks), drops any backlog beyond that instead of catching up, runs
+one tick after a long gap instead of none, and keeps the frame limiter (video.maxFrameRate).
+A loop that finds no tick due but one due within 4 ms (the limiter wakes a little early) waits
+for it and runs it instead of painting the same frame twice, and the limiter adds that wait to
+the frame so the loop stays in step with the ticks.
+Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps upstream behaviour.
+
+--- a/src/dusk/game_clock.h
++++ b/src/dusk/game_clock.h
+@@ -40,4 +40,13 @@
+ void set_sim_rate(float hz);
+ float get_sim_rate();
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0015): fixed 30 Hz game ticks without interpolation, at most this many
++// per loop (0 = upstream behaviour). Set by the Vita entry before game_main.
++bool vita_fixed_ticks();
++// Nanoseconds the last advance() waited for a tick due just after it (0 if none); the frame
++// limiter adds them to that frame so the loop stays in step with the ticks.
++long long vita_tick_wait_ns();
++#endif
++
+ }  // namespace dusk::game_clock
+--- a/src/dusk/game_clock.cpp
++++ b/src/dusk/game_clock.cpp
+@@ -1,6 +1,9 @@
+ #include "dusk/game_clock.h"
+ 
+ #include <aurora/time.hpp>
++#if TARGET_VITA
++#include <SDL3/SDL_timer.h>
++#endif
+ 
+ #include <algorithm>
+ #include <chrono>
+@@ -29,6 +32,15 @@
+     std::chrono::duration_cast<game_clock::duration>(std::chrono::duration<float>(kSimPeriod));
+ constexpr native_clock::duration kAbnormalGapResetThreshold = std::chrono::milliseconds(250);
+ constexpr int kMaxSimTicksPerFrame = static_cast<int>(aurora::time::kMaximumTimeScale) * 4;
++#if TARGET_VITA
++// Vita: fixed ticks on the separate-tick path. A slow frame runs up to this many ticks and drops
++// the rest of the backlog (no catch-up spiral); a long gap still runs one tick.
++int s_vitaMaxTicks = 0;
++// The frame limiter wakes a little early. A loop that finds no tick due but one due within this
++// waits for it and runs it, instead of painting the same frame again (and two ticks next loop).
++constexpr game_clock::duration kVitaTickWait = std::chrono::milliseconds(4);
++long long s_vitaTickWaitNs = 0;
++#endif
+ 
+ float ui_dt() {
+     if (s_simTickActive) {
+@@ -70,9 +82,22 @@
+     return aurora::time::scale() / kSimPeriod;
+ }
+ 
++#if TARGET_VITA
++bool vita_fixed_ticks() {
++    return s_vitaMaxTicks > 0;
++}
++
++long long vita_tick_wait_ns() {
++    return s_vitaTickWaitNs;
++}
++#endif
++
+ const FrameTiming& advance() {
+     const auto nativeNow = native_clock::now();
+     const auto gameNow = game_clock::now();
++#if TARGET_VITA
++    s_vitaTickWaitNs = 0;
++#endif
+     const auto nativeFrameGap = nativeNow - s_previousNativeSample;
+     const auto gameFrameGap = gameNow - s_latestGameSample;
+     s_previousNativeSample = nativeNow;
+@@ -87,7 +112,12 @@
+     const float timeScale = aurora::time::scale();
+     const bool interpolating =
+         getSettings().game.enableFrameInterpolation.getValue() != FrameInterpMode::Off;
++#if TARGET_VITA
++    const bool vitaFixed = s_vitaMaxTicks > 0 && !interpolating;
++    const bool separatePresentation = interpolating || timeScale != 1.0f || vitaFixed;
++#else
+     const bool separatePresentation = interpolating || timeScale != 1.0f;
++#endif
+     out.interpolating = interpolating;
+     out.separatePresentation = separatePresentation;
+ 
+@@ -116,12 +146,23 @@
+     if (timeStopped || abnormalGap) {
+         s_currentSnapshotTime = simulationTarget;
+         out.numSimTicks = 0;
++#if TARGET_VITA
++        if (vitaFixed && !timeStopped) {
++            s_currentSnapshotTime = simulationTarget - kSimPeriodDuration;
++            out.numSimTicks = 1;
++        }
++#endif
+         return out;
+     }
+ 
+     int numSimTicks = 0;
+     auto projectedSnapshotTime = s_currentSnapshotTime;
+-    while (numSimTicks < kMaxSimTicksPerFrame) {
++#if TARGET_VITA
++    const int maxSimTicks = vitaFixed ? s_vitaMaxTicks : kMaxSimTicksPerFrame;
++#else
++    const int maxSimTicks = kMaxSimTicksPerFrame;
++#endif
++    while (numSimTicks < maxSimTicks) {
+         const bool tickDue = interpolating ?
+                                  projectedSnapshotTime < simulationTarget :
+                                  projectedSnapshotTime + kSimPeriodDuration <= simulationTarget;
+@@ -131,7 +172,36 @@
+         projectedSnapshotTime += kSimPeriodDuration;
+         numSimTicks++;
+     }
++#if TARGET_VITA
++    if (vitaFixed && numSimTicks == 0) {
++        const auto due = s_currentSnapshotTime + kSimPeriodDuration;
++        if (due - simulationTarget <= kVitaTickWait) {
++            // Sleeps may end a little early: check the clock again, a bounded number of times.
++            for (int i = 0; i < 8; ++i) {
++                const auto left = due - game_clock::now();
++                if (left <= game_clock::duration::zero()) {
++                    break;
++                }
++                SDL_DelayPrecise(static_cast<Uint64>(static_cast<float>(left.count()) / timeScale));
++            }
++            const auto nativeAfter = native_clock::now();
++            const auto gameAfter = game_clock::now();
++            s_vitaTickWaitNs = (nativeAfter - nativeNow).count();
++            out.dt += std::chrono::duration<float>(gameAfter - gameNow).count();
++            s_previousNativeSample = nativeAfter;
++            s_latestGameSample = gameAfter;
++            numSimTicks = 1;
++        }
++    }
++#endif
+     out.numSimTicks = numSimTicks;
++#if TARGET_VITA
++    if (vitaFixed && numSimTicks == maxSimTicks &&
++        projectedSnapshotTime + kSimPeriodDuration <= simulationTarget) {
++        // Drop the backlog: after these ticks the game time is the target, nothing more is due.
++        s_currentSnapshotTime = simulationTarget - numSimTicks * kSimPeriodDuration;
++    }
++#endif
+     return out;
+ }
+ 
+@@ -182,3 +252,10 @@
+ }
+ 
+ }  // namespace dusk::game_clock
++
++#if TARGET_VITA
++// Plain C entry for the Vita port (platform/vita/main_vita.cpp), called before game_main.
++extern "C" void dusk_vita_fixed_ticks(int maxTicksPerLoop) {
++    dusk::game_clock::s_vitaMaxTicks = maxTicksPerLoop < 0 ? 0 : maxTicksPerLoop;
++}
++#endif
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -343,8 +343,12 @@
+         static double last_fps_setting = 0.0;
+         static Limiter::duration_t target_ns = 0;
+ 
+-        if (dusk::getSettings().game.enableFrameInterpolation.getValue() ==
+-                dusk::FrameInterpMode::Capped &&
++        if ((dusk::getSettings().game.enableFrameInterpolation.getValue() ==
++                 dusk::FrameInterpMode::Capped
++#if TARGET_VITA
++             || dusk::game_clock::vita_fixed_ticks()
++#endif
++             ) &&
+             !dusk::getTransientSettings().turboMode)
+         {
+             ZoneScopedN("Frame limiter");
+@@ -354,7 +358,13 @@
+                 target_ns = static_cast<Limiter::duration_t>(1'000'000'000.0 / current_fps);
+             }
+ 
++#if TARGET_VITA
++            // A tick advance() waited for lengthens this frame, so the loop stays in step with the ticks.
++            Limiter::duration_t sleepTime = main_loop_limiter.Sleep(
++                target_ns + static_cast<Limiter::duration_t>(dusk::game_clock::vita_tick_wait_ns()));
++#else
+             Limiter::duration_t sleepTime = main_loop_limiter.Sleep(target_ns);
++#endif
+             dusk::frameUsagePct =
+                 100.0f * (1.0f - static_cast<float>(sleepTime) / static_cast<float>(target_ns));
+         } else {

@@ -32,6 +32,10 @@ struct RingLock {
     ~RingLock() { sceKernelUnlockMutex(gRingMutex, 1); }
 };
 
+// Quiet receipts (free play, telemetryQuiet): thinner frame/scene receipts, and the log rotated
+// at boot only, so a run's records never straddle two files (vita_run_report.py splits by boot).
+volatile bool gQuiet = false;
+
 // Append and close per write, so a crash never loses already-written lines.
 bool writeFile(const char* data, std::size_t bytes) {
     const auto begin=processTimeUs();
@@ -159,7 +163,9 @@ void telemetryInit() {
     sceIoMkdir(DataRoot, 0777);
     gMutex = sceKernelCreateMutex("twv_telemetry", 0, 0, nullptr);
     gLog.attach(appendSink, nullptr);
-    gLog.setImmediate(true);
+    // Held in memory until telemetryQuiet() (main_vita.cpp, after the options): this boot's
+    // records then all land in the file chosen after a possible rotation. Error exits flush.
+    gLog.setImmediate(false);
     gLog.event("boot", 0, 0);
 }
 void telemetryBuffered(bool buffered) {
@@ -175,6 +181,23 @@ void telemetryBuffered(bool buffered) {
     }
     gLog.setImmediate(!buffered);
 }
+void telemetryQuiet(bool quiet) {
+    Lock l;
+    gQuiet = quiet;
+    // Free play: a log past 8 MB moves to runtime.1.jsonl (replacing it) before this boot writes.
+    SceIoStat st{};
+    const long long bytes = sceIoGetstat(RuntimeLog, &st) >= 0 ? static_cast<long long>(st.st_size) : 0;
+    const bool rotate = quiet && bytes > static_cast<long long>(QuietRotateBytes);
+    if (rotate) {
+        sceIoRemove(RuntimeLogPrevious);
+        sceIoRename(RuntimeLog, RuntimeLogPrevious);
+    }
+    gLog.event("telemetry_quiet", quiet, sinceStartMs());
+    gLog.event("telemetry_rotated_bytes", rotate ? bytes : 0, sinceStartMs());
+    gLog.setImmediate(true);
+    gLog.flush();
+}
+bool telemetryIsQuiet() { return gQuiet; }
 void telemetryEvent(const char* name, long long value) { Lock l; gLog.event(name, value, sinceStartMs()); }
 void telemetryText(const char* name, const char* text) { Lock l; gLog.text(name, text, sinceStartMs()); }
 void telemetryFlush() { Lock l; gLog.flush(); }

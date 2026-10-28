@@ -44,8 +44,10 @@ int observe_actor(void* raw,void* data) {
 }
 
 extern "C" void twv_vita_scene_probe(unsigned frame) {
-    twv_vita_target_probe(frame);
-    if (frame != 1 && frame % 10) return;
+    // Free play (telemetry.hpp, quiet): stage, player and game ticks every 300 frames only.
+    const bool quiet = twv::vita::telemetryIsQuiet();
+    if (!quiet) twv_vita_target_probe(frame);
+    if (quiet ? frame % twv::vita::QuietReceiptFrames != 0 : (frame != 1 && frame % 10)) return;
     twv::vita::telemetryEvent("runtime_frames", frame);
     const char* stage = dComIfGp_getStartStageName();
     twv::vita::telemetryText("stage_name", stage ? stage : "");
@@ -62,6 +64,11 @@ extern "C" void twv_vita_scene_probe(unsigned frame) {
                       double(player->current.pos.z), int(player->shape_angle.x),
                       int(player->shape_angle.y), int(player->shape_angle.z), int(player->current.roomNo));
         twv::vita::telemetryText("player_state", value);
+    }
+    if (quiet) {
+        twv::vita::telemetryEvent("simulation_execute_calls",twv::vita::simulationExecuteCalls);
+        twv::vita::telemetryEvent("presentation_interpolating",dusk::game_clock::g_frameTiming.interpolating);
+        return;
     }
     char input[128];
     std::snprintf(input,sizeof input,"left=%.4f,%.4f right=%.4f,%.4f",

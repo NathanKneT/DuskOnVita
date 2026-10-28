@@ -37,6 +37,13 @@ struct RendererOptions {
     uint32_t bundle_features()const noexcept {
         return ((bundle?TWV_BUNDLE_CORE:0u)&~featureSelected)|(featureValues&featureSelected);
     }
+    // Any renderer choice on the command line (main_vita.cpp's play profile then stays off).
+    // The shader-source capture is a diagnostic and does not count.
+    bool any_choice()const noexcept {
+        return selected||neonSelected||shadowSelected||cullSelected||sparseSelected||smallSelected||uncachedSelected||
+               gxSelected||lazyPlanSelected||neonDecodeSelected||gxThreadSelected||staticGeometrySelected||
+               pipelineFastSelected||bundleSelected||memorySelected||featureSelected!=0;
+    }
     // 0 original CLI;1..5 legacy experiments;6 bundle;7..10 overrides;11 memory;
     // 12 small direct packets;13 verified uncached-RAM staging;14 GX decode.
     //15 lazy vertex plan;16 static geometry;17 GX worker thread;18 shader source capture;19 NEON decode;

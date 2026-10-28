@@ -101,6 +101,8 @@ constexpr uint32_t TwvGpuFeatureResident=8u;      // certified geometry and stat
 constexpr uint32_t TwvGpuFeatureTiming=16u;       // diagnostic: GPU and present timing receipts
 constexpr uint32_t TwvGpuFeatureSplit=32u;        // diagnostic: frames split into twv_gpu_split_scenes() scenes
 constexpr uint32_t TwvGpuFeatureScale75=64u,TwvGpuFeatureScale67=128u,TwvGpuFeatureScale50=256u; // diagnostic render size
+constexpr uint32_t TwvGpuFeatureUniformReuse=512u; // reuse unchanged default-uniform reservations (G3 first step)
+constexpr uint32_t TwvGpuFeaturePipelineMemo=1024u; // front end: memo of the last pipeline looked up and checked
 uint32_t twv_gpu_features(void);
 uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it

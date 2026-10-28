@@ -43,6 +43,9 @@ struct EntryState {
     std::uint32_t bundleFeatures = 0, memoryProfile = 0;
     unsigned exitAfter = 0;
     int gameResult = 7;
+    bool quiet = false, gpuCalled = false;
+    int gpuBackend = -1;
+    std::uint32_t gpuFeatures = 0;
 } state;
 const char* axes[]{"arm", "bus", "gpu", "gpu_xbar"};
 constexpr std::array<int, 4> initial{321, -17, 111, INT_MIN};
@@ -141,7 +144,18 @@ void telemetryText(const char* name, const char* value) { state.text[name] = val
 void telemetryFlush() {}
 void telemetrySync() { state.calls.emplace_back("sync"); }
 void runControlExitAfter(unsigned seconds) { state.calls.emplace_back("exit_after"); state.exitAfter = seconds; }
+void telemetryQuiet(bool quiet) { state.quiet = quiet; }
 }
+#if TWV_TEST_PLAY_PROFILE
+// With a GPU selector present, a build has every path the play profile needs.
+extern "C" int twv_vita_gpu_select(int backend, int, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+                                   std::uint32_t, int, std::uint32_t features, std::uint32_t) {
+    state.calls.emplace_back("gpu"); state.gpuCalled = true; state.gpuBackend = backend; state.gpuFeatures = features;
+    return 1;
+}
+int fixedTicks = -1;
+extern "C" void dusk_vita_fixed_ticks(int ticks) { fixedTicks = ticks; }
+#endif
 extern "C" int twv_vita_stream_decode_select(int value) { return selectRenderer("stream", value); }
 extern "C" int twv_vita_neon_compare_select(int value) { return selectRenderer("neon", value); }
 extern "C" int twv_vita_shadow_image_skip_select(int value) { return selectRenderer("shadow", value); }
@@ -182,6 +196,70 @@ int main() {
     const auto root = std::filesystem::path(directory);
     std::filesystem::current_path(root);
     std::filesystem::create_directories("ux0:data/twilight-vita");
+#if TWV_TEST_PLAY_PROFILE
+    // Play profile, implicit: no args.txt (or one without any port option) -> g2c's GXM line through
+    // the same selectors, fixed game ticks with a 30 FPS cap before the user's arguments, quiet receipts.
+    fixedTicks = -1;
+    assert(run(nullptr) == 7); checkClocks(true, false);
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 15u);
+    assert(state.selections == (std::map<std::string, int>{{"stream", 1}, {"shadow", 1}, {"small", 1},
+        {"uncached", 1}, {"gx", 1}, {"lazy_plan", 1}, {"static", 1}, {"gx_thread", 1}, {"pipeline_fast", 1}}));
+    assert(state.bundleFeatures == TWV_BUNDLE_CORE && state.memoryProfile == 2 && state.quiet);
+    assert(state.events.at("gx_thread_main_affinity_result") == 0);
+    assert(fixedTicks == 2 && state.events.at("fixed_game_ticks") == 2);
+    assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
+    fixedTicks = -1;
+    assert(run("--stage R_SP01,4,2,0 --cvar video.maxFrameRate=20") == 7 && state.text.at("play_profile") == "on");
+    assert(fixedTicks == 2 && std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "video.maxFrameRate=30", "--stage", "R_SP01,4,2,0", "--cvar",
+                                  "video.maxFrameRate=20"}));
+    // Clocks, exit timers, receipts and diagnostics left in args.txt keep the implicit profile.
+    fixedTicks = -1;
+    assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 15u);
+    assert(state.selections.at("gx_thread") == 1 && state.quiet && fixedTicks == 2);
+    assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
+    fixedTicks = -1;
+    assert(run("--vita-exit-after=60 --vita-shader-capture=on --vita-receipts=full --stage R_SP01,4,2,0") == 7);
+    assert(state.text.at("play_profile") == "on" && state.selections.at("capture") == 1);
+    assert(state.selections.at("static") == 1 && state.gpuBackend == 1 && !state.quiet && fixedTicks == 2);
+    // A renderer, GPU backend or feature choice, or --vita-ticks, turns it off (the old all-off defaults
+    // for everything not chosen, full receipts).
+    fixedTicks = -1;
+    assert(run("--vita-gx-thread=on --stage R_SP01,4,2,0") == 7);
+    assert(state.text.at("play_profile") == "off (renderer or GPU options given)" && state.selections.size() == 1);
+    assert(!state.gpuCalled && !state.quiet && fixedTicks == -1 && state.gameArgs.size() == 7);
+    assert(run("--vita-gpu=vgl") == 7 && state.text.at("play_profile") == "off (renderer or GPU options given)");
+    assert(state.selections.empty() && state.gpuBackend == 0 && !state.quiet && fixedTicks == -1);
+    assert(run("--vita-ticks=frames") == 7 && state.text.at("play_profile") == "off (--vita-ticks given)");
+    assert(state.selections.empty() && !state.gpuCalled && !state.quiet && fixedTicks == -1);
+    // Explicit: diagnostics allowed, renderer or backend choices refused; ticks and receipts overridable.
+    assert(run("--vita-profile=play --vita-shader-capture=on --vita-exit-after=60 --stage R_SP01,4,2,0") == 7);
+    assert(state.text.at("play_profile") == "on (explicit)" && state.selections.at("capture") == 1);
+    assert(state.selections.at("static") == 1 && state.gpuBackend == 1 && !state.quiet && fixedTicks == 2);
+    fixedTicks = -1;
+    assert(run("--vita-profile=play --vita-ticks=frames") == 7 && fixedTicks == -1 && state.gameArgs.size() == 5);
+    assert(run("--vita-profile=play --vita-receipts=quiet") == 7 && state.quiet);
+    assert(run("--vita-profile=off --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "off");
+    assert(state.selections.empty() && !state.gpuCalled && state.gameArgs.size() == 7);
+    for (const char* bad : {"--vita-profile=play --vita-gx-thread=on", "--vita-profile=play --vita-gpu=vgl",
+                            "--vita-profile=maybe", "--vita-profile=off --vita-profile=off", "--vita-receipts=loud",
+                            "--vita-ticks=sometimes", "--vita-ticks=fixed --vita-ticks=fixed"})
+        checkRejected(run(bad));
+    // Never implicit for a sequence run: vitaGL reference lines stay vitaGL.
+    writeFile("ux0:data/twilight-vita/sequence.txt", "o1: --stage F_SP103,1,3,-1\n");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    assert(run(nullptr) == 7 && !state.quiet && state.text.at("play_profile") == "off (sequence run)");
+    assert(state.selections.empty() && !state.gpuCalled);
+    std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    std::filesystem::current_path(previous);
+    std::filesystem::remove_all(root);
+    std::puts("clock_entry_test: implicit play profile unless renderer/GPU choices or --vita-ticks (clocks, timers, diagnostics kept), explicit with diagnostics only, never for sequence runs; fixed ticks, frame cap before user args, quiet receipts passed");
+    return 0;
+#endif
     assert(run(nullptr) == 7); checkClocks(true, false); assert(state.gameArgs.size() == 5);
     assert(state.exitAfter == 0 && !state.events.count("sequence_index") && !state.events.count("sequence_complete"));
     assert(run("--vita-clocks=system") == 7); checkClocks(false, true);

@@ -20,6 +20,11 @@
 //                                           time (implies the timing; costs the extra loads/stores)
 //   --vita-gxm-scale=100|75|67|50           render at 720x408, 640x368 or 480x272 and let the display
 //                                           scale up: fill-bound or not (changes the picture)
+// Track D (GXM only, default off; an addition the play profile accepts, not a choice replacing it):
+//   --vita-gxm-uniform-reuse=on|off         reuse the last default-uniform reservation when the
+//                                           programs and bytes are unchanged (G3 first step)
+//   --vita-gxm-pipeline-memo=on|off         remember the last pipeline looked up and checked, with
+//                                           copies that stay in cache (needs --vita-pipeline-fast)
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -34,14 +39,17 @@ struct GpuOptions {
     uint32_t captureFirst=0,captureLast=0,captureStep=0;
     int captureMatch=0;
     bool primitivesSelected=false,compactSelected=false,residentSelected=false,timingSelected=false;
-    bool splitSelected=false,scaleSelected=false;
+    bool splitSelected=false,scaleSelected=false,uniformReuseSelected=false,pipelineMemoSelected=false;
     uint32_t features=0; // TwvGpuFeature* bits (gfx_vgl/gpu_api.h)
     uint32_t splitScenes=0; // --vita-gxm-gpu-split
     static constexpr uint32_t FeaturePrimitives=1u,FeatureCompact=2u,FeatureCompactColors=4u,FeatureResident=8u,
-        FeatureTiming=16u,FeatureSplit=32u,FeatureScale75=64u,FeatureScale67=128u,FeatureScale50=256u; // diagnostics
+        FeatureTiming=16u,FeatureSplit=32u,FeatureScale75=64u,FeatureScale67=128u,FeatureScale50=256u, // diagnostics
+        FeatureUniformReuse=512u,FeaturePipelineMemo=1024u;
     // 0 not a GPU option, -1 invalid or repeated, 1 accepted.
     int consume(const char* token) noexcept {
         if(!token)return -1;
+        if(const char* v=value(token,"--vita-gxm-uniform-reuse"))return toggle(v,uniformReuseSelected,FeatureUniformReuse);
+        if(const char* v=value(token,"--vita-gxm-pipeline-memo"))return toggle(v,pipelineMemoSelected,FeaturePipelineMemo);
         if(const char* v=value(token,"--vita-gxm-gpu-timing"))return toggle(v,timingSelected,FeatureTiming);
         if(const char* v=value(token,"--vita-gxm-gpu-split")) {
             uint32_t n=0;const char* rest=nullptr;
@@ -106,7 +114,12 @@ struct GpuOptions {
     bool any()const noexcept {
         return backendSelected || digestSelected || captureSelected || matchSelected ||
                primitivesSelected || compactSelected || residentSelected || timingSelected || splitSelected ||
-               scaleSelected;
+               scaleSelected || uniformReuseSelected || pipelineMemoSelected;
+    }
+    // A backend or drawing-feature choice (main_vita.cpp's play profile then stays off). The
+    // digest, captures and GPU diagnostics do not count.
+    bool any_choice()const noexcept {
+        return backendSelected || primitivesSelected || compactSelected || residentSelected;
     }
 private:
     int toggle(const char* v,bool& selected,uint32_t bit) noexcept {

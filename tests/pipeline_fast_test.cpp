@@ -84,12 +84,29 @@ int main() {
         if (found == CompactPipelineIndex::Missing) index.insert(hash, k, uint32_t(i));
         else assert(std::memcmp(&configs[found], &configs[i], sizeof(Config)) == 0);
     }
+    // LastKeyMemo answers exactly when the config equals the one stored last, with the index's pipeline.
+    LastKeyMemo memo;
+    assert(memo.find(pipeline_compact_key(configs[0])) == CompactPipelineIndex::Missing);
+    unsigned memoHits = 0;
+    const Config* last = nullptr;
+    for (size_t n = 0; n + 2 < configs.size() * 2; ++n) {
+        const Config& c = configs[(n % 5 == 0 || n % 7 == 0) ? n / 2 : (n + 1) / 2]; // runs of repeats
+        const CompactKey k = pipeline_compact_key(c);
+        const uint32_t indexed = index.find(k.size % 3, k);
+        assert(indexed != CompactPipelineIndex::Missing);
+        const uint32_t remembered = memo.find(k);
+        assert((remembered != CompactPipelineIndex::Missing) == (last && std::memcmp(last, &c, sizeof(Config)) == 0));
+        if (remembered != CompactPipelineIndex::Missing) {assert(remembered == indexed);++memoHits;}
+        memo.store(k, indexed);
+        last = &c;
+    }
+    assert(memoHits > configs.size() / 2);
     // reset_entries puts entries back to their default.
     std::array<Tev, 16> stages{};
     for (auto& s : stages) s = {1, 2};
     reset_entries(stages, 3, 40);
     for (size_t i = 0; i < stages.size(); ++i) assert((stages[i].a == 7 && stages[i].b == 9) == (i >= 3));
     std::printf("pipeline_fast_test: %zu configs, compact keys equal exactly for equal configs (%u pairs), "
-                "index through collisions, %zu distinct pipelines, reset to defaults passed\n",
-                configs.size(), equalPairs, index.size());
+                "index through collisions, %zu distinct pipelines, last-key memo (%u hits), reset to defaults "
+                "passed\n", configs.size(), equalPairs, index.size(), memoHits);
 }

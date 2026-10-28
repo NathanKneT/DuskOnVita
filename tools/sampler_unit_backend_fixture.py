@@ -91,9 +91,49 @@ G2_INSERTIONS = [
      ' std::memcpy(state.vertex_fracs,p.packed.frac.data(),TwvVertexAttributeCount);\n'),
 ]
 
+# Track D (docs/PERFORMANCE.md, --vita-gxm-pipeline-memo): the shader-info check compares the
+# config with a hot copy of the one last checked for the same pipeline before the stored one.
+# Outside the sampled-texture loop.
+PIPELINE_MEMO = [
+    (' uint64_t requests=0,reused=0,built=0,fallback=0,oracleChecks=0,oracleFailures=0,invalid=0;\n',
+     ' uint64_t requests=0,reused=0,built=0,fallback=0,oracleChecks=0,oracleFailures=0,invalid=0,memoHits=0;\n'
+     ' // --vita-gxm-pipeline-memo (twv_vita_pipeline_info_copy): -1 until read at the first call, then the\n'
+     ' // pipeline last checked there, with copies of its config and info that stay in cache.\n'
+     ' int memoOn=-1;\n uint32_t memoPipeline=UINT32_MAX;\n aurora::gx::PipelineConfig memoConfig{};\n'
+     ' aurora::gx::ShaderInfo memoInfo{};\n'),
+    ('  twv::vita::telemetryEvent("gfx_shader_info_invalid",sPipelineInfoReuse.invalid);\n',
+     '  twv::vita::telemetryEvent("gfx_shader_info_invalid",sPipelineInfoReuse.invalid);\n'
+     '  if(twv_gpu_features()&TwvGpuFeaturePipelineMemo)\n'
+     '   twv::vita::telemetryEvent("gfx_shader_info_memo_hits",sPipelineInfoReuse.memoHits);\n'),
+    (' vgl::pipelineIndex.clear();\n',
+     " vgl::pipelineIndex.clear();\n sPipelineInfoReuse.memoPipeline=UINT32_MAX; // the memo's pipeline is gone\n"),
+    (' if(pipeline>=twv::vgl::pipelines.size()) {\n  ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);\n }\n'
+     ' const auto& cached=twv::vgl::pipelines[pipeline];\n'
+     ' if(std::memcmp(&cached.config,expected,sizeof *expected)!=0) {\n'
+     '  ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);\n }\n',
+     " // --vita-gxm-pipeline-memo: a pipeline's stored config never changes (pipelines are cleared only at\n"
+     ' // shutdown), so a config equal to the copy of the one last checked for that pipeline passes the\n'
+     ' // check against the stored one: the whole-config comparison runs against the hot copy instead of\n'
+     " // the pipeline's own, rarely cached, config.\n"
+     ' auto& memo=sPipelineInfoReuse;\n'
+     ' if(memo.memoOn<0)memo.memoOn=(twv_gpu_features()&TwvGpuFeaturePipelineMemo)!=0;\n'
+     ' const bool remembered=memo.memoOn && pipeline==memo.memoPipeline &&\n'
+     '  std::memcmp(&memo.memoConfig,expected,sizeof *expected)==0;\n'
+     ' if(!remembered) {\n  if(pipeline>=twv::vgl::pipelines.size()) {\n'
+     '   ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);\n  }\n'
+     '  if(std::memcmp(&twv::vgl::pipelines[pipeline].config,expected,sizeof *expected)!=0) {\n'
+     '   ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);\n  }\n }\n'
+     ' const auto& cached=twv::vgl::pipelines[pipeline];\n'),
+    (' *out=cached.info;++sPipelineInfoReuse.reused;return 1;\n',
+     ' if(remembered) {*out=memo.memoInfo;++sPipelineInfoReuse.memoHits;++sPipelineInfoReuse.reused;return 1;}\n'
+     ' *out=cached.info;\n'
+     ' if(memo.memoOn) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}\n'
+     ' ++sPipelineInfoReuse.reused;return 1;\n'),
+]
+
 def audited(original):
-    """The baseline with the C03 replacement, the G2 insertions (each after its anchor line) and the
-    off-screen edits."""
+    """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
+    off-screen edits and the pipeline memo."""
     expected = original.replace(OLD, NEW, 1)
     for anchor, inserted in G2_INSERTIONS:
         if expected.count(anchor) != 1:
@@ -102,6 +142,10 @@ def audited(original):
     for old, new in OFFSCREEN:
         if expected.count(old) != 1:
             raise SystemExit('Audited off-screen edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in PIPELINE_MEMO:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited pipeline-memo edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

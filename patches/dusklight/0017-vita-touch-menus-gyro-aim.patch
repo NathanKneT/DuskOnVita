@@ -1,0 +1,82 @@
+Vita controls: front-touch menus without RmlUi, and gyro aim on by default.
+
+dusk::menu_pointer turns a pointer position into game 2D coordinates by dividing it by the RmlUi
+context's size; the Vita has no RmlUi context, so every touch was dropped. set_pointer_surface()
+gives that size instead (the Vita passes the game's drawn area, platform/vita/touch.cpp). Nothing
+else calls it, and an RmlUi context, when present, still wins, so other platforms are unchanged.
+Taps, hit tests and menu handling are Dusklight's own.
+
+game.enableGyroAim defaults to on for the Vita, which always has a gyroscope (SDL's Vita sensor
+driver; aiming reads it through Aurora's lib/device.cpp). It stays a user setting: a saved choice
+still wins, and the option turns it off.
+
+--- a/src/dusk/menu_pointer.cpp
++++ b/src/dusk/menu_pointer.cpp
+@@ -47,6 +47,8 @@ u32 s_suppressedPadNextReadMask = 0;
+ Context s_deferredActivationContext = Context::None;
+ TargetId s_deferredActivationTarget = InvalidTarget;
+ Gesture s_gesture;
++f32 s_surfaceWidth = 0.0f;
++f32 s_surfaceHeight = 0.0f;
+ bool s_hoverTargetValid = false;
+ TargetId s_hoverTarget = InvalidTarget;
+ bool s_clickPending = false;
+@@ -162,14 +164,16 @@ void clear_click_state() noexcept {
+ 
+ void set_position_from_rml(f32 x, f32 y) noexcept {
+     auto* context = aurora::rmlui::get_context();
+-    if (context == nullptr) {
++    f32 width = s_surfaceWidth;
++    f32 height = s_surfaceHeight;
++    if (context != nullptr) {
++        const auto dimensions = context->GetDimensions();
++        width = std::max(static_cast<f32>(dimensions.x), 1.0f);
++        height = std::max(static_cast<f32>(dimensions.y), 1.0f);
++    } else if (width <= 0.0f || height <= 0.0f) {
+         return;
+     }
+ 
+-    const auto dimensions = context->GetDimensions();
+-    const f32 width = std::max(static_cast<f32>(dimensions.x), 1.0f);
+-    const f32 height = std::max(static_cast<f32>(dimensions.y), 1.0f);
+-
+     s_state.x = mDoGph_gInf_c::getMinXF() + x / width * mDoGph_gInf_c::getWidthF();
+     s_state.y = mDoGph_gInf_c::getMinYF() + y / height * mDoGph_gInf_c::getHeightF();
+     s_state.valid = true;
+@@ -336,6 +340,11 @@ void begin_context(Context context) noexcept {
+     s_currentContext = context;
+ }
+ 
++void set_pointer_surface(f32 width, f32 height) noexcept {
++    s_surfaceWidth = width;
++    s_surfaceHeight = height;
++}
++
+ bool active() noexcept {
+     return s_currentContext != Context::None || s_lastContext != Context::None;
+ }
+--- a/src/dusk/menu_pointer.h
++++ b/src/dusk/menu_pointer.h
+@@ -62,4 +62,8 @@ bool hit_rect(f32 left, f32 top, f32 right, f32 bottom, f32 padding = 0.0f) noex
+ bool hit_pane(CPaneMgr* pane, f32 padding = 0.0f) noexcept;
+ bool hit_pane(J2DPane* pane, f32 padding = 0.0f) noexcept;
+ 
++// Without an RmlUi context (the Vita), handle_fallthrough_pointer takes pixels of a surface this
++// size that covers the game's drawn area. A context, when present, wins.
++void set_pointer_surface(f32 width, f32 height) noexcept;
++
+ }  // namespace dusk::menu_pointer
+--- a/src/dusk/settings.cpp
++++ b/src/dusk/settings.cpp
+@@ -94,7 +94,11 @@ UserSettings g_userSettings = {
+         .midnasLamentNonStop {"game.midnasLamentNonStop", false},
+ 
+         // Input
++#if TARGET_VITA
++        .enableGyroAim {"game.enableGyroAim", true}, // the Vita has a gyroscope
++#else
+         .enableGyroAim {"game.enableGyroAim", false},
++#endif
+         .enableGyroRollgoal {"game.enableGyroRollgoal", false},
+         .gyroSensitivityX {"game.gyroSensitivityX", 1.0f},
+         .gyroSensitivityY {"game.gyroSensitivityY", 1.0f},

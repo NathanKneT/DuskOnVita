@@ -1,0 +1,39 @@
+# A4 menus in Ordon (--stage F_SP103,1,3,-1): pause screen, its pages, the D-pad menus, Midna.
+wait 450
+# pause (collection) screen, page through it, close
+hold START 4
+wait 120
+hold R 4
+wait 90
+hold L 4
+wait 90
+hold RIGHT 4
+wait 60
+hold START 4
+wait 120
+# D-pad menus, each closed with B
+hold UP 4
+wait 120
+hold B 4
+wait 90
+hold LEFT 4
+wait 120
+hold B 4
+wait 90
+hold RIGHT 4
+wait 120
+hold B 4
+wait 90
+hold DOWN 4
+wait 120
+hold B 4
+wait 90
+# Midna (Z), then walk a little
+hold Z 4
+wait 90
+hold B 4
+wait 60
+stick 0 100 90
+wait 60
+stick 60 0 60
+wait 300

@@ -45,7 +45,13 @@ AuroraStats sFrameStats{};
 twv::vgl::CpuCostProbe sCpuCostProbe;
 struct PipelineInfoReuseStats {
  // Frontend and reuse-oracle builds; backend creation is in CpuCostProbe misses.
- uint64_t requests=0,reused=0,built=0,fallback=0,oracleChecks=0,oracleFailures=0,invalid=0;
+ uint64_t requests=0,reused=0,built=0,fallback=0,oracleChecks=0,oracleFailures=0,invalid=0,memoHits=0;
+ // --vita-gxm-pipeline-memo (twv_vita_pipeline_info_copy): -1 until read at the first call, then the
+ // pipeline last checked there, with copies of its config and info that stay in cache.
+ int memoOn=-1;
+ uint32_t memoPipeline=UINT32_MAX;
+ aurora::gx::PipelineConfig memoConfig{};
+ aurora::gx::ShaderInfo memoInfo{};
 } sPipelineInfoReuse;
 }
 
@@ -399,6 +405,8 @@ void end_frame() noexcept {
   twv::vita::telemetryEvent("gfx_shader_info_oracle_checks",sPipelineInfoReuse.oracleChecks);
   twv::vita::telemetryEvent("gfx_shader_info_oracle_failures",sPipelineInfoReuse.oracleFailures);
   twv::vita::telemetryEvent("gfx_shader_info_invalid",sPipelineInfoReuse.invalid);
+  if(twv_gpu_features()&TwvGpuFeaturePipelineMemo)
+   twv::vita::telemetryEvent("gfx_shader_info_memo_hits",sPipelineInfoReuse.memoHits);
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
   for(const auto& t:vgl::offscreenDiscards) if(t.draws)
@@ -412,6 +420,7 @@ void shutdown() noexcept {
  for(auto& pipeline:vgl::pipelines)for(auto program:pipeline.programs)twv_vgl_program_delete(program);
  vgl::pipelines.clear();
  vgl::pipelineIndex.clear();
+ sPipelineInfoReuse.memoPipeline=UINT32_MAX; // the memo's pipeline is gone
  twv_vgl_shutdown();
 }
 }
@@ -443,13 +452,23 @@ extern "C" void twv_vita_pipeline_info_built(int fallback) noexcept {
 extern "C" int twv_vita_pipeline_info_copy(uint32_t pipeline,const aurora::gx::PipelineConfig* expected,
                                          aurora::gx::ShaderInfo* out) noexcept {
  if(!expected || !out)return 0;
- if(pipeline>=twv::vgl::pipelines.size()) {
-  ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);
+ // --vita-gxm-pipeline-memo: a pipeline's stored config never changes (pipelines are cleared only at
+ // shutdown), so a config equal to the copy of the one last checked for that pipeline passes the
+ // check against the stored one: the whole-config comparison runs against the hot copy instead of
+ // the pipeline's own, rarely cached, config.
+ auto& memo=sPipelineInfoReuse;
+ if(memo.memoOn<0)memo.memoOn=(twv_gpu_features()&TwvGpuFeaturePipelineMemo)!=0;
+ const bool remembered=memo.memoOn && pipeline==memo.memoPipeline &&
+  std::memcmp(&memo.memoConfig,expected,sizeof *expected)==0;
+ if(!remembered) {
+  if(pipeline>=twv::vgl::pipelines.size()) {
+   ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);
+  }
+  if(std::memcmp(&twv::vgl::pipelines[pipeline].config,expected,sizeof *expected)!=0) {
+   ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);
+  }
  }
  const auto& cached=twv::vgl::pipelines[pipeline];
- if(std::memcmp(&cached.config,expected,sizeof *expected)!=0) {
-  ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);
- }
  const auto serial=++sPipelineInfoReuse.requests;
  // Always available, independently of TWV_VITA_CACHE_VALIDATE. This reference
  // uses the current draw's config, not the cached pipeline's own config.
@@ -460,7 +479,10 @@ extern "C" int twv_vita_pipeline_info_copy(uint32_t pipeline,const aurora::gx::P
    ++sPipelineInfoReuse.oracleFailures;pipeline_info_failure(2);
   }
  }
- *out=cached.info;++sPipelineInfoReuse.reused;return 1;
+ if(remembered) {*out=memo.memoInfo;++sPipelineInfoReuse.memoHits;++sPipelineInfoReuse.reused;return 1;}
+ *out=cached.info;
+ if(memo.memoOn) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}
+ ++sPipelineInfoReuse.reused;return 1;
 }
 namespace aurora::gfx {
 uint32_t align_uniform(uint32_t n) { return (n+255u)&~255u; }

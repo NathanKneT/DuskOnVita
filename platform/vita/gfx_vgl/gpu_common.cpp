@@ -27,6 +27,13 @@ uint32_t frames=0;
 void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     twv::vgl::FramePacingStats pacing;
     if(!framePacing.frame_end(now,pacing))return;
+    // Free play (telemetryQuiet): one complete 30-frame window in every 300 frames.
+    static unsigned windows=0;
+    if(twv::vita::telemetryIsQuiet() &&
+       ++windows%(twv::vita::QuietReceiptFrames/twv::vgl::FramePacing::Window)) {
+        profileUs.fill(0);
+        return;
+    }
     const char* names[] = {"prof_vertex_cpu_us", "prof_gl_submit_us", "prof_shader_us",
         "prof_state_us", "prof_pipeline_us", "prof_present_us",
         "prof_fifo_inclusive_us", "prof_game_execute_inclusive_us", "prof_game_audio_us",
@@ -114,7 +121,7 @@ void common_frame(const TwvGpuBackend& backend) {
     profile_receipts(backend,twv::vita::processTimeUs());
     twv::vita::system_probe_sample(sceKernelGetThreadId(),twv::vita::audio::threadId());
     twv::vita::runControlFrame();
-    if(frames%60)return;
+    if(frames%(twv::vita::telemetryIsQuiet()?twv::vita::QuietReceiptFrames:60))return;
     if(backend.report)backend.report();
     const auto log=twv::vita::telemetryStats();
     twv::vita::telemetryEvent("diag_log_written_bytes",log.writtenBytes);

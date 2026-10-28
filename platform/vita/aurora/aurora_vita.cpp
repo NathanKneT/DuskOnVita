@@ -6,13 +6,15 @@
 //   initialize: config defaults, SDL window/events (lib/window.cpp, unchanged), the
 //               main-thread options, the GX FIFO; no GPU device, no ImGui/RmlUi
 //               renderer (those UI layers draw through WebGPU upstream);
-//   update:     input on the first frame, GX viewport policy, window events;
+//   update:     input on the first frame, GX viewport policy, window events (front
+//               touch also to the menu pointer, platform/vita/touch.cpp);
 //   begin/end:  the GX FIFO frame bracket/drain, followed by native presentation.
 // Aurora's backend enum has no GXM entry, so the Vita reports kBackendGxm
 // (BACKEND_NULL + 1): BACKEND_NULL would send Dusklight to its no-GPU ImGui loop
 // instead of the game. Dusklight names backends it does not know "Auto".
 #include "aurora_vita.hpp"
 #include "InputVita.hpp"
+#include "touch.hpp"
 
 #include <aurora/aurora.h>
 #include <aurora/time.hpp>
@@ -34,6 +36,8 @@
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_sensor.h>
+#include <SDL3/SDL_stdinc.h>
 
 #include <array>
 #include <cstring>
@@ -156,6 +160,49 @@ void shutdown() noexcept {
   window::shutdown();
 }
 
+// Which motion sensors SDL's Vita driver offers; Dusklight's gyro aim reads them through Aurora's
+// lib/device.cpp. Listing them does not open them.
+void report_sensors() noexcept {
+  int count = 0;
+  SDL_SensorID* sensors = SDL_GetSensors(&count);
+  int gyro = 0;
+  int accel = 0;
+  for (int i = 0; sensors != nullptr && i < count; ++i) {
+    const SDL_SensorType type = SDL_GetSensorTypeForID(sensors[i]);
+    gyro += type == SDL_SENSOR_GYRO;
+    accel += type == SDL_SENSOR_ACCEL;
+  }
+  SDL_free(sensors);
+  Log.info("SDL sensors: {} (gyroscope {}, accelerometer {})", count, gyro, accel);
+  twv::vita::telemetryEvent("sdl_sensors", count);
+  twv::vita::telemetryEvent("sdl_sensor_gyro", gyro);
+  twv::vita::telemetryEvent("sdl_sensor_accel", accel);
+}
+
+// The front panel's fingers also go to Dusklight's menu pointer (platform/vita/touch.cpp); the
+// game still receives every event. The rear panel is not a pointer.
+void forward_front_touch(const AuroraEvent* events) noexcept {
+  using twv::vita::touch::Finger;
+  constexpr SDL_TouchID FrontPanel = 1; // SDL's Vita driver: 1 front, 2 rear
+  for (const AuroraEvent* e = events; e->type != AURORA_NONE; ++e) {
+    if (e->type != AURORA_SDL_EVENT) {
+      continue;
+    }
+    Finger finger;
+    switch (e->sdl.type) {
+    case SDL_EVENT_FINGER_DOWN: finger = Finger::Down; break;
+    case SDL_EVENT_FINGER_MOTION: finger = Finger::Motion; break;
+    case SDL_EVENT_FINGER_UP: finger = Finger::Up; break;
+    case SDL_EVENT_FINGER_CANCELED: finger = Finger::Canceled; break;
+    default: continue;
+    }
+    const SDL_TouchFingerEvent& t = e->sdl.tfinger;
+    if (t.touchID == FrontPanel) {
+      twv_vita_front_touch(static_cast<int>(finger), t.fingerID, t.x, t.y);
+    }
+  }
+}
+
 const AuroraEvent* update() noexcept {
 #if TWV_VITA_GFX_VGL
   twv::vgl::ProfileScope timer(TWV_PROFILE_EVENTS);
@@ -163,9 +210,12 @@ const AuroraEvent* update() noexcept {
   if (g_initialFrame) {
     g_initialFrame = false;
     input::initialize();
+    report_sensors();
   }
   gx::update();
-  return window::poll_events();
+  const AuroraEvent* events = window::poll_events();
+  forward_front_touch(events);
+  return events;
 }
 
 bool begin_frame() noexcept {

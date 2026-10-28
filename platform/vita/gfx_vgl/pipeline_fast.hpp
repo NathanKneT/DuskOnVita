@@ -129,6 +129,27 @@ public:
     size_t size() const noexcept { return entries.size(); }
 };
 
+// --vita-gxm-pipeline-memo: the last key looked up and its pipeline, in a copy that stays in cache.
+// Games send a material again before many draws, so a pipeline change often rebuilds the config
+// just looked up; an equal key then returns that pipeline without hashing or reading the index's key
+// store. The full key comparison decides, and an index never maps a key to another pipeline later
+// (pipelines are cleared only at shutdown), so the result is the index's own.
+class LastKeyMemo {
+    std::vector<uint8_t> bytes;
+    uint32_t size = 0, id = CompactPipelineIndex::Missing;
+public:
+    uint32_t find(const CompactKey& key) const noexcept {
+        if (id == CompactPipelineIndex::Missing || key.size != size) return CompactPipelineIndex::Missing;
+        return key_equal(bytes.data(), key) ? id : CompactPipelineIndex::Missing;
+    }
+    void store(const CompactKey& key, uint32_t pipeline) {
+        bytes.resize(key.size);
+        key_copy(bytes.data(), key);
+        size = key.size;
+        id = pipeline;
+    }
+};
+
 // Entries [from, to) of an array back to their default value (the fast populate's reset of entries a
 // previous config used and this one does not).
 template<class Array> void reset_entries(Array& a, size_t from, size_t to) noexcept {

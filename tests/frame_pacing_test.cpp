@@ -27,6 +27,9 @@ void telemetryText(const char* key,const char* value){
     textReceipts[key]=value;histogramOrder.emplace_back(key);
 }
 void telemetryFlush(){++flushes;}
+// Free-play thinning (telemetry.hpp) is off in this seam: every window reports.
+constexpr unsigned QuietReceiptFrames=300;
+bool telemetryIsQuiet(){return false;}
 namespace audio {
 struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0;};
 Stats stats(){return {};}

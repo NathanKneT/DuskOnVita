@@ -8,6 +8,8 @@
 //    seen for the first time goes through the original lookup, which finds or creates the pipeline.
 //  - verify: both, plus the originals on every call; any byte or index that differs is counted
 //    (pipeline_fast_*_mismatch) and the original result is used.
+// --vita-gxm-pipeline-memo=on (GXM only) adds a memo of the last key in front of the index
+// (pipeline_fast.hpp LastKeyMemo); with verify, each memo answer is checked against the original.
 // Runs on the FIFO's thread, like the functions it wraps.
 #include "decode_probe.hpp"
 #include "gx/gx.hpp"
@@ -112,7 +114,15 @@ bool sSelected=false,sStarted=false;
 const PipelineConfig* sSynced=nullptr; // the config the last populate wrote, in the canonical form
 PipelineConfig sCheck{};
 twv::vgl::CompactPipelineIndex sIndex;
-struct {uint32_t populates,lookups,hits,misses,timedPopulates,timedLookups,populateUs,lookupUs;} sPending{};
+twv::vgl::LastKeyMemo sMemo; // --vita-gxm-pipeline-memo
+struct {uint32_t populates,lookups,hits,misses,timedPopulates,timedLookups,populateUs,lookupUs,
+        memoHits,memoChecks;} sPending{};
+
+// Read at the first lookup: the GPU features are chosen at start-up, before any draw.
+bool memo_on() noexcept {
+  static const bool on=(twv_gpu_features()&TwvGpuFeaturePipelineMemo)!=0;
+  return on;
+}
 
 void flush_counts() noexcept {
   if(sPending.lookups<64)return;
@@ -120,6 +130,10 @@ void flush_counts() noexcept {
   twv::vgl::count("pipeline_fast_lookups",sPending.lookups);
   twv::vgl::count("pipeline_fast_hits",sPending.hits);
   twv::vgl::count("pipeline_fast_misses",sPending.misses);
+  if(memo_on()) {
+    twv::vgl::count("pipeline_memo_hits",sPending.memoHits);   // lookups answered by the memo
+    twv::vgl::count("pipeline_memo_checks",sPending.memoChecks); // verify: memo answers equal to the original
+  }
   // Both calls timed on the decode probe's timed frames, in every mode (the off figures are the originals').
   twv::vgl::count("pipeline_timed_populates",sPending.timedPopulates);
   twv::vgl::count("pipeline_timed_populate_us",sPending.populateUs);
@@ -162,6 +176,12 @@ void populate(PipelineConfig& config,GXPrimitive primitive,GXVtxFmt fmt) noexcep
 aurora::gfx::PipelineRef lookup(const PipelineConfig& config) {
   if(sMode==Off)return __real__ZN6aurora3gfx12pipeline_refINS_2gx14PipelineConfigEEEjRKT_(config);
   const auto key=twv::vgl::pipeline_compact_key(config);
+  const bool memo=memo_on();
+  const uint32_t remembered=memo?sMemo.find(key):twv::vgl::CompactPipelineIndex::Missing;
+  if(sMode!=Verify && remembered!=twv::vgl::CompactPipelineIndex::Missing) {
+    ++sPending.hits;++sPending.memoHits;
+    return remembered;
+  }
   const uint32_t hash=twv::vgl::key_hash(key);
   const uint32_t found=sIndex.find(hash,key);
   if(sMode==Verify) {
@@ -169,15 +189,22 @@ aurora::gfx::PipelineRef lookup(const PipelineConfig& config) {
     if(found==twv::vgl::CompactPipelineIndex::Missing)sIndex.insert(hash,key,original);
     else if(found!=original)twv::vgl::count("pipeline_fast_lookup_mismatch");
     else twv::vgl::count("pipeline_fast_lookup_checks");
+    if(remembered!=twv::vgl::CompactPipelineIndex::Missing) {
+      if(remembered!=original)twv::vgl::count("pipeline_memo_mismatch");
+      else ++sPending.memoChecks;
+    }
+    if(memo)sMemo.store(key,original);
     return original;
   }
   if(found!=twv::vgl::CompactPipelineIndex::Missing) {
     ++sPending.hits;
+    if(memo)sMemo.store(key,found);
     return found;
   }
   ++sPending.misses;
   const auto id=__real__ZN6aurora3gfx12pipeline_refINS_2gx14PipelineConfigEEEjRKT_(config);
   sIndex.insert(hash,key,id);
+  if(memo)sMemo.store(key,id);
   return id;
 }
 }

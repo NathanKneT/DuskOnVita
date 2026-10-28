@@ -1,0 +1,295 @@
+Button prompt style setting, game.buttonPrompts = gamecube | playstation (the Vita
+defaults to playstation). With playstation the button textures are swapped for
+glyphs the platform draws itself (twilight-vita: platform/vita/ui/ps_glyphs.cpp,
+our own shapes, no console artwork):
+- layout textures where every layout resolves them by name: JUTResReference
+  (BLO materials and pictures) and J2DScreen::getNameResource (texture changes
+  by name). This covers the HUD buttons, the button guides and the menus. Only
+  an explicit list of button textures is swapped, and only when the texture
+  came from an archive that holds that button (its root name) and has the
+  expected format and size;
+- in-text icons by icon number in COutFont_c::createPane, drawn with a neutral
+  tint instead of the GameCube colours;
+- the main HUD (zelda_game_image) and its button guide (button_info): once
+  built, their button bases take a dark colour and the face-button symbols
+  their own (cross blue, circle red, square pink, triangle green), through
+  the pictures' black/white colours only.
+With gamecube, or without platform glyphs, every lookup returns the original
+resource.
+
+--- a/libs/JSystem/src/J2DGraph/J2DScreen.cpp
++++ b/libs/JSystem/src/J2DGraph/J2DScreen.cpp
+@@ -9,6 +9,7 @@
+ #include "JSystem/JKernel/JKRArchive.h"
+ #include "JSystem/JKernel/JKRHeap.h"
+ #include "JSystem/JSupport/JSUMemoryStream.h"
++#include "dusk/button_prompts.hpp"
+ #include <types.h>
+ 
+ J2DScreen::J2DScreen()
+@@ -417,6 +418,13 @@
+         res = mDataManage->get(resName);
+     }
+ 
++    // Pictures and windows that change texture by name come here, not through JUTResReference.
++    if (res != NULL) {
++        if (void* prompt = dusk::button_prompts::layout_texture(resName, res)) {
++            res = prompt;
++        }
++    }
++
+     return res;
+ }
+ 
+--- a/libs/JSystem/src/JUtility/JUTResource.cpp
++++ b/libs/JSystem/src/JUtility/JUTResource.cpp
+@@ -3,6 +3,7 @@
+ #include "JSystem/JUtility/JUTResource.h"
+ #include "JSystem/JKernel/JKRArchive.h"
+ #include "JSystem/JSupport/JSUInputStream.h"
++#include "dusk/button_prompts.hpp"
+ #include <cstring>
+ 
+ void* JUTResReference::getResource(JSUInputStream* stream, u32 resType, JKRArchive* archive) {
+@@ -50,5 +51,12 @@
+         break;
+     }
+ 
++    // Layout textures (materials and pictures of every BLO) resolve here by name.
++    if (res != NULL && resType == 'TIMG') {
++        if (void* prompt = dusk::button_prompts::layout_texture(mName, res)) {
++            res = prompt;
++        }
++    }
++
+     return res;
+ }
+--- a/src/d/d_meter2_draw.cpp
++++ b/src/d/d_meter2_draw.cpp
+@@ -23,6 +23,7 @@
+ #include <cstring>
+ 
+ #if TARGET_PC
++#include "dusk/button_prompts.hpp"
+ #include "dusk/game_clock.h"
+ #include "dusk/interp/frame_interpolation.h"
+ #include "dusk/interp/user_interface.h"
+@@ -221,6 +222,9 @@
+             static_cast<J2DTextBox*>(mpXYText[i][1]->getPanePtr())->setCharSpace(0.0f);
+         }
+     }
++
++    // game.buttonPrompts=playstation: dark button bases, coloured symbols (after b_btn's colour).
++    dusk::button_prompts::recolor_hud(mpScreen, "zelda_game_image");
+ #endif
+ 
+     init();
+--- a/src/d/d_meter_button.cpp
++++ b/src/d/d_meter_button.cpp
+@@ -19,6 +19,7 @@
+ #include <cstring>
+ 
+ #if TARGET_PC
++#include "dusk/button_prompts.hpp"
+ #include "dusk/game_clock.h"
+ #include "dusk/interp/user_interface.h"
+ #include "dusk/version.hpp"
+@@ -1468,6 +1469,10 @@
+     mMeterSubContent = 0;
+ 
+     updateButton();
++#if TARGET_PC
++    // game.buttonPrompts=playstation: dark button bases, coloured symbols.
++    dusk::button_prompts::recolor_hud(mpButtonScreen, "button_info");
++#endif
+     OS_REPORT("exit dMeterButton_c::screenInitButton\n");
+ }
+ 
+--- a/src/d/d_msg_out_font.cpp
++++ b/src/d/d_msg_out_font.cpp
+@@ -10,6 +10,7 @@
+ #if TARGET_PC
+ #include "dusk/interp/user_interface.h"
+ #include "dusk/version.hpp"
++#include "dusk/button_prompts.hpp"
+ #endif
+ 
+ COutFontSet_c::COutFontSet_c() {
+@@ -100,6 +101,14 @@
+             img = (ResTIMG*)dComIfGp_getMain2DArchive()->getResource('TIMG', getBtiName(i));
+         }
+ 
++#if TARGET_PC
++        // game.buttonPrompts: platform glyphs for the button icons, full colour (no tint below).
++        ResTIMG* const prompt = (ResTIMG*)dusk::button_prompts::text_icon(i, 0);
++        if (prompt != NULL) {
++            img = prompt;
++        }
++#endif
++
+         mpPane[i] = JKR_NEW J2DPicture(img);
+         switch (i) {
+         case 0:
+@@ -280,6 +289,17 @@
+                                      JUtility::TColor(255, 255, 255, 255));
+             break;
+         }
++
++#if TARGET_PC
++        if (prompt != NULL) {
++            // The stick icons blend with a second texture (appended above): swap it too.
++            if (ResTIMG* const second = (ResTIMG*)dusk::button_prompts::text_icon(i, 1)) {
++                mpPane[i]->changeTexture(second, 1);
++            }
++            mpPane[i]->setBlackWhite(JUtility::TColor(0, 0, 0, 0),
++                                     JUtility::TColor(255, 255, 255, 255));
++        }
++#endif
+     }
+ 
+     field_0x240 = true;
+--- /dev/null
++++ b/src/dusk/button_prompts.hpp
+@@ -0,0 +1,109 @@
++#pragma once
++// Button prompt style, setting game.buttonPrompts: "gamecube" (the original art) or "playstation".
++// With "playstation" the button textures are swapped for glyphs the platform draws itself
++// (twilight-vita: platform/vita/ui/ps_glyphs.cpp): layout textures where a layout resolves them by
++// name (JUTResReference, J2DScreen::getNameResource), in-text icons by icon number
++// (COutFont_c::createPane). Only an explicit list of button textures is swapped, and only when the
++// texture came from an archive that holds that button and has the expected format and size;
++// everything else, and every build without platform glyphs, keeps the original resource.
++#include "dusk/settings.h"
++
++#if TARGET_VITA
++#include "JSystem/J2DGraph/J2DPicture.h"
++#include "JSystem/JKernel/JKRArchive.h"
++#include "JSystem/JUtility/JUTTexture.h"
++extern "C" int twv_ps_glyph_layout_listed(const char* name);
++extern "C" const void* twv_ps_glyph_layout(const char* name, const char* volume, const void* original);
++extern "C" const void* twv_ps_glyph_text(int index, int layer);
++extern "C" int twv_ps_glyph_hud_tint(const void* timg, unsigned* rgb);
++extern "C" void twv_ps_glyph_hud_tinted(const char* screen, int panes);
++#endif
++
++namespace dusk::button_prompts {
++
++inline bool playstation() {
++    return getSettings().game.buttonPrompts.getValue() == "playstation";
++}
++
++#if TARGET_VITA
++// The archive's root name (mVolumeName, e.g. "main2d"), read through a member pointer.
++struct VolumeName : JKRFileLoader {
++    static const char* of(JKRFileLoader* loader) { return loader->*(&VolumeName::mVolumeName); }
++};
++
++// Root name of the mounted archive that holds `res`, or nullptr.
++inline const char* owner_volume(const void* res) {
++    JSUList<JKRFileLoader>& volumes = JKRFileLoader::getVolumeList();
++    for (JSUListIterator<JKRFileLoader> it = volumes.getFirst(); it != volumes.getEnd(); ++it) {
++        JKRFileLoader* loader = it.operator->();
++        if (loader->getVolumeType() == 'RARC' && static_cast<JKRArchive*>(loader)->findPtrResource(res) != NULL) {
++            return VolumeName::of(loader);
++        }
++    }
++    return NULL;
++}
++#endif
++
++// Replacement for the layout texture `name` that resolved to `original`, or nullptr to keep it.
++inline void* layout_texture(const char* name, const void* original) {
++#if TARGET_VITA
++    if (!playstation() || !twv_ps_glyph_layout_listed(name)) {
++        return nullptr;
++    }
++    return const_cast<void*>(twv_ps_glyph_layout(name, owner_volume(original), original));
++#else
++    (void)name;
++    (void)original;
++    return nullptr;
++#endif
++}
++
++#if TARGET_VITA
++// Pictures whose texture has a HUD colour take it as their "white" (the colour a white texel
++// draws in), keeping its alpha and the "black". Returns how many panes changed.
++inline int recolor_panes(J2DPane* pane) {
++    int changed = 0;
++    for (J2DPane* child = pane->getFirstChildPane(); child != NULL; child = child->getNextChildPane()) {
++        if (child->getTypeID() == 18) { // J2DPicture, J2DPictureEx
++            J2DPicture* picture = static_cast<J2DPicture*>(child);
++            const JUTTexture* texture = picture->getTexture(0);
++            unsigned rgb = 0;
++            if (texture != NULL && twv_ps_glyph_hud_tint(texture->getTexInfo(), &rgb)) {
++                const JUtility::TColor white = picture->getWhite();
++                const JUtility::TColor tint(u8(rgb >> 16), u8(rgb >> 8), u8(rgb), white.a);
++                changed += picture->setBlackWhite(picture->getBlack(), tint) ? 1 : 0;
++            }
++        }
++        changed += recolor_panes(child);
++    }
++    return changed;
++}
++#endif
++
++// With "playstation", the main HUD's button bases turn dark and the face-button symbols take their
++// own colours (cross blue, circle red, square pink, triangle green), like the Vita's buttons. Called
++// once a HUD screen is built and coloured; colours only, no texture.
++inline void recolor_hud(J2DPane* screen, const char* label) {
++#if TARGET_VITA
++    if (screen == NULL || !playstation()) {
++        return;
++    }
++    twv_ps_glyph_hud_tinted(label, recolor_panes(screen));
++#else
++    (void)screen;
++    (void)label;
++#endif
++}
++
++// Replacement for in-text icon `index` (layer 1: the texture it blends with), or nullptr.
++inline void* text_icon(int index, int layer) {
++#if TARGET_VITA
++    return playstation() ? const_cast<void*>(twv_ps_glyph_text(index, layer)) : nullptr;
++#else
++    (void)index;
++    (void)layer;
++    return nullptr;
++#endif
++}
++
++} // namespace dusk::button_prompts
+--- a/src/dusk/settings.cpp
++++ b/src/dusk/settings.cpp
+@@ -37,6 +37,11 @@
+ 
+     .game = {
+         .language { "game.language", GameLanguage::English },
++#if TARGET_VITA
++        .buttonPrompts {"game.buttonPrompts", std::string("playstation")},
++#else
++        .buttonPrompts {"game.buttonPrompts", std::string("gamecube")},
++#endif
+ 
+         // Quality of Life
+         .enableQuickTransform {"game.enableQuickTransform", false},
+@@ -275,6 +280,7 @@
+ 
+     // Game
+     Register(g_userSettings.game.language);
++    Register(g_userSettings.game.buttonPrompts);
+     Register(g_userSettings.game.enableQuickTransform);
+     Register(g_userSettings.game.hideTvSettingsScreen);
+     Register(g_userSettings.game.biggerWallets);
+--- a/src/dusk/settings.h
++++ b/src/dusk/settings.h
+@@ -202,6 +202,8 @@
+ 
+     struct {
+         ConfigVar<GameLanguage> language;
++        // "gamecube" or "playstation" (dusk/button_prompts.hpp)
++        ConfigVar<std::string> buttonPrompts;
+ 
+         // QoL
+         ConfigVar<bool> enableQuickTransform;

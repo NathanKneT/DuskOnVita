@@ -31,6 +31,15 @@ struct TelemetryStats {
 };
 // Snapshot under the same mutex; report it outside the lock, without recursion.
 TelemetryStats telemetryStats();
+// Called once by main_vita.cpp after the options; until then this boot's records are held in
+// memory (error exits flush them). Free play (quiet, --vita-receipts): a runtime.jsonl past 8 MB
+// moves to runtime.1.jsonl at boot, and the frame and scene receipts thin out to one window per
+// 300 frames. Read from any thread.
+constexpr const char* RuntimeLogPrevious = "ux0:data/twilight-vita/runtime.1.jsonl";
+constexpr std::uint64_t QuietRotateBytes = 8ull << 20;
+constexpr unsigned QuietReceiptFrames = 300;
+void telemetryQuiet(bool quiet);
+bool telemetryIsQuiet();
 std::uint64_t processTimeUs();
 // std::terminate handler that records the exception (fault_receipts.cpp).
 void installFaultReceipts();

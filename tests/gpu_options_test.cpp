@@ -48,6 +48,24 @@ int main() {
         assert(c.consume("--vita-gxm-compact=on")==1 && c.features==GpuOptions::FeatureCompact);
         assert(GpuOptions{}.consume("--vita-gxm-compact=all")==-1 && GpuOptions{}.consume("--vita-gxm-resident=1")==-1);
         assert(!GpuOptions{}.any());
+        // Play profile: a backend or drawing feature is a choice; digest, captures and GPU diagnostics are not.
+        assert(c.any_choice() && !GpuOptions{}.any_choice());
+        GpuOptions d;
+        assert(d.consume("--vita-gpu-digest=on")==1 && d.consume("--vita-capture=1-2/1")==1 &&
+               d.consume("--vita-gxm-gpu-timing=on")==1 && d.consume("--vita-gxm-scale=75")==1 && !d.any_choice());
+        GpuOptions b;assert(b.consume("--vita-gpu=vgl")==1 && b.any_choice());
+        // Uniform reuse: GXM only, once, an addition the play profile accepts (not a choice).
+        GpuOptions u;
+        assert(u.consume("--vita-gxm-uniform-reuse=on")==1 && u.features==GpuOptions::FeatureUniformReuse);
+        assert(u.any() && !u.any_choice() && !u.consistent() && u.consume("--vita-gxm-uniform-reuse=off")==-1);
+        assert(GpuOptions{}.consume("--vita-gxm-uniform-reuse=yes")==-1);
+        // Pipeline memo: the same kind of addition, alongside the uniform reuse.
+        assert(u.consume("--vita-gxm-pipeline-memo=on")==1 &&
+               u.features==(GpuOptions::FeatureUniformReuse|GpuOptions::FeaturePipelineMemo));
+        assert(!u.any_choice() && u.consume("--vita-gxm-pipeline-memo=on")==-1 && u.consume("--vita-gpu=gxm")==1 &&
+               u.consistent());
+        GpuOptions pm;assert(pm.consume("--vita-gxm-pipeline-memo=off")==1 && pm.features==0 && pm.any());
+        assert(GpuOptions{}.consume("--vita-gxm-pipeline-memo")==0 && GpuOptions{}.consume("--vita-gxm-pipeline-memo=1")==-1);
     }
     {
         // GPU diagnostics: GXM only, once.

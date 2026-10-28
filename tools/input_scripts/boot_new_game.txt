@@ -1,0 +1,209 @@
+# A4 boot without --stage: logo -> title -> memory card -> file select -> new file -> names -> opening.
+# One step = one pad read (one game tick, 30 per second).
+wait 900
+# title: press START -> "Checking Memory Card: no save file"
+hold START 4
+wait 150
+# acknowledge -> "Create a save file? Yes / No" (No is highlighted)
+hold A 4
+wait 120
+hold LEFT 4
+wait 30
+hold A 4
+wait 240
+# acknowledgements after creating the save file
+hold A 4
+wait 120
+hold A 4
+wait 120
+# file select: first file
+hold A 4
+wait 120
+hold A 4
+wait 120
+# name entry (Link): START jumps to the end, A confirms
+hold START 4
+wait 45
+hold A 4
+wait 120
+# horse name (Epona)
+hold START 4
+wait 45
+hold A 4
+wait 120
+# confirmation(s)
+hold A 4
+wait 120
+hold A 4
+wait 120
+# opening: advance text with A every two seconds
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
+hold A 3
+wait 57
