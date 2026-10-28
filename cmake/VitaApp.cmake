@@ -120,6 +120,16 @@ if(TWV_VITA_SCENE_PROBE)
         COMPILE_DEFINITIONS TWV_VITA_SCENE_PROBE=1)
 endif()
 
+# Main-thread actor profile (measurement only, full receipts only): per-profile execute/draw time,
+# culling and camera distance, J3DModel parts (patches/dusklight/0020 calls it, so always built).
+target_sources(twv_game PRIVATE platform/vita/runtime/actor_profile.cpp)
+set_property(SOURCE platform/vita/runtime/actor_profile.cpp APPEND PROPERTY
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita/runtime")
+target_link_options(twv_game INTERFACE -Wl,-u,twv_actprof_phase
+    -Wl,--wrap=_Z13fpcEx_ExecuteP18base_process_class -Wl,--wrap=_Z13fpcDw_ExecuteP18base_process_class
+    -Wl,--wrap=_Z19fopAcM_cullingCheckPK10fopAc_ac_c -Wl,--wrap=_Z17fpcM_DrawIteraterPFiPvS_E
+    -Wl,--wrap=_ZNK13J3DDrawBuffer4drawEv)
+
 if(TWV_VITA_GFX_VGL)
     include(cmake/VitaGL.cmake)
     option(TWV_VITA_SAMPLER_CACHE "Skip identical object sampler updates with bounded exact texture-ID shadows" ON)
@@ -196,6 +206,38 @@ add_custom_command(
 add_executable(twilight_vita platform/vita/main_vita.cpp platform/vita/compat/newlib_gaps.c "${TWV_STUBS_C}")
 target_link_libraries(twilight_vita PRIVATE ${TWV_GAME_LINK})
 set_target_properties(twilight_vita PROPERTIES SUFFIX ".elf")
+
+# TWV_OPT=*LTO and ld --wrap: GCC LTO binds a call straight to a definition that is in
+# the same LTO unit, so ld never sees the undefined reference it would wrap (measured with
+# arm-vita-eabi GCC 15.2 / binutils 2.46: caller and callee both IR -> the wrapper is never
+# called; either one a regular object -> wrapped). The profile hooks, --vita-pipeline-fast,
+# the build_uniform replacement and the decode probe all depend on wraps, so every
+# translation unit that defines a wrapped symbol stays a regular object (same call sites
+# as the -O2 build). Aurora's io.cpp too: its -Werror=frame-larger-than guard (32 KiB worker
+# stacks) only runs on a regular compile. Keep this list in step with the --wrap options.
+if (TWV_LTO)
+    set_property(SOURCE
+            ${DUSK_ROOT}/src/f_ap/f_ap_game.cpp                   # fapGm_Execute
+            ${DUSK_ROOT}/src/m_Do/m_Do_audio.cpp                  # mDoAud_Execute
+            ${DUSK_ROOT}/src/SSystem/SComponent/c_API_graphic.cpp # cAPIGph_Painter
+            ${DUSK_ROOT}/src/f_pc/f_pc_executor.cpp               # fpcEx_Handler
+            ${DUSK_ROOT}/src/f_pc/f_pc_draw.cpp                   # fpcDw_Handler
+            ${DUSK_ROOT}/src/d/d_particle.cpp                     # dPa_control_c::calc3D
+            ${DUSK_ROOT}/src/d/d_bg_s.cpp                         # cBgS::ShdwDraw, GroundCross, LineCross
+            ${DUSK_ROOT}/src/d/d_bg_s_acch.cpp                    # dBgS_Acch::CrrPos
+            ${DUSK_ROOT}/src/d/d_cc_s.cpp                         # dCcS::Move
+            ${DUSK_ROOT}/src/d/d_demo.cpp                         # dDemo_c::update
+            ${DUSK_ROOT}/src/dusk/stubs.cpp                       # VIWaitForRetrace
+            ${AURORA_ROOT}/lib/gx/command_processor.cpp           # fifo::process
+            ${AURORA_ROOT}/lib/gx/regs.cpp                        # fifo::handle_bp/cp/xf, copy_xf_data
+            ${AURORA_ROOT}/lib/gx/shader_info.cpp                 # build_uniform
+            ${AURORA_ROOT}/lib/gx/texture.cpp                     # texture::current_bind_generation
+            platform/vita/gfx_vgl/backend.cpp                     # populate_pipeline_config, pipeline_ref,
+                                                                  # push_verts/indices, push_draw_command
+            platform/vita/gfx_vgl/vertex.cpp                      # twv_gfx_static_dl, twv_gfx_array_base
+            ${AURORA_ROOT}/lib/io.cpp
+            APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+endif ()
 
 vita_create_self(eboot.bin twilight_vita.elf UNSAFE)
 vita_create_vpk(twilight_vita.vpk ${TWV_TITLE_ID} eboot.bin

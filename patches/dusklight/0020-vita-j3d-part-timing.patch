@@ -1,0 +1,78 @@
+Vita: measurement only (the main-thread profile, platform/vita/runtime/actor_profile.cpp). J3DModel's
+calc, calcMaterial, diff, entry and viewCalc each open a scope that the port times on sampled frames
+(one frame in eight, full receipts only), so the receipts can split model work into joint/animation
+matrices (calc) and the parts that only prepare the picture. Outside sampled frames each part pays
+one flag test. No game behaviour changes: same calls, same order, same results.
+
+--- a/libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp
++++ b/libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp
+@@ -15,6 +15,29 @@
+ #include "dusk/interp/vertex.h"
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0020): measurement only. On sampled frames the port times these five
++// parts (platform/vita/runtime/actor_profile.cpp); otherwise each pays one flag test.
++extern "C" unsigned char twv_j3d_prof_on;
++extern "C" unsigned long long twv_j3d_prof_begin(void);
++extern "C" void twv_j3d_prof_end(unsigned part, unsigned long long start);
++namespace {
++struct TwvJ3dPart {
++    explicit TwvJ3dPart(unsigned p) : part(p), start(twv_j3d_prof_on ? twv_j3d_prof_begin() : 0) {}
++    ~TwvJ3dPart() {
++        if (start != 0) {
++            twv_j3d_prof_end(part, start);
++        }
++    }
++    unsigned part;
++    unsigned long long start;
++};
++}  // namespace
++#define TWV_J3D_PART(p) TwvJ3dPart twvJ3dPart_(p)
++#else
++#define TWV_J3D_PART(p)
++#endif
++
+ #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
+ #define J3D_WARN1(LINE, MSG, ARG1) JUT_WARN(LINE, MSG, ARG1)
+ 
+@@ -296,6 +319,7 @@
+ }
+ 
+ void J3DModel::calcMaterial() {
++    TWV_J3D_PART(1);
+     j3dSys.setModel(this);
+ 
+     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
+@@ -361,6 +385,7 @@
+ }
+ 
+ void J3DModel::diff() {
++    TWV_J3D_PART(2);
+     u16 matNum = mModelData->getMaterialNum();
+     for (u16 i = 0; i < matNum; i++) {
+         j3dSys.setMatPacket(&mMatPacket[i]);
+@@ -456,6 +481,7 @@
+ }
+ 
+ void J3DModel::calc() {
++    TWV_J3D_PART(0);
+     j3dSys.setModel(this);
+ 
+     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
+@@ -514,6 +540,7 @@
+ }
+ 
+ void J3DModel::entry() {
++    TWV_J3D_PART(3);
+     j3dSys.setModel(this);
+ 
+     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
+@@ -546,6 +573,7 @@
+ }
+ 
+ void J3DModel::viewCalc() {
++    TWV_J3D_PART(4);
+     mMtxBuffer->swapDrawMtx();
+     mMtxBuffer->swapNrmMtx();
+ 

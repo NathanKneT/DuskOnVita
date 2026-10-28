@@ -163,14 +163,35 @@ extern "C" void __wrap__Z13fapGm_Executev() {
 // ground polygon collection (cBgS::ShdwDraw, called only by d_drawlist.cpp realPolygonCheck, inside
 // actor Draw) and the cutscene update (inside the scene's Execute). Pointer arguments as void*:
 // same AAPCS registers and return values as the original declarations.
+// The main-thread actor profile (runtime/actor_profile.cpp, game ABI) learns the tick's execute and
+// draw phases and the painter from these wrappers, with the times they read anyway (end 0: begin).
+extern "C" void twv_actprof_phase(unsigned phase,unsigned long long start,unsigned long long end)
+    __attribute__((weak));
+namespace {
+struct PhaseScope {
+    PhaseScope(uint32_t category,unsigned phase):category(category),phase(phase),start(twv_vgl_time_us()) {
+        if(twv_actprof_phase)twv_actprof_phase(phase,start,0);
+    }
+    ~PhaseScope() {
+        const uint64_t end=twv_vgl_time_us();
+        twv_vgl_profile_add(category,end-start);
+        if(twv_actprof_phase)twv_actprof_phase(phase,start,end);
+    }
+    PhaseScope(const PhaseScope&)=delete;
+    PhaseScope& operator=(const PhaseScope&)=delete;
+    uint32_t category;
+    unsigned phase;
+    uint64_t start;
+};
+}
 extern "C" void __real__Z13fpcEx_HandlerPFiPvS_E(void*);
 extern "C" void __wrap__Z13fpcEx_HandlerPFiPvS_E(void* queueFunc) {
-    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_EXECUTE);
+    PhaseScope timer(TWV_PROFILE_TICK_EXECUTE,0);
     __real__Z13fpcEx_HandlerPFiPvS_E(queueFunc);
 }
 extern "C" int __real__Z13fpcDw_HandlerPFiPFiPvS_EES1_(void*,void*);
 extern "C" int __wrap__Z13fpcDw_HandlerPFiPFiPvS_EES1_(void* iterHandler,void* func) {
-    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_DRAW);
+    PhaseScope timer(TWV_PROFILE_TICK_DRAW,1);
     return __real__Z13fpcDw_HandlerPFiPFiPvS_EES1_(iterHandler,func);
 }
 extern "C" void __real__ZN13dPa_control_c6calc3DEv(void*);
@@ -223,7 +244,7 @@ extern "C" void __wrap__Z14mDoAud_Executev() {
 }
 extern "C" void __real__Z15cAPIGph_Painterv();
 extern "C" void __wrap__Z15cAPIGph_Painterv() {
-    twv::vgl::ProfileScope timer(TWV_PROFILE_PAINTER);
+    PhaseScope timer(TWV_PROFILE_PAINTER,2);
     __real__Z15cAPIGph_Painterv();
 }
 extern "C" void __real_VIWaitForRetrace();

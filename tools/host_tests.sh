@@ -649,3 +649,7 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
   -I "$repo/platform/vita" "$repo/platform/vita/ui/ps_glyphs.cpp" "$repo/tests/ps_glyphs_test.cpp" \
   -o "$out/ps_glyphs_test"
 "$out/ps_glyphs_test"
+# Main-thread actor profile: type slots, distance bins, top-N choice, receipt text, sampling.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/actor_profile_stats_test.cpp" -o "$out/actor_profile_stats_test"
+"$out/actor_profile_stats_test"
