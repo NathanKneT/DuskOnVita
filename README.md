@@ -18,7 +18,25 @@ that today. The code is shared so others can reproduce the work and help.
 
 ## Status (measured on a PS Vita 1000)
 
-Frames per second, build g2c at 444 MHz:
+Latest console run (28 Oct, build b2): six crowded places, each started with `--stage`, 75 % render
+size, the play profile (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). FPS with Link idle /
+walking a scripted route:
+
+| Place | FPS | Limited by |
+| --- | ---: | --- |
+| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 27.9 / 27.4 | GX worker |
+| Castle Town, twilight (`F_SP116,0,0,-1`) | 21.7 / 19.4 | main thread |
+| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.6 | main thread |
+| Hyrule Field bridge (`F_SP121,0,4,-1`) | 17.6 / 19.2 | main thread and GX worker |
+| Kakariko, twilight (`F_SP109,0,59,-1`) | 12.1 / 12.7 | main thread |
+| Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.5 | main thread |
+
+The game's simulation now ticks at a fixed 30 Hz (at most two ticks per frame), so it keeps its real
+speed down to 15 FPS; four of the six places held 28-30 ticks per second. The GPU is not the limit at
+75 %; the main thread is, mostly actor updates (crowds, fish, some enemies) and the game's painter.
+The method is in [docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded places".
+
+Earlier runs, frames per second, build g2c at 444 MHz:
 
 | Scene | vitaGL | GXM + G2 |
 | --- | ---: | ---: |
@@ -27,7 +45,7 @@ Frames per second, build g2c at 444 MHz:
 | Faron fight | 11.7 | 14.0 |
 
 The best result, 27.2 FPS, is Ordon village on GXM. Link's house runs at about 20 FPS on either
-renderer, and the Faron fight at 12 to 14. vitaGL is the default renderer. GXM + G2 is the experimental native renderer (`--vita-gpu=gxm`) with
+renderer, and the Faron fight at 12 to 14. GXM + G2 is the native renderer (`--vita-gpu=gxm`) with
 resident geometry, packed vertex formats and native primitives. Both columns use static geometry by
 reference, the GX worker thread, the fast pipeline lookup and a shader warm-up bundle; the switches are
 in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). For comparison, build v61 (one core, system clocks) ran
@@ -53,14 +71,19 @@ in the house with GXM:
 | Area | State | Notes |
 | --- | --- | --- |
 | Link's house, Ordon village, the Faron fight (development starts) | ✅ | started with `--stage` arguments |
-| Native GXM renderer | ⚠️ | experimental: `--vita-gpu=gxm`; vitaGL stays the default |
+| Castle Town, Kakariko, Hyrule Field (bench starts) | ⚠️ | run on the console, 12-22 FPS |
+| Native GXM renderer | ⚠️ | used by the play profile (the default); `--vita-profile=off` goes back to vitaGL |
+| Full-width 16:9 picture | ✅ | drawn at 75 % (720x408) and scaled to 960x544; `--vita-gxm-scale=100` for full size |
 | 3D scenes (textured, lit, fog) | ⚠️ | some textures flicker |
-| Controls (both analog sticks, buttons) | ✅ | no touch or gyro |
+| Controls (both analog sticks, buttons) | ✅ | |
+| PlayStation button prompts | ✅ | symbols drawn in code over the game's button art; no Sony or Nintendo artwork |
+| Front touch in menus, gyro aim | ⚠️ | in the code; not yet confirmed on the console |
+| Start-up screens | ⚠️ | progress while shaders are prepared, plain errors (no disc, wrong disc, missing shader compiler); the error screens are checked in the emulator only |
 | Shader preparation | ⚠️ | shaders compile at first use, causing long stalls; an optional warm-up file moves this to startup |
 | 3D lock-on marker | ⚠️ | drawn in the wrong place |
 | Outdoor scenes | ⚠️ | a black shape appears in some views |
-| Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes are not implemented yet |
-| Saves | ⚠️ | the crash when saving is fixed in this code (`patches/aurora/0005-vita-copy-stream-stack.patch`), not yet confirmed on the console |
+| Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes are not implemented yet; draws that would sample a copy nothing wrote are skipped instead of drawn black |
+| Saves | ✅ | saving works on the console (`patches/aurora/0005-vita-copy-stream-stack.patch`); rolling backups, a repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
 | Full opening, dungeons, complete playthrough | ❔ | untested |
 
 ## Requirements
@@ -117,7 +140,9 @@ outside these folders.
 | Select | Z |
 | Start, D-pad | Start, D-pad |
 
-Button prompts still show the GameCube labels.
+Button prompts show the PlayStation symbols. In menus, a tap on the front touch screen acts as
+Dusklight's menu pointer. Aiming also follows the gyroscope (on by default; the game's gyro aim
+setting turns it off).
 
 ## How to measure
 

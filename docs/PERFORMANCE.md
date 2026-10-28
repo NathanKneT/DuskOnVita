@@ -7,9 +7,10 @@ game state, never to state a frame rate.
 
 ## Results so far (PS Vita 1000, console)
 
-All console runs are in [benchmarks.csv](benchmarks.csv) (`python3 tools/charts.py` redraws the
-charts), measured by `tools/vita_run_report.py` over steady windows. The latest valid build, v61, at
-the system clocks (333 MHz CPU, 111 MHz GPU):
+The latest results (build b2, 28 Oct, six crowded places with the play profile) are in the README.
+The single runs before them are in [benchmarks.csv](benchmarks.csv) (`python3 tools/charts.py`
+redraws the charts), measured by `tools/vita_run_report.py` over steady windows. Build v61, at the
+system clocks (333 MHz CPU, 111 MHz GPU):
 
 | Scene | FPS | Game ticks/s |
 | --- | --- | --- |
@@ -47,10 +48,38 @@ In `ux0:data/twilight-vita/`:
 | `runtime.jsonl` | written by the port: the receipts |
 | `gxp_cache/` | written by the GXM backend: compiled shaders, checked before use |
 
+## Play profile
+
+A launch whose command line chooses no renderer option and no GPU backend or feature gets the play
+profile: the paths that console runs found correct and faster, as one line (`platform/vita/main_vita.cpp`,
+`PlayProfile`): GXM with resident geometry, compact formats and native primitives, the GX worker,
+static geometry, the fast pipeline lookup, the performance build's decode and staging options and 64/64
+MiB memory pools. With it come fixed 30 Hz ticks, the 75 % render size, frame overlap, fast real
+shadows, the fast actor paths marked "play" below and quiet receipts. Diagnostics (digest, captures,
+GPU timing, shader capture, input scripts) keep the profile; any renderer option turns it off, and
+`--vita-profile=off` keeps every path off. The receipts say which applied (`play_profile`).
+
 ## Start-up switches
 
 Unknown or repeated switches stop the launch with an `args_error` receipt. Everything else is passed
 to Dusklight (`--stage=...`, `--cvar ...`).
+
+Added on 28 Oct:
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `--vita-profile=play\|off` | play | the play profile above; `play` forces it, and is refused together with renderer options |
+| `--vita-ticks=fixed\|frames\|single` | `fixed` with the profile | game ticks at a fixed 30 Hz, at most two per frame (dusklight 0015), so the game keeps its speed down to 15 FPS; `frames` is one tick per frame (as before); `single` is at most one per loop, for emulator A/B runs |
+| `--vita-frame-overlap=off\|on\|verify` | `on` with the profile | the first game tick runs while the GX worker finishes the last frame (aurora 0009, dusklight 0019); needs the GX worker. Console, Ordon at 75 %: 20.5 FPS off, 25.9 on. `verify` checks the memory the last frame read against the next tick |
+| `--vita-fast-shadow-collect=off\|on\|verify` | `on` with the profile | the ground polygons under real shadows: the walk stops once the 256-triangle list is full and skips prisms the shadow test would reject, with the same list (dusklight 0018); `verify` runs both and reports lists that differ |
+| `--vita-fast-<name>=off\|on\|verify` | see right | exact actor and painter fast paths: `search` (0032), `bg-list` (0033, terrain queries) and `flow-bind` (0034, message flows) are on with the profile; `obstacle` (0031), `gx-wake` and `static-dl` (aurora 0020, 0021) are off until verified on more scenes. `verify` runs the original next to the fast path and counts differences |
+| `--vita-receipts=full\|quiet` | `quiet` with the profile | `full` adds the per-actor-type and painter timing used by `tools/vita_bench_report.py --actors --painter` |
+| `--vita-input-script=FILE` | off | replays a button script from the data folder (`tools/input_scripts/`), for repeatable walks |
+| `--vita-import-saves=auto\|off` | `auto` | save import at boot ([ARCHITECTURE.md](ARCHITECTURE.md), "Saves") |
+| `--vita-gxm-uniform-split`, `--vita-gxm-fragment-split` `=on\|off\|verify`; `--vita-gxm-uniform-reuse`, `--vita-gxm-pipeline-memo` `=on\|off` | `off` | GXM experiments: lighting and TEV registers in their own uniform buffers, reuse of the last uniform reservation, a memo of the last pipeline checked. Not measured on the console |
+
+The play profile also renders at 75 % (`--vita-gxm-scale=75`) unless the command line chooses a
+scale: drawn full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %.
 
 Available in every build:
 
@@ -155,3 +184,19 @@ Buffered lines are written by a low-priority thread on core 2, and drained at a 
    (Link present for 10 s, no shader compiled in the window) and prints FPS, ticks per second and the
    inclusive costs per run; `--ledger FILE.csv --version V --commit C` appends one CSV row per run.
 5. Post the rows, the commit, the switches and the console model in a performance issue.
+
+## Bench of crowded places
+
+The README's table comes from six runs in one console session, about 10 minutes, hands off: six
+crowded places started with `--stage`, each idle for a while and then walking a fixed route
+(`--vita-input-script`, `tools/input_scripts/`), with `--vita-receipts=full`. The shader stages of
+those runs are prepared at start-up from a warm-up bundle made beforehand in the emulator, so the
+console measures frames, not compiles.
+
+`python3 tools/vita_bench_report.py runtime.jsonl` prints, per place and phase (idle, walk), FPS,
+ticks per second, main-thread, GX worker and GPU time per frame and which of them is the limit;
+`--actors` and `--painter` rank actor types and painter parts by time. Two sessions so far: b1 (the
+play profile) and b2 (b1 plus the fast actor paths and the texture pool fix); b2 gained 19 % in Castle
+Town and 5 % in Ordon village centre, the other places stayed within noise. The next targets are the
+actor types at the top of the ranking (fish in Ordon, the crowd in Castle Town, some enemies), all
+with exact fast paths that leave the game's behavior unchanged.

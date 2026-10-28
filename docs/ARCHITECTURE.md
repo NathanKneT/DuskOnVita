@@ -38,7 +38,7 @@ DVD, CARD), and [Borealis](https://github.com/encounter/borealis) (logging, file
 
 | Path | Content |
 | --- | --- |
-| `platform/vita/` | entry point (`main_vita.cpp`), `runtime/` (receipts, clocks, run control, GX thread, probes), `gfx_vgl/` (renderer and its vitaGL backend), `gfx_gxm/` (GXM backend), `audio/`, `aurora/` (Aurora's application glue), `disc/` (disc reader), `benchmark/` (opt-in fixture), `compat/`, `probes/` |
+| `platform/vita/` | entry point (`main_vita.cpp`), `runtime/` (receipts, clocks, run control, GX thread, probes), `gfx_vgl/` (renderer and its vitaGL backend), `gfx_gxm/` (GXM backend), `audio/`, `aurora/` (Aurora's application glue, frame overlap, save safety), `disc/` (disc reader), `ui/` (start-up screens, PlayStation button glyphs drawn in code), `touch.cpp` (front touch), `benchmark/` (opt-in fixture), `compat/`, `probes/` |
 | `patches/<module>/` | diffs applied to the build mirror: `dusklight`, `aurora`, `borealis`, `deps/<name>` |
 | `cmake/` | upstream file lists, dependencies, vitaGL, platform libraries, the VPK link |
 | `tools/` | build scripts, dependency fetcher, stub generator, enum-ABI audit, receipt reports, test fixtures, charts |
@@ -136,10 +136,31 @@ worker thread that owns the port (patch `dusklight/0003`, `platform/vita/audio`)
 audio stream, so the audio thread's core, priority and suspend behavior belong to the port. What the
 game renders is unchanged; surround modes render stereo.
 
+## Saves
+
+The game writes its memory card through Aurora's GCI-folder card. Two weak hooks in that card
+(patch `aurora/0011`) call `platform/vita/aurora/save_safety.cpp`; nothing there can fail or change a
+card operation, and every error ends in a receipt.
+
+- **Before each change** to a save, the previous file is copied to `<card>/backup/<name>.<1..3>.gci`
+  (three rolling copies).
+- **At boot, before the card is mounted**, every save is checked. A broken one is restored from its
+  newest valid copy, and a save lost halfway through a rename is put back when that is unambiguous;
+  anything else is only reported. The broken file is kept, never deleted.
+- **Import** (`--vita-import-saves=auto|off`, default `auto`): when the card has no save of its own,
+  `.gci` files from `ux0:data/twilight-vita/import/` are copied in, then the save of another
+  Dusklight-based Vita build in `ux0:data/TwilitRealm/Dusklight/<region>/Card A`, for the same disc
+  region only. Files are copied, read back and compared, then renamed into place; the source files
+  are only read.
+
+`tools/save_safety_tests.sh` (run by `tools/host_tests.sh`) runs this code on real folders and drives
+Aurora's own card code through the CARD API the game uses, with and without the hooks: what the game
+reads back must be the same.
+
 ## Files
 
 - `ux0:data/twilight-vita/`: `game.iso`, `args.txt`, `sequence.txt`, `shader_warmup.bin`,
-  `runtime.jsonl`, and Dusklight's user directory (`--user-dir`).
+  `runtime.jsonl`, `import/` (saves to copy in), and Dusklight's user directory (`--user-dir`).
 - `ux0:data/TwilitRealm/Dusklight/`: Dusklight's logs and caches.
 - `ur0:data/libshacccg.suprx`: the shader compiler, extracted on your own console.
 - The disc reader (`platform/vita/disc/gcm_nod.cpp`) implements the part of the nod API that Aurora
