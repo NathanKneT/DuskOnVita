@@ -182,8 +182,9 @@ bool similarDiscFiles(char* out, std::size_t size) {
         }
         if (!disc || std::strcmp(name, "game.iso") == 0) continue;
         const std::size_t used = std::strlen(out);
-        std::snprintf(out + used, size - used, "%s%s", found ? ", " : "", name);
+        const int written = std::snprintf(out + used, size - used, "%s%s", found ? ", " : "", name);
         ++found;
+        if (written < 0 || std::size_t(written) >= size - used) break; // the hint is full: keep what fits
     }
     sceIoDclose(dir);
     return found != 0;
