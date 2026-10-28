@@ -1,40 +1,41 @@
 # DuskOnVita
 
-An independent, unofficial project that ports **The Legend of Zelda: Twilight Princess** to the
-PlayStation Vita.
+A fan port of **The Legend of Zelda: Twilight Princess** to the PlayStation Vita. Unofficial, and
+very much a work in progress.
 
-- It is not affiliated with or endorsed by Nintendo, Sony, the Dusklight team or the zeldaret project.
-- It is built on [Dusklight](https://github.com/TwilitRealm/dusklight), the native build of the
-  [Twilight Princess decompilation](https://github.com/zeldaret/tp); the name refers to Dusklight.
-- It contains no game data. You need your own legally obtained copy of the game.
+- Not affiliated with or endorsed by Nintendo, Sony, the Dusklight team or the zeldaret project.
+- Built on [Dusklight](https://github.com/TwilitRealm/dusklight), the native build of the
+  [Twilight Princess decompilation](https://github.com/zeldaret/tp). The name is a nod to Dusklight.
+- No game data in here. You bring your own legally obtained copy of the game.
 
-The original game code runs natively on the Vita's ARM CPU. This repository adds the Vita platform
-layer (a renderer that translates Aurora's GX commands to
-[vitaGL](https://github.com/Rinnegatamante/vitaGL), or experimentally straight to GXM, audio, input,
-memory, receipts) and a small queue of reviewed patches to the pinned upstreams.
+The game's own code runs natively on the Vita's ARM CPU, no emulation involved. This repo is the
+Vita side of things: a renderer that turns Aurora's GX commands into GXM (or
+[vitaGL](https://github.com/Rinnegatamante/vitaGL)), audio, input, memory, a lot of logging, and a
+small stack of patches on top of the pinned upstreams.
 
-## State of the game (28 Oct 2026)
+## Where it's at (28 Oct 2026)
 
-- **Playable, but not comfortably.** On a PS Vita 1000 the game boots from your disc image to the
-  title screen; a new game starts, the opening in Ordon plays, and saving works.
-- **Slow.** 12 to 28 FPS in the places measured so far, against the original's 30. The game keeps its
-  real speed down to 15 FPS; below that it slows down.
-- **Missing:** the minimap and map screens, real-time shadows, bloom and the other effects that need
-  frame-buffer copies; a settings menu (options are set in files); a language choice.
-- **Wrong:** some textures flicker; the 3D lock-on marker is drawn in the wrong place.
-- **Untested:** dungeons, the rest of the story, a full playthrough, sleep and resume, discs other
-  than the European release.
+- **You can play it, but it's not comfy yet.** On my PS Vita 1000 it boots from your disc image to
+  the title screen, a new game starts, the opening in Ordon plays, and saving works.
+- **It's slow.** 12 to 28 FPS in the places I've measured, where the original runs at 30. The game
+  keeps its normal speed down to 15 FPS; below that, everything slows down with it.
+- **Not there yet:** the minimap and map screens, real-time shadows, bloom and the other effects that
+  need frame-buffer copies. No settings menu either (options live in text files), and no language
+  picker.
+- **Known bugs:** some textures flicker, and the 3D lock-on marker shows up in the wrong place.
+- **Not tested yet:** dungeons, the rest of the story, a full playthrough, sleep and resume, and any
+  disc other than the European one.
 
-The aim is a steady 30 FPS. What comes next is in [docs/ROADMAP.md](docs/ROADMAP.md). The code is
-shared so others can reproduce the work and help.
+The goal is a steady 30 FPS. What I'm working on next is in [docs/ROADMAP.md](docs/ROADMAP.md).
+It's all open so anyone can reproduce it, poke at it and help out.
 
-## Status (measured on a PS Vita 1000)
+## Numbers (on a real PS Vita 1000)
 
-Latest console run (28 Oct, build b2): six crowded places, each started with `--stage`, 75 % render
-size, the play profile (see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). FPS with Link idle /
-walking a scripted route:
+Latest console session (28 Oct, build b2): six of the busiest places in the game, each loaded with
+`--stage`, drawn at 75 % with the default play profile ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+FPS with Link standing still / walking a scripted route:
 
-| Place | FPS | Limited by |
+| Place | FPS | What holds it back |
 | --- | ---: | --- |
 | Ordon, outside Link's house (`F_SP103,1,3,-1`) | 27.9 / 27.4 | GX worker |
 | Castle Town, twilight (`F_SP116,0,0,-1`) | 21.7 / 19.4 | main thread |
@@ -43,12 +44,13 @@ walking a scripted route:
 | Kakariko, twilight (`F_SP109,0,59,-1`) | 12.1 / 12.7 | main thread |
 | Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.5 | main thread |
 
-The game's simulation now ticks at a fixed 30 Hz (at most two ticks per frame), so it keeps its real
-speed down to 15 FPS; four of the six places held 28-30 ticks per second. The GPU is not the limit at
-75 %; the main thread is, mostly actor updates (crowds, fish, some enemies) and the game's painter.
-The method is in [docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded places".
+The game now ticks at a fixed 30 Hz (two ticks per frame at most), so it keeps its real speed down to
+15 FPS; four of these six places held 28-30 ticks per second. At 75 % the GPU has room to spare. The
+bottleneck is the main thread, mostly actors updating (crowds, fish, a few enemies) and the game's
+painter. How these runs are done: [docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded
+places".
 
-Earlier runs, frames per second, build g2c at 444 MHz:
+Older runs, build g2c at 444 MHz, FPS:
 
 | Scene | vitaGL | GXM + G2 |
 | --- | ---: | ---: |
@@ -56,25 +58,19 @@ Earlier runs, frames per second, build g2c at 444 MHz:
 | Ordon, outside Link's house | 22.9 | 27.2 |
 | Faron fight | 11.7 | 14.0 |
 
-The best result, 27.2 FPS, is Ordon village on GXM. Link's house runs at about 20 FPS on either
-renderer, and the Faron fight at 12 to 14. GXM + G2 is the native renderer (`--vita-gpu=gxm`) with
-resident geometry, packed vertex formats and native primitives. Both columns use static geometry by
-reference, the GX worker thread, the fast pipeline lookup and a shader warm-up bundle; the switches are
-in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). For comparison, build v61 (one core, system clocks) ran
-at 6.3 FPS in the house and 7.4 in Ordon.
+GXM + G2 is the native renderer (`--vita-gpu=gxm`, the default now) with resident geometry, packed
+vertex formats and native primitives. For scale: build v61 (one core, stock clocks) did 6.3 FPS in
+the house and 7.4 outside, on 22 Oct.
 
-Full speed is 30. Every figure comes from a console run, averaged over steady windows (Link in the
-scene for 10 s, no shader compiling; `tools/vita_run_report.py`); emulator numbers are only used to
-check correctness. All console runs are listed in [docs/benchmarks.csv](docs/benchmarks.csv);
+Every number here comes from the console itself, averaged over steady stretches (Link on screen for
+10 s, no shader compiling; `tools/vita_run_report.py`). The emulator is only for checking that things
+look right, never for speed. All the runs are in [docs/benchmarks.csv](docs/benchmarks.csv), and
 `python3 tools/charts.py` redraws the charts from it.
 
 ![PS Vita frame rate, build by build](docs/img/progress.svg)
 
-In the house, the GX worker needs about 37 ms per frame with vitaGL and 31 ms with GXM. With GXM the
-CPU work fits in a 30 FPS frame (33 ms), but frames still take about 50 ms; the GPU timing switches
-(`--vita-gxm-gpu-timing`, see [docs/PERFORMANCE.md](docs/PERFORMANCE.md)) are there to find out why.
-Outdoors in Ordon, GXM is CPU-bound and about 3 ms short of 30 FPS. Where the GX worker's time goes
-in the house with GXM:
+Link's house turned out to be GPU-bound at full resolution, which is why the default is 75 % now.
+Where the GX worker's time went in the house on g2c:
 
 ![Where the GX worker's time goes in Link's house](docs/img/frame.svg)
 
@@ -82,35 +78,36 @@ in the house with GXM:
 
 | Area | State | Notes |
 | --- | --- | --- |
-| Link's house, Ordon village, the Faron fight (development starts) | ✅ | started with `--stage` arguments |
-| Castle Town, Kakariko, Hyrule Field (bench starts) | ⚠️ | run on the console, 12-22 FPS |
-| Native GXM renderer | ⚠️ | used by the play profile (the default); `--vita-profile=off` goes back to vitaGL |
+| Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select around 21 FPS, Ordon around 23 |
+| Saves | ✅ | saving works on the console; rolling backups, a repair check at boot and save import too ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves"), checked in the emulator and host tests so far |
+| Link's house, Ordon, the Faron fight | ✅ | loaded with `--stage` |
+| Castle Town, Kakariko, Hyrule Field | ⚠️ | they run, at 12-22 FPS |
 | Full-width 16:9 picture | ✅ | drawn at 75 % (720x408) and scaled to 960x544; `--vita-gxm-scale=100` for full size |
+| GXM renderer | ⚠️ | the default; `--vita-profile=off` goes back to vitaGL |
+| Controls (both sticks, buttons) | ✅ | |
+| PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork |
+| Front touch in menus, gyro aim | ⚠️ | in, but not confirmed on the console yet |
+| Start-up screens | ⚠️ | a progress screen while shaders get ready, and plain error screens (no disc, wrong disc, missing shader compiler); the errors are only checked in the emulator |
+| Shader preparation | ⚠️ | shaders compile the first time they're needed, which stalls; an optional warm-up file moves that to start-up |
 | 3D scenes (textured, lit, fog) | ⚠️ | some textures flicker |
-| Controls (both analog sticks, buttons) | ✅ | |
-| PlayStation button prompts | ✅ | symbols drawn in code over the game's button art; no Sony or Nintendo artwork |
-| Front touch in menus, gyro aim | ⚠️ | in the code; not yet confirmed on the console |
-| Start-up screens | ⚠️ | progress while shaders are prepared, plain errors (no disc, wrong disc, missing shader compiler); the error screens are checked in the emulator only |
-| Shader preparation | ⚠️ | shaders compile at first use, causing long stalls; an optional warm-up file moves this to startup |
-| 3D lock-on marker | ⚠️ | drawn in the wrong place |
-| Outdoor scenes | ⚠️ | a black shape appears in some views |
-| Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes are not implemented yet; draws that would sample a copy nothing wrote are skipped instead of drawn black |
-| Saves | ✅ | saving works on the console (`patches/aurora/0005-vita-copy-stream-stack.patch`); rolling backups, a repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
-| Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select about 21 FPS, Ordon about 23 |
-| Dungeons, complete playthrough | ❔ | untested |
+| 3D lock-on marker | ⚠️ | in the wrong place |
+| Outdoor scenes | ⚠️ | a black shape shows up in some views |
+| Frame-buffer effects (shadows, heat haze, minimap) | ❌ | EFB copies and off-screen passes aren't in yet; draws that would read an empty copy are skipped rather than drawn black |
+| Dungeons, a full playthrough | ❔ | not tested |
 
-## Requirements
+## What you need
 
 - A homebrew-enabled PS Vita with VitaShell.
-- Your own GameCube disc image as a plain `.iso`/`.gcm` (RVZ, WIA, CISO and other containers are not
-  read). Development and testing use the European release **GZ2P01, revision 0**; other releases are
-  untested on this port.
+- Your own GameCube disc image as a plain `.iso`/`.gcm` (RVZ, WIA, CISO and other containers don't
+  work yet). I develop and test with the European release, **GZ2P01, revision 0**; other releases
+  haven't been tried on this port.
 - The shader compiler module `ur0:data/libshacccg.suprx`, extracted on your own console.
 
 ## Build
 
-Use Linux or WSL2 with Docker, Git, Bash, Python 3, rsync, patch, curl and unzip. Keep the checkout on
-the Linux side (for example `~/src/duskonvita`), so file modes and LF line endings stay intact.
+You'll want Linux or WSL2 with Docker, Git, Bash, Python 3, rsync, patch, curl and unzip. Keep the
+checkout on the Linux side (for example `~/src/duskonvita`) so file modes and LF line endings stay
+intact.
 
 ```sh
 git submodule update --init external/dusklight
@@ -119,14 +116,14 @@ docker pull vitasdk/vitasdk@sha256:8227da1b596d981f4513cd9b36bda1e43857f6dae5bcf
 bash tools/vita_build.sh build-vita
 ```
 
-`tools/vita_build.sh` mirrors the repository into a work tree (`TWV_WORK`, default
-`~/twilight-vita-work`), applies `patches/` there (the submodules stay untouched), downloads the
-hash-pinned sources in `deps.lock`, and builds in the digest-pinned VitaSDK image with networking off.
-It downloads no game data. The result is `build-vita/twilight_vita.vpk`; `link_report.txt` next to it
-lists the symbols still resolved by trap stubs.
+`tools/vita_build.sh` copies the repo into a work tree (`TWV_WORK`, default `~/twilight-vita-work`),
+applies `patches/` there (the submodules stay untouched), downloads the hash-pinned sources from
+`deps.lock`, and builds inside the digest-pinned VitaSDK image with networking off. It never
+downloads game data. You get `build-vita/twilight_vita.vpk`; `link_report.txt` next to it lists the
+symbols that are still trap stubs.
 
-For measurements, build the performance VPK instead: `bash tools/vita_perf_build.sh` compiles every
-start-up renderer switch in (each off unless selected) and leaves out the per-draw diagnostics
+For measuring, build the performance VPK instead: `bash tools/vita_perf_build.sh` compiles in every
+start-up renderer switch (each off unless you pick it) and leaves out the per-draw diagnostics
 ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
 ## Run
@@ -136,11 +133,11 @@ start-up renderer switch in (each off unless selected) and leaves out the per-dr
 3. Copy `args.example` to `ux0:data/twilight-vita/args.txt` (it starts in Link's house).
 4. Launch **DuskOnVita (dev)**.
 
-`args.txt` holds whitespace-separated options, at most 511 bytes, without quoting or comments. Stage
-syntax: `--stage=STAGE,ROOM,SPAWN,LAYER`. `sequence.txt` in the same folder runs a list of
-configurations, one per launch. Each run appends receipts to `ux0:data/twilight-vita/runtime.jsonl`;
-Dusklight's own logs and caches are in `ux0:data/TwilitRealm/Dusklight/`. Keep backups of your saves
-outside these folders.
+`args.txt` takes whitespace-separated options, 511 bytes at most, no quoting or comments. Stage
+syntax: `--stage=STAGE,ROOM,SPAWN,LAYER`. A `sequence.txt` in the same folder runs a list of
+configurations, one per launch. Each run adds its logs to `ux0:data/twilight-vita/runtime.jsonl`;
+Dusklight's own logs and caches go to `ux0:data/TwilitRealm/Dusklight/`. The port keeps backups of
+your saves now, but an extra copy somewhere else never hurts.
 
 ## Controls
 
@@ -153,51 +150,51 @@ outside these folders.
 | Select | Z |
 | Start, D-pad | Start, D-pad |
 
-Button prompts show the PlayStation symbols. In menus, a tap on the front touch screen acts as
-Dusklight's menu pointer. Aiming also follows the gyroscope (on by default; the game's gyro aim
-setting turns it off).
+Button prompts show the PlayStation symbols. In menus you can tap the front touch screen. Aiming
+also follows the gyro (on by default; the game's gyro aim setting turns it off).
 
-## How to measure
+## Measuring
 
-Performance claims need a console run. [docs/PERFORMANCE.md](docs/PERFORMANCE.md) lists every switch
-and receipt and the protocol: one change per run, the same scene, a fixed run length
-(`--vita-exit-after`), loading and shader compilation separated from steady play, and
+Speed claims need a console run. [docs/PERFORMANCE.md](docs/PERFORMANCE.md) has every switch and
+log field, and how I measure: one change per run, same scene, a fixed run length
+(`--vita-exit-after`), loading and shader compiling kept out of the numbers, and
 `tools/vita_run_report.py` to turn `runtime.jsonl` into one row per run.
 
 ## Tests
 
-`bash tools/host_tests.sh` builds and runs the host test suite (Linux or WSL, a C++20 compiler with
-AddressSanitizer and UndefinedBehaviorSanitizer, Python 3; about 15 minutes). It needs the
-submodules: several tests extract the real functions from the pinned upstream sources and from this
-port's code, and compare them with frozen earlier versions kept in `tests/fixtures/baseline/`. Host
-tests do not prove GPU output or console performance.
+`bash tools/host_tests.sh` builds and runs the host tests (Linux or WSL, a C++20 compiler with
+AddressSanitizer and UndefinedBehaviorSanitizer, Python 3; about 5 to 15 minutes). It needs the
+submodules: a lot of the tests pull the real functions out of the pinned upstream sources and this
+port's code, and compare them with frozen earlier versions in `tests/fixtures/baseline/`. They don't
+prove anything about the picture on the GPU or speed on the console.
 
-## Help wanted
+## Want to help?
 
-- **Graphics translation cost:** the GX worker needs 31 to 37 ms per frame in the house (see the chart
-  above); after the draws themselves, pipeline lookup and register decode are the largest parts.
-  Profiles and patches welcome.
-- **GPU time on GXM:** the house takes about 50 ms per frame although its CPU work fits in 33 ms;
-  console runs with `--vita-gxm-gpu-timing` will show where the time goes.
-- **Frame-buffer effects:** EFB copies and off-screen passes, on vitaGL and on GXM.
-- **Texture flicker:** find the cause; a matched Dolphin capture of the same scene helps.
-- **Hardware testers:** a Vita 1000 or 2000, the scene, the build and the `runtime.jsonl` receipts.
+- **The main thread:** in towns and busy places it's the bottleneck. Actor updates (crowds, fish,
+  some enemies) and the game's painter take most of it. Profiles and exact speed-ups are very welcome,
+  as long as the game behaves exactly like the original.
+- **Frame-buffer effects:** EFB copies and off-screen passes on GXM, for the minimap, the map screen,
+  shadows and bloom.
+- **Texture flicker:** still hunting the cause; a matched Dolphin capture of the same scene helps.
+- **Testing on hardware:** a Vita 1000 or 2000 (or a PSTV), the place, the build and your
+  `runtime.jsonl`.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) explains how to propose a change.
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes how the port is put together.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules,
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the port fits together, and
+[docs/ROADMAP.md](docs/ROADMAP.md) is what's coming.
 
 ## Credits and license
 
-This port exists thanks to the [zeldaret/tp](https://github.com/zeldaret/tp) decompilation,
+None of this would exist without the [zeldaret/tp](https://github.com/zeldaret/tp) decompilation,
 [Dusklight](https://github.com/TwilitRealm/dusklight), [Aurora](https://github.com/encounter/aurora),
 [Borealis](https://github.com/encounter/borealis), [VitaSDK](https://vitasdk.org) and
 [vitaGL](https://github.com/Rinnegatamante/vitaGL). [NOTICE](NOTICE) lists every upstream with its
 pinned version and license.
 
-Original code in this repository is available under the [MIT license](LICENSE). Upstream projects and
-dependencies keep their own licenses; a patch does not change the license of the file it applies to.
-vitaGL is LGPL-3.0-or-later: its pinned source, the local patches and the build recipe are here so it
-can be rebuilt and relinked.
+The original code in this repo is under the [MIT license](LICENSE). Upstream projects and
+dependencies keep their own licenses, and a patch doesn't change the license of the file it applies
+to. vitaGL is LGPL-3.0-or-later: its pinned source, the local patches and the build recipe are all
+here, so it can be rebuilt and relinked.
 
-The Legend of Zelda and Twilight Princess are trademarks of Nintendo. This repository contains no game
-disc image, extracted game data, Nintendo or Sony software, or shader compiler binary.
+The Legend of Zelda and Twilight Princess are trademarks of Nintendo. This repo contains no game disc
+image, extracted game data, Nintendo or Sony software, or shader compiler binary.
