@@ -23,7 +23,7 @@ int main(){
 #endif
 }
 // Optional integration mode: extract upload() and texture factories from
-// textures.cpp into texture_upload_functions.inc (see agent handoff document).
+// textures.cpp into texture_upload_functions.inc (tools/texture_upload_test_fixture.py).
 #ifdef TWV_TEXTURE_UPLOAD_LIFECYCLE_TEST
 #include "../platform/vita/gfx_vgl/texture_conversion_cache.hpp"
 #include <vector>
@@ -58,7 +58,7 @@ uint32_t twv_vgl_texture_static_rgba(uint32_t w,uint32_t h,uint32_t m,const void
 void twv_vgl_texture_write(uint32_t gpu,uint32_t,uint32_t,uint32_t,const void*){assert(gpu);++writes;}
 namespace twv::vgl {
 struct Texture {
-    uint32_t gpu=0;bool deferredUpload=false,hasArbitraryMips=false;
+    uint32_t gpu=0;bool deferredUpload=false,hasArbitraryMips=false,efbCopy=false;
     struct {uint32_t width,height;} size;
     uint32_t mipCount,gxFormat;
     Texture(uint32_t w,uint32_t h,uint32_t m,uint32_t f,bool defer=false):deferredUpload(defer),size{w,h},mipCount(m),gxFormat(f){if(!defer)gpu=twv_vgl_texture(w,h,m);}
@@ -74,6 +74,8 @@ static void lifecycle_test(){
     auto a=new_static_texture_2d(4,4,3,1,full,false,"");assert(a->gpu==12&&zeros==0&&directs==1&&writes==0);
     auto b=new_dynamic_texture_2d(4,4,3,1,"");assert(b->gpu==11&&zeros==1&&directs==1);
     auto c=new_render_texture(4,4,1,"");auto d=new_conv_texture(4,4,1,"");assert(zeros==3);
+    // Only EFB copy destinations (and their conversions) are marked: draws sampling them are skipped.
+    assert(c->efbCopy&&d->efbCopy&&!a->efbCopy&&!b->efbCopy);
     auto e=new_static_texture_2d(4,4,3,1,shortSource,false,"");assert(e->gpu==11&&zeros==4&&directs==1);
     auto f=new_static_texture_2d(4,4,3,2,full,false,"");assert(f->gpu==11&&zeros==5&&directs==1);
     auto g=new_static_texture_2d(4,1,1,1,full,true,"");assert(g->gpu==11&&zeros==6&&writes==1);

@@ -7,6 +7,9 @@ A loop that finds no tick due but one due within 4 ms (the limiter wakes a littl
 for it and runs it instead of painting the same frame twice, and the limiter adds that wait to
 the frame so the loop stays in step with the ticks.
 Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps upstream behaviour.
+When the running average of recent ticks is above 33 ms (the title's veil shot costs about 70 ms
+per tick on the console), a loop runs one tick, not two: the second tick doubled that frame for
+about 10% more game speed. Each tick is still one whole original game frame.
 
 --- a/src/dusk/game_clock.h
 +++ b/src/dusk/game_clock.h
@@ -36,7 +39,7 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
  
  #include <algorithm>
  #include <chrono>
-@@ -29,6 +32,15 @@
+@@ -29,6 +32,22 @@
      std::chrono::duration_cast<game_clock::duration>(std::chrono::duration<float>(kSimPeriod));
  constexpr native_clock::duration kAbnormalGapResetThreshold = std::chrono::milliseconds(250);
  constexpr int kMaxSimTicksPerFrame = static_cast<int>(aurora::time::kMaximumTimeScale) * 4;
@@ -48,11 +51,18 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
 +// waits for it and runs it, instead of painting the same frame again (and two ticks next loop).
 +constexpr game_clock::duration kVitaTickWait = std::chrono::milliseconds(4);
 +long long s_vitaTickWaitNs = 0;
++// A tick that costs more than a 30 Hz frame on its own (the title's veil shot: about 70 ms on the
++// console) gets no second tick in the same loop: that doubled the frame for ~10% more game speed.
++// s_vitaTickCost is a running average of recent ticks, capped so one loading tick doesn't linger.
++constexpr native_clock::duration kVitaCatchUpLimit = std::chrono::milliseconds(33);
++constexpr native_clock::duration kVitaTickCostCap = std::chrono::milliseconds(100);
++native_clock::time_point s_vitaTickStart{};
++native_clock::duration s_vitaTickCost{};
 +#endif
  
  float ui_dt() {
      if (s_simTickActive) {
-@@ -70,9 +82,22 @@
+@@ -70,9 +89,22 @@
      return aurora::time::scale() / kSimPeriod;
  }
  
@@ -75,7 +85,7 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
      const auto nativeFrameGap = nativeNow - s_previousNativeSample;
      const auto gameFrameGap = gameNow - s_latestGameSample;
      s_previousNativeSample = nativeNow;
-@@ -87,7 +112,12 @@
+@@ -87,7 +119,12 @@
      const float timeScale = aurora::time::scale();
      const bool interpolating =
          getSettings().game.enableFrameInterpolation.getValue() != FrameInterpMode::Off;
@@ -88,7 +98,7 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
      out.interpolating = interpolating;
      out.separatePresentation = separatePresentation;
  
-@@ -116,12 +146,23 @@
+@@ -116,12 +153,25 @@
      if (timeStopped || abnormalGap) {
          s_currentSnapshotTime = simulationTarget;
          out.numSimTicks = 0;
@@ -105,7 +115,9 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
      auto projectedSnapshotTime = s_currentSnapshotTime;
 -    while (numSimTicks < kMaxSimTicksPerFrame) {
 +#if TARGET_VITA
-+    const int maxSimTicks = vitaFixed ? s_vitaMaxTicks : kMaxSimTicksPerFrame;
++    const int maxSimTicks = !vitaFixed                         ? kMaxSimTicksPerFrame :
++                            s_vitaTickCost > kVitaCatchUpLimit ? 1 :
++                                                                 s_vitaMaxTicks;
 +#else
 +    const int maxSimTicks = kMaxSimTicksPerFrame;
 +#endif
@@ -113,7 +125,7 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
          const bool tickDue = interpolating ?
                                   projectedSnapshotTime < simulationTarget :
                                   projectedSnapshotTime + kSimPeriodDuration <= simulationTarget;
-@@ -131,7 +172,36 @@
+@@ -131,7 +181,36 @@
          projectedSnapshotTime += kSimPeriodDuration;
          numSimTicks++;
      }
@@ -150,7 +162,27 @@ Off (0) unless the Vita entry turns it on; interpolation, when chosen, keeps ups
      return out;
  }
  
-@@ -182,3 +252,10 @@
+@@ -139,9 +218,19 @@
+     s_pendingSimTime = g_frameTiming.separatePresentation ? s_currentSnapshotTime + kSimPeriodDuration :
+                                                             s_latestGameSample;
+     s_simTickActive = true;
++#if TARGET_VITA
++    s_vitaTickStart = native_clock::now();
++#endif
+ }
+ 
+ void commit_sim_tick() {
++#if TARGET_VITA
++    if (s_vitaMaxTicks > 0 && s_simTickActive) {
++        const auto cost = std::min<native_clock::duration>(native_clock::now() - s_vitaTickStart,
++                                                           kVitaTickCostCap);
++        s_vitaTickCost = (3 * s_vitaTickCost + cost) / 4;
++    }
++#endif
+     if (s_simTickActive) {
+         s_currentSnapshotTime = s_pendingSimTime;
+         s_simTickActive = false;
+@@ -182,3 +271,10 @@
  }
  
  }  // namespace dusk::game_clock

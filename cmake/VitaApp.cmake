@@ -23,6 +23,7 @@ add_library(twv_vita_runtime STATIC
         platform/vita/runtime/fault_receipts.cpp
         platform/vita/runtime/run_control.cpp
         platform/vita/runtime/gx_thread.cpp
+        platform/vita/runtime/fast_shadow_collect.cpp
         platform/vita/gfx_vgl/bundle_options.cpp
         platform/vita/gfx_vgl/gx_fast_control.cpp
         platform/vita/audio/audio_out.cpp)

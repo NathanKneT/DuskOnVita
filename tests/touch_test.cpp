@@ -51,9 +51,9 @@ int main(int argc, char** argv) {
 
   FrontTouch t;
   // Screen centre -> centre of the drawn area; a tap is press then release.
-  expect(t.event(Finger::Down, 7, 0.5f, 0.5f, true), Pointer::Press, 362.0f, 272.0f);
-  expect(t.event(Finger::Motion, 7, 0.5f, 0.25f, true), Pointer::Move, 362.0f, 136.0f);
-  expect(t.event(Finger::Up, 7, 0.5f, 0.25f, true), Pointer::Release, 362.0f, 136.0f);
+  expect(t.event(Finger::Down, 7, 0.5f, 0.5f, true), Pointer::Press, 480.0f, 272.0f);
+  expect(t.event(Finger::Motion, 7, 0.5f, 0.25f, true), Pointer::Move, 480.0f, 136.0f);
+  expect(t.event(Finger::Up, 7, 0.5f, 0.25f, true), Pointer::Release, 480.0f, 136.0f);
   CHECK(!t.event(Finger::Motion, 7, 0.5f, 0.5f, true));
 
   // No menu reading the pointer: the finger is not tracked at all.
@@ -61,24 +61,22 @@ int main(int argc, char** argv) {
   CHECK(!t.event(Finger::Motion, 1, 0.6f, 0.5f, true));
   CHECK(!t.event(Finger::Up, 1, 0.6f, 0.5f, true));
 
-  // Presses in the side bars are ignored; just inside the edges counts.
-  CHECK(!t.event(Finger::Down, 2, 0.05f, 0.5f, true));
-  CHECK(!t.event(Finger::Down, 2, 0.95f, 0.5f, true));
+  // The game fills the screen: presses right at both edges count.
   expect(t.event(Finger::Down, 3, (kGameLeft + 0.5f) / kScreenWidth, 0.0f, true), Pointer::Press, 0.5f, 0.0f);
-  // Its moves follow it out of the area (the menu's hit tests then miss).
-  expect(t.event(Finger::Motion, 3, 0.0f, 1.0f, true), Pointer::Move, -118.0f, 544.0f);
+  // Its moves follow it anywhere on the panel.
+  expect(t.event(Finger::Motion, 3, 0.0f, 1.0f, true), Pointer::Move, 0.0f, 544.0f);
   // A second finger is ignored while the first is down.
   CHECK(!t.event(Finger::Down, 4, 0.5f, 0.5f, true));
   CHECK(!t.event(Finger::Motion, 4, 0.5f, 0.5f, true));
   CHECK(!t.event(Finger::Up, 4, 0.5f, 0.5f, true));
-  expect(t.event(Finger::Canceled, 3, 0.0f, 1.0f, true), Pointer::Cancel, -118.0f, 544.0f);
+  expect(t.event(Finger::Canceled, 3, 0.0f, 1.0f, true), Pointer::Cancel, 0.0f, 544.0f);
   expect(t.event(Finger::Down, 4, (kGameLeft + kGameWidth - 0.5f) / kScreenWidth, 1.0f, true),
-         Pointer::Press, 723.5f, 544.0f);
+         Pointer::Press, 959.5f, 544.0f);
 
   // Menu pointer turned off in the options: tracking is dropped.
   t.reset();
   CHECK(!t.event(Finger::Up, 4, 0.5f, 0.5f, true));
-  expect(t.event(Finger::Down, 5, 0.5f, 0.5f, true), Pointer::Press, 362.0f, 272.0f);
+  expect(t.event(Finger::Down, 5, 0.5f, 0.5f, true), Pointer::Press, 480.0f, 272.0f);
 
   std::puts("touch_test: ok");
   return 0;

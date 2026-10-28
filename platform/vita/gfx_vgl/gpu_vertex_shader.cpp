@@ -102,12 +102,16 @@ std::string gpu_vertex_shader(const Pipeline& p,unsigned lightCount) {
        "float4 color0:COLOR0,float4 color1:COLOR1";
     for(unsigned tc=0;tc<8;++tc) if(p.info.sampledTexCoords.test(tc))
         s+=fmt::format(",float3 tc{}:TEXCOORD{}",tc,tc);
-    s+=",uniform float4 proj_rows[4],uniform float4 pn_pos[30],uniform float4 channel_mat[4]";
-    if(p.info.lightingEnabled)s+=",uniform float4 channel_amb[4]";
+    // G3 (--vita-gxm-uniform-split, GXM only): the lighting uniforms (channel registers, lights, light
+    // masks) in vertex uniform buffer 1, which the backend uploads only when they change. The binding
+    // sits between /*G3{*/ and /*}G3*/: the draw digest hashes the source without it.
+    const std::string b1=(twv_gpu_features()&TwvGpuFeatureUniformSplit) ? "/*G3{*/ : BUFFER[1]/*}G3*/" : "";
+    s+=",uniform float4 proj_rows[4],uniform float4 pn_pos[30],uniform float4 channel_mat[4]"+b1;
+    if(p.info.lightingEnabled)s+=",uniform float4 channel_amb[4]"+b1;
     if(p.info.lightingEnabled && lightCount)s+=fmt::format(
-       ",uniform float4 pn_nrm[30],uniform float4 light_pos[{0}],uniform float4 light_dir[{0}],"
-       "uniform float4 light_color[{0}],uniform float4 light_cos[{0}],uniform float4 light_dist[{0}],"
-       "uniform float4 light_masks[8]",lightCount);
+       ",uniform float4 pn_nrm[30],uniform float4 light_pos[{0}]{1},uniform float4 light_dir[{0}]{1},"
+       "uniform float4 light_color[{0}]{1},uniform float4 light_cos[{0}]{1},uniform float4 light_dist[{0}]{1},"
+       "uniform float4 light_masks[8]{1}",lightCount,b1);
     if(p.gpuTexgen && p.texgenVectors)s+=fmt::format(",uniform float4 texgen_rows[{}]",p.texgenVectors);
     s+=") {Out o;";
     // G2 packed formats (GXM): integer inputs arrive unscaled; multiply by the GX shift, an exact

@@ -23,6 +23,8 @@ SCENES = {'R_SP01': 'house-R_SP01', 'F_SP103': 'outside-F_SP103', 'F_SP108': 'fa
 INCLUSIVE = {'prof_game_execute_inclusive_us': 'exec_ms', 'prof_painter_inclusive_us': 'painter_ms',
              'prof_fifo_inclusive_us': 'fifo_ms', 'prof_shader_us': 'shader_ms',
              'prof_present_us': 'present_ms', 'prof_game_audio_us': 'audio_ms', 'prof_events_us': 'events_ms',
+             # Game thread blocked on the GX worker (drain, or the --vita-frame-overlap settle).
+             'prof_gx_wait_us': 'gx_wait_ms',
              # GXM --vita-gxm-gpu-timing (platform/vita/gfx_gxm/gxm_timing.hpp): per-frame means;
              # the two *_max_ms are the largest frame of any window.
              'gxm_gpu_busy_us': 'gpu_busy_ms', 'gxm_gpu_busy_max_us': 'gpu_busy_max_ms',
@@ -39,7 +41,7 @@ SWITCHES = ['vertex_stream_requested', 'small_packets_requested', 'uncached_stag
             'gx_decode_requested', 'lazy_vertex_plan_requested', 'geometry_neon_requested',
             'vertex_cull_requested', 'sparse_spans_requested', 'shadow_image_skip_requested',
             'static_geometry_requested', 'gx_thread_requested', 'neon_decode_requested',
-            'pipeline_fast_requested']
+            'pipeline_fast_requested', 'frame_overlap_requested']
 
 
 def split_boots(lines):

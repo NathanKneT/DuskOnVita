@@ -66,6 +66,28 @@ int main() {
                u.consistent());
         GpuOptions pm;assert(pm.consume("--vita-gxm-pipeline-memo=off")==1 && pm.features==0 && pm.any());
         assert(GpuOptions{}.consume("--vita-gxm-pipeline-memo")==0 && GpuOptions{}.consume("--vita-gxm-pipeline-memo=1")==-1);
+        // G3 uniform split: GXM only, once, an addition (not a choice).
+        GpuOptions g;
+        assert(g.consume("--vita-gxm-uniform-split=on")==1 && g.features==GpuOptions::FeatureUniformSplit);
+        assert(g.any() && !g.any_choice() && !g.consistent() && g.consume("--vita-gxm-uniform-split=off")==-1);
+        assert(g.consume("--vita-gpu=gxm")==1 && g.consistent());
+        assert(GpuOptions{}.consume("--vita-gxm-uniform-split=yes")==-1 && GpuOptions{}.consume("--vita-gxm-uniform-split")==0);
+        GpuOptions gv;
+        assert(gv.consume("--vita-gxm-uniform-split=verify")==1 &&
+               gv.features==(GpuOptions::FeatureUniformSplit|GpuOptions::FeatureUniformSplitVerify));
+        assert(gv.consume("--vita-gxm-uniform-split=on")==-1 && gv.consume("--vita-gxm-uniform-split=verify")==-1 &&
+               !gv.any_choice() && gv.consume("--vita-gpu=gxm")==1 && gv.consistent());
+        // G3 step 2, the fragment split: its own switch, so both steps can be measured apart.
+        GpuOptions f;
+        assert(f.consume("--vita-gxm-fragment-split=on")==1 && f.features==GpuOptions::FeatureFragmentSplit);
+        assert(f.consume("--vita-gxm-uniform-split=verify")==1 && f.features==(GpuOptions::FeatureFragmentSplit|
+               GpuOptions::FeatureUniformSplit|GpuOptions::FeatureUniformSplitVerify));
+        assert(f.consume("--vita-gxm-fragment-split=off")==-1 && !f.any_choice() && !f.consistent() &&
+               f.consume("--vita-gpu=gxm")==1 && f.consistent());
+        GpuOptions fv;
+        assert(fv.consume("--vita-gxm-fragment-split=verify")==1 &&
+               fv.features==(GpuOptions::FeatureFragmentSplit|GpuOptions::FeatureFragmentSplitVerify) && fv.any());
+        assert(GpuOptions{}.consume("--vita-gxm-fragment-split=yes")==-1 && GpuOptions{}.consume("--vita-gxm-fragment-split")==0);
     }
     {
         // GPU diagnostics: GXM only, once.

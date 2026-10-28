@@ -1,0 +1,101 @@
+Vita: settle points for --vita-frame-overlap (patches/aurora/0009, platform/vita/aurora/
+frame_overlap.hpp). The last frame's GX processing may still run during the first game tick of
+the loop, as the GameCube's GPU drew the last frame while the CPU ran the next fpcM_Management;
+the platform finishes it before a second tick (J3D's matrices and vertex buffers are double
+buffered for one frame of overlap, and a second tick would swap them again) and before the
+presentation draw. The one-tick-per-frame path paints inside its tick, so it settles first.
+Normally the tick has settled already: the game's own GXDrawDone at the end of its draw phase
+(mDoGph_AfterOfDraw -> JFWDisplay::endFrame -> JFWDrawDoneAlarm, double XFB) drains the FIFO, and
+the platform settles there, at the retail sync point; these calls cover a tick without that phase.
+Without the platform hook (or with the overlap off) these calls do nothing.
+
+A settle inside a tick (the game's GXDrawDone, or before a second tick) waits for the last frame's
+GX work, which the frame-end drain did outside the ticks before. The game clock's tick cost (0015:
+over 33 ms on average, a loop runs one tick, not two) leaves that time out
+(dusk_vita_tick_pause_ns), so the overlap does not change how many ticks a loop runs.
+
+--- a/src/dusk/game_clock.cpp
++++ b/src/dusk/game_clock.cpp
+@@ -47,6 +47,9 @@
+ constexpr native_clock::duration kVitaTickCostCap = std::chrono::milliseconds(100);
+ native_clock::time_point s_vitaTickStart{};
+ native_clock::duration s_vitaTickCost{};
++// Vita frame overlap (patches/dusklight/0019): time a tick spent finishing the last frame's GX
++// work (the platform's settle), which is not the tick's own cost.
++native_clock::duration s_vitaTickPause{};
+ #endif
+ 
+ float ui_dt() {
+@@ -220,13 +223,15 @@
+     s_simTickActive = true;
+ #if TARGET_VITA
+     s_vitaTickStart = native_clock::now();
++    s_vitaTickPause = {};
+ #endif
+ }
+ 
+ void commit_sim_tick() {
+ #if TARGET_VITA
+     if (s_vitaMaxTicks > 0 && s_simTickActive) {
+-        const auto cost = std::min<native_clock::duration>(native_clock::now() - s_vitaTickStart,
++        const auto spent = native_clock::now() - s_vitaTickStart - s_vitaTickPause;
++        const auto cost = std::min<native_clock::duration>(std::max<native_clock::duration>(spent, {}),
+                                                            kVitaTickCostCap);
+         s_vitaTickCost = (3 * s_vitaTickCost + cost) / 4;
+     }
+@@ -277,4 +282,12 @@
+ extern "C" void dusk_vita_fixed_ticks(int maxTicksPerLoop) {
+     dusk::game_clock::s_vitaMaxTicks = maxTicksPerLoop < 0 ? 0 : maxTicksPerLoop;
+ }
++// patches/dusklight/0019: the platform's frame-overlap settle ran for this long inside the current
++// tick (if one is running); the tick cost that limits ticks per loop leaves it out.
++extern "C" void dusk_vita_tick_pause_ns(long long ns) {
++    if (dusk::game_clock::s_simTickActive && ns > 0) {
++        dusk::game_clock::s_vitaTickPause += std::chrono::duration_cast<aurora::time::native_clock::duration>(
++            std::chrono::nanoseconds(ns));
++    }
++}
+ #endif
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -53,6 +53,10 @@
+ #include "dusk/interp/frame_interpolation.h"
+ #if TARGET_VITA
+ extern "C" void twv_vita_benchmark_tick() __attribute__((weak));
++// Vita frame overlap (patches/dusklight/0019, platform/vita/aurora/aurora_vita.cpp): the last frame's
++// GX processing may still run during the first game tick; it is finished here, before a second
++// tick or the presentation draw (1 second tick, 2 presentation, 3 the one-tick-per-frame path).
++extern "C" void twv_vita_frame_overlap_settle(int site) __attribute__((weak));
+ #endif
+ #include "dusk/iso_validate.hpp"
+ #include "dusk/logging.h"
+@@ -297,6 +301,9 @@
+                     if (dMw_isCapturePending()) {
+                         break;
+                     }
++#if TARGET_VITA
++                    if (i > 0 && twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(1);
++#endif
+                     if (timing.interpolating) {
+                         dusk::interp::begin_sim_tick();
+                     }
+@@ -315,12 +322,19 @@
+                 }
+             }
+ 
++#if TARGET_VITA
++            if (twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(2);
++#endif
+             const float step = timing.interpolating ? dusk::game_clock::sample_interpolation_step() : 1.0f;
+             dusk::interp::begin_presentation(step);
+             fpcM_DrawIterater((fpcM_DrawIteraterFunc)fpcM_Draw);
+             cAPIGph_Painter();
+             dusk::interp::end_presentation();
+         } else {
++#if TARGET_VITA
++            // Painting happens inside this tick: nothing to overlap.
++            if (twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(3);
++#endif
+             dusk::interp::begin_frame(0.0f);
+             dusk::game_clock::begin_sim_tick();
+ 

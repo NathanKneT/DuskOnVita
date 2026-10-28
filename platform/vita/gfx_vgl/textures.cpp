@@ -130,11 +130,14 @@ TextureHandle new_static_texture_2d(uint32_t w,uint32_t h,uint32_t mips,u32 fmt,
 TextureHandle new_dynamic_texture_2d(uint32_t w,uint32_t h,uint32_t mips,u32 fmt,const char*) noexcept {
     return std::make_shared<twv::vgl::Texture>(w,h,mips,fmt);
 }
+// Aurora creates these only for GXCopyTex destinations and their conversions.
 TextureHandle new_render_texture(uint32_t w,uint32_t h,u32 fmt,const char*) noexcept {
-    return std::make_shared<twv::vgl::Texture>(w,h,1,fmt);
+    auto texture=std::make_shared<twv::vgl::Texture>(w,h,1,fmt);
+    texture->efbCopy=true;return texture;
 }
 TextureHandle new_conv_texture(uint32_t w,uint32_t h,u32 fmt,const char*) noexcept {
-    return std::make_shared<twv::vgl::Texture>(w,h,1,fmt);
+    auto texture=std::make_shared<twv::vgl::Texture>(w,h,1,fmt);
+    texture->efbCopy=true;return texture;
 }
 void write_texture(TextureRef& ref,ArrayRef<uint8_t> data) noexcept {twv::vgl::upload(static_cast<twv::vgl::Texture&>(ref),data);}
 void queue_texture_upload(TextureUpload) {twv::vgl::count("unsupported_webgpu_texture_upload");}

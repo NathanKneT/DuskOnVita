@@ -46,6 +46,8 @@ struct EntryState {
     bool quiet = false, gpuCalled = false;
     int gpuBackend = -1;
     std::uint32_t gpuFeatures = 0;
+    int overlap = -1;
+    int fastShadow = -1; // twv_vita_fast_shadow_collect_select's argument, -1 when not called
 } state;
 const char* axes[]{"arm", "bus", "gpu", "gpu_xbar"};
 constexpr std::array<int, 4> initial{321, -17, 111, INT_MIN};
@@ -168,9 +170,18 @@ extern "C" int twv_vita_lazy_vertex_plan_select(int value) { return selectRender
 extern "C" int twv_vita_static_geometry_select(int value) { return selectRenderer("static", value); }
 extern "C" int twv_vita_gx_thread_select(int value) { return selectRenderer("gx_thread", value); }
 extern "C" int twv_vita_gx_thread_pin_main() { state.calls.emplace_back("pin_main"); return 0; }
+// As aurora_vita.cpp: on needs the GX worker chosen first.
+extern "C" int twv_vita_frame_overlap_select(int value) {
+    state.calls.emplace_back("frame_overlap"); state.overlap = value;
+    return !value || (state.selections.count("gx_thread") && state.selections.at("gx_thread"));
+}
 extern "C" int twv_vita_shader_capture_select(int value) { return selectRenderer("capture", value); }
 extern "C" int twv_vita_neon_decode_select(int value) { return selectRenderer("neon_decode", value); }
 extern "C" int twv_vita_pipeline_fast_select(int value) { return selectRenderer("pipeline_fast", value); }
+// Not a renderer choice: recorded apart, so the play profile's selections stay as they are.
+extern "C" int twv_vita_fast_shadow_collect_select(int mode) {
+    assert(state.fastShadow == -1); state.fastShadow = mode; return mode >= 0 && mode <= 2;
+}
 extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memory) {
     state.calls.emplace_back("bundle"); ++state.bundleCalls;
     state.bundleFeatures = features; state.memoryProfile = memory; return state.bundleAvailable;
@@ -201,7 +212,8 @@ int main() {
     // the same selectors, fixed game ticks with a 30 FPS cap before the user's arguments, quiet receipts.
     fixedTicks = -1;
     assert(run(nullptr) == 7); checkClocks(true, false);
-    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 15u);
+    // Features: primitives, compact colours, resident (15) and the 75 % render size (64).
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u);
     assert(state.selections == (std::map<std::string, int>{{"stream", 1}, {"shadow", 1}, {"small", 1},
         {"uncached", 1}, {"gx", 1}, {"lazy_plan", 1}, {"static", 1}, {"gx_thread", 1}, {"pipeline_fast", 1}}));
     assert(state.bundleFeatures == TWV_BUNDLE_CORE && state.memoryProfile == 2 && state.quiet);
@@ -209,6 +221,15 @@ int main() {
     assert(fixedTicks == 2 && state.events.at("fixed_game_ticks") == 2);
     assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
         (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
+    assert(state.fastShadow == FastShadowCollectPlay &&
+           state.text.at("fast_shadow_collect_default") == twv::vita::FastShadowCollectNames[FastShadowCollectPlay]);
+    // --vita-fast-shadow-collect is not a renderer choice: the implicit profile stays on.
+    fixedTicks = -1;
+    assert(run("--vita-fast-shadow-collect=verify --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
+    assert(state.fastShadow == 2 && state.text.at("fast_shadow_collect_requested") == "verify" && fixedTicks == 2);
+    assert(state.selections.at("gx_thread") == 1 && state.gameArgs.back() == "R_SP01,4,2,0");
+    assert(run("--vita-profile=off --vita-fast-shadow-collect=on") == 7 && state.fastShadow == 1);
+    assert(state.text.at("play_profile") == "off" && state.selections.empty());
     fixedTicks = -1;
     assert(run("--stage R_SP01,4,2,0 --cvar video.maxFrameRate=20") == 7 && state.text.at("play_profile") == "on");
     assert(fixedTicks == 2 && std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
@@ -217,10 +238,15 @@ int main() {
     // Clocks, exit timers, receipts and diagnostics left in args.txt keep the implicit profile.
     fixedTicks = -1;
     assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
-    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 15u);
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u);
     assert(state.selections.at("gx_thread") == 1 && state.quiet && fixedTicks == 2);
     assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
         (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
+    // A typed render size keeps the profile and wins over its 75 %: 100 % adds no feature, 67 % adds 128.
+    fixedTicks = -1;
+    assert(run("--vita-gxm-scale=100") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u);
+    fixedTicks = -1;
+    assert(run("--vita-gxm-scale=67") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 143u);
     fixedTicks = -1;
     assert(run("--vita-exit-after=60 --vita-shader-capture=on --vita-receipts=full --stage R_SP01,4,2,0") == 7);
     assert(state.text.at("play_profile") == "on" && state.selections.at("capture") == 1);
@@ -241,12 +267,60 @@ int main() {
     assert(state.selections.at("static") == 1 && state.gpuBackend == 1 && !state.quiet && fixedTicks == 2);
     fixedTicks = -1;
     assert(run("--vita-profile=play --vita-ticks=frames") == 7 && fixedTicks == -1 && state.gameArgs.size() == 5);
+    // single: fixed ticks, at most one per loop (emulator A/B runs), with the same frame cap.
+    fixedTicks = -1;
+    assert(run("--vita-profile=play --vita-ticks=single") == 7 && fixedTicks == 1);
+    assert(state.events.at("fixed_game_ticks") == 1 && state.text.at("play_profile") == "on (explicit)");
+    assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
+    assert(run("--vita-ticks=single") == 7 && state.text.at("play_profile") == "off (--vita-ticks given)");
     assert(run("--vita-profile=play --vita-receipts=quiet") == 7 && state.quiet);
     assert(run("--vita-profile=off --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "off");
     assert(state.selections.empty() && !state.gpuCalled && state.gameArgs.size() == 7);
     for (const char* bad : {"--vita-profile=play --vita-gx-thread=on", "--vita-profile=play --vita-gpu=vgl",
                             "--vita-profile=maybe", "--vita-profile=off --vita-profile=off", "--vita-receipts=loud",
-                            "--vita-ticks=sometimes", "--vita-ticks=fixed --vita-ticks=fixed"})
+                            "--vita-ticks=sometimes", "--vita-ticks=fixed --vita-ticks=fixed",
+                            "--vita-ticks=single --vita-ticks=single", "--vita-ticks=fixed --vita-ticks=single",
+                            "--vita-fast-shadow-collect=maybe", "--vita-fast-shadow-collect=",
+                            "--vita-fast-shadow-collect=on --vita-fast-shadow-collect=on"})
+        checkRejected(run(bad));
+    // --vita-frame-overlap: on by default with the play profile (selected like a typed =on), off
+    // without it (no selector call); on/off keep the implicit profile and are selected after its GX
+    // worker, before the game; on needs the worker; a bad or repeated value fails.
+    assert(run(nullptr) == 7 && state.overlap == 1 &&
+           state.text.at("frame_overlap_requested") == "default on (play profile)");
+    {
+        const auto thread = std::find(state.calls.begin(), state.calls.end(), "gx_thread");
+        const auto overlap = std::find(state.calls.begin(), state.calls.end(), "frame_overlap");
+        const auto game = std::find(state.calls.begin(), state.calls.end(), "game");
+        assert(thread < overlap && overlap < game);
+    }
+    assert(run("--vita-profile=off") == 7 && state.overlap == -1 && state.text.at("frame_overlap_requested") == "default off");
+    assert(run("--vita-gx-thread=on") == 7 && state.overlap == -1 && state.text.at("frame_overlap_requested") == "default off");
+    fixedTicks = -1;
+    assert(run("--vita-frame-overlap=on --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
+    assert(state.overlap == 1 && state.text.at("frame_overlap_requested") == "on" && fixedTicks == 2);
+    assert(state.selections.at("gx_thread") == 1 && state.gpuFeatures == 79u && state.quiet);
+    {
+        const auto thread = std::find(state.calls.begin(), state.calls.end(), "gx_thread");
+        const auto overlap = std::find(state.calls.begin(), state.calls.end(), "frame_overlap");
+        const auto game = std::find(state.calls.begin(), state.calls.end(), "game");
+        assert(thread < overlap && overlap < game);
+    }
+    assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "video.maxFrameRate=30", "--stage", "R_SP01,4,2,0"}));
+    assert(run("--vita-frame-overlap=off") == 7 && state.overlap == 0 && state.text.at("play_profile") == "on");
+    assert(state.text.at("frame_overlap_requested") == "off");
+    assert(run("--vita-gx-thread=on --vita-frame-overlap=on") == 7 && state.overlap == 1);
+    assert(state.text.at("play_profile") == "off (renderer or GPU options given)");
+    assert(run("--vita-profile=off --vita-frame-overlap=off") == 7 && state.overlap == 0);
+    // verify: mode 2, same requirements.
+    assert(run("--vita-frame-overlap=verify") == 7 && state.overlap == 2 && state.text.at("play_profile") == "on");
+    assert(state.text.at("frame_overlap_requested") == "verify");
+    for (const char* bad : {"--vita-profile=off --vita-frame-overlap=on", "--vita-gx-thread=off --vita-frame-overlap=on",
+                            "--vita-frame-overlap=maybe", "--vita-frame-overlap=on --vita-frame-overlap=on",
+                            "--vita-profile=off --vita-frame-overlap=verify", "--vita-frame-overlap=verify --vita-frame-overlap=verify",
+                            "--vita-frame-overlap=on --vita-frame-overlap=verify", "--vita-frame-overlap=verify --vita-frame-overlap=on"})
         checkRejected(run(bad));
     // Never implicit for a sequence run: vitaGL reference lines stay vitaGL.
     writeFile("ux0:data/twilight-vita/sequence.txt", "o1: --stage F_SP103,1,3,-1\n");
@@ -262,6 +336,13 @@ int main() {
 #endif
     assert(run(nullptr) == 7); checkClocks(true, false); assert(state.gameArgs.size() == 5);
     assert(state.exitAfter == 0 && !state.events.count("sequence_index") && !state.events.count("sequence_complete"));
+    // No play profile in this build: the fast shadow collection is off unless chosen.
+    assert(state.fastShadow == 0 && state.text.at("fast_shadow_collect_default") == "off");
+    assert(run("--vita-fast-shadow-collect=on --vita-clocks=system") == 7); checkClocks(false, true);
+    assert(state.fastShadow == 1 && state.text.at("fast_shadow_collect_requested") == "on" && state.gameArgs.size() == 5);
+    for (const char* bad : {"--vita-fast-shadow-collect=ON", "--vita-fast-shadow-collect=onx",
+                            "--vita-fast-shadow-collect=off --vita-fast-shadow-collect=verify"})
+        checkRejected(run(bad));
     assert(run("--vita-clocks=system") == 7); checkClocks(false, true);
     assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
     assert(run("--stage R_SP01,4,2,0 --vita-clocks=legacy444 --spawn 1") == 7);

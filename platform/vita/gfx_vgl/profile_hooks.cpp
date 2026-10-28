@@ -3,6 +3,7 @@
 #include "gx/command_processor.hpp"
 #include "profile_scope.hpp"
 #include "runtime/simulation_probe.hpp"
+#include "runtime/telemetry.hpp"
 #if TWV_VITA_DECODE_PROBE
 #include "decode_probe.hpp"
 #include "gfx/recording.hpp"
@@ -157,6 +158,63 @@ extern "C" void __wrap__Z13fapGm_Executev() {
     ++twv::vita::simulationExecuteCalls;
     twv::vgl::ProfileScope timer(TWV_PROFILE_GAME_EXECUTE);
     __real__Z13fapGm_Executev();
+}
+// Inside the tick (fpcM_Management): actor Execute and Draw handlers, 3D particle calc, real-shadow
+// ground polygon collection (cBgS::ShdwDraw, called only by d_drawlist.cpp realPolygonCheck, inside
+// actor Draw) and the cutscene update (inside the scene's Execute). Pointer arguments as void*:
+// same AAPCS registers and return values as the original declarations.
+extern "C" void __real__Z13fpcEx_HandlerPFiPvS_E(void*);
+extern "C" void __wrap__Z13fpcEx_HandlerPFiPvS_E(void* queueFunc) {
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_EXECUTE);
+    __real__Z13fpcEx_HandlerPFiPvS_E(queueFunc);
+}
+extern "C" int __real__Z13fpcDw_HandlerPFiPFiPvS_EES1_(void*,void*);
+extern "C" int __wrap__Z13fpcDw_HandlerPFiPFiPvS_EES1_(void* iterHandler,void* func) {
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_DRAW);
+    return __real__Z13fpcDw_HandlerPFiPFiPvS_EES1_(iterHandler,func);
+}
+extern "C" void __real__ZN13dPa_control_c6calc3DEv(void*);
+extern "C" void __wrap__ZN13dPa_control_c6calc3DEv(void* self) {
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_PARTICLE3D);
+    __real__ZN13dPa_control_c6calc3DEv(self);
+}
+extern "C" void __real__ZN4cBgS8ShdwDrawEP13cBgS_ShdwDraw(void*,void*);
+extern "C" void __wrap__ZN4cBgS8ShdwDrawEP13cBgS_ShdwDraw(void* self,void* shdw) {
+    twv_vgl_profile_add(TWV_PROFILE_TICK_SHADOW_CALLS,1000);
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_SHADOW_COLLECT);
+    __real__ZN4cBgS8ShdwDrawEP13cBgS_ShdwDraw(self,shdw);
+}
+extern "C" int __real__ZN7dDemo_c6updateEv();
+extern "C" int __wrap__ZN7dDemo_c6updateEv() {
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_DEMO);
+    return __real__ZN7dDemo_c6updateEv();
+}
+// Collision detail, timed only with full receipts (diagnostic runs): ground and line queries come
+// by the hundred per tick, so free play (quiet receipts) pays one flag test per call instead.
+extern "C" void __real__ZN9dBgS_Acch6CrrPosER4dBgS(void*,void*);
+extern "C" void __wrap__ZN9dBgS_Acch6CrrPosER4dBgS(void* self,void* bgs) {
+    if(twv::vita::telemetryIsQuiet()) {__real__ZN9dBgS_Acch6CrrPosER4dBgS(self,bgs);return;}
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_ACCH);
+    __real__ZN9dBgS_Acch6CrrPosER4dBgS(self,bgs);
+}
+extern "C" float __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(void*,void*);
+extern "C" float __wrap__ZN4cBgS11GroundCrossEP11cBgS_GndChk(void* self,void* chk) {
+    if(twv::vita::telemetryIsQuiet())return __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(self,chk);
+    twv_vgl_profile_add(TWV_PROFILE_TICK_BG_QUERIES,1);
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_GROUND);
+    return __real__ZN4cBgS11GroundCrossEP11cBgS_GndChk(self,chk);
+}
+extern "C" bool __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(void*,void*);
+extern "C" bool __wrap__ZN4cBgS9LineCrossEP11cBgS_LinChk(void* self,void* chk) {
+    if(twv::vita::telemetryIsQuiet())return __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(self,chk);
+    twv_vgl_profile_add(TWV_PROFILE_TICK_BG_QUERIES,1);
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_BG_LINE);
+    return __real__ZN4cBgS9LineCrossEP11cBgS_LinChk(self,chk);
+}
+extern "C" void __real__ZN4dCcS4MoveEv(void*);
+extern "C" void __wrap__ZN4dCcS4MoveEv(void* self) {
+    twv::vgl::ProfileScope timer(TWV_PROFILE_TICK_CC_MOVE);
+    __real__ZN4dCcS4MoveEv(self);
 }
 extern "C" void __real__Z14mDoAud_Executev();
 extern "C" void __wrap__Z14mDoAud_Executev() {

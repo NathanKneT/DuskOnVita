@@ -25,6 +25,12 @@
 //                                           programs and bytes are unchanged (G3 first step)
 //   --vita-gxm-pipeline-memo=on|off         remember the last pipeline looked up and checked, with
 //                                           copies that stay in cache (needs --vita-pipeline-fast)
+// G3 (GXM only, default off; an addition like the above):
+//   --vita-gxm-uniform-split=on|off|verify  lights, light masks and colour-channel registers in vertex
+//                                           uniform buffer 1, uploaded only when they change; verify
+//                                           also rebuilds every reused buffer and compares the bytes
+//   --vita-gxm-fragment-split=on|off|verify the same for the fragment stage: TEV registers, konst
+//                                           colours and fog in fragment uniform buffer 1
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -40,14 +46,20 @@ struct GpuOptions {
     int captureMatch=0;
     bool primitivesSelected=false,compactSelected=false,residentSelected=false,timingSelected=false;
     bool splitSelected=false,scaleSelected=false,uniformReuseSelected=false,pipelineMemoSelected=false;
+    bool uniformSplitSelected=false,fragmentSplitSelected=false;
     uint32_t features=0; // TwvGpuFeature* bits (gfx_vgl/gpu_api.h)
     uint32_t splitScenes=0; // --vita-gxm-gpu-split
     static constexpr uint32_t FeaturePrimitives=1u,FeatureCompact=2u,FeatureCompactColors=4u,FeatureResident=8u,
         FeatureTiming=16u,FeatureSplit=32u,FeatureScale75=64u,FeatureScale67=128u,FeatureScale50=256u, // diagnostics
-        FeatureUniformReuse=512u,FeaturePipelineMemo=1024u;
+        FeatureUniformReuse=512u,FeaturePipelineMemo=1024u,FeatureUniformSplit=2048u,FeatureUniformSplitVerify=4096u,
+        FeatureFragmentSplit=8192u,FeatureFragmentSplitVerify=16384u;
     // 0 not a GPU option, -1 invalid or repeated, 1 accepted.
     int consume(const char* token) noexcept {
         if(!token)return -1;
+        if(const char* v=value(token,"--vita-gxm-uniform-split"))
+            return split(v,uniformSplitSelected,FeatureUniformSplit,FeatureUniformSplitVerify);
+        if(const char* v=value(token,"--vita-gxm-fragment-split"))
+            return split(v,fragmentSplitSelected,FeatureFragmentSplit,FeatureFragmentSplitVerify);
         if(const char* v=value(token,"--vita-gxm-uniform-reuse"))return toggle(v,uniformReuseSelected,FeatureUniformReuse);
         if(const char* v=value(token,"--vita-gxm-pipeline-memo"))return toggle(v,pipelineMemoSelected,FeaturePipelineMemo);
         if(const char* v=value(token,"--vita-gxm-gpu-timing"))return toggle(v,timingSelected,FeatureTiming);
@@ -114,7 +126,8 @@ struct GpuOptions {
     bool any()const noexcept {
         return backendSelected || digestSelected || captureSelected || matchSelected ||
                primitivesSelected || compactSelected || residentSelected || timingSelected || splitSelected ||
-               scaleSelected || uniformReuseSelected || pipelineMemoSelected;
+               scaleSelected || uniformReuseSelected || pipelineMemoSelected || uniformSplitSelected ||
+               fragmentSplitSelected;
     }
     // A backend or drawing-feature choice (main_vita.cpp's play profile then stays off). The
     // digest, captures and GPU diagnostics do not count.
@@ -122,6 +135,12 @@ struct GpuOptions {
         return backendSelected || primitivesSelected || compactSelected || residentSelected;
     }
 private:
+    // on|off|verify (verify sets both bits).
+    int split(const char* v,bool& selected,uint32_t bit,uint32_t verifyBit) noexcept {
+        if(std::strcmp(v,"verify")!=0)return toggle(v,selected,bit);
+        if(selected)return -1;
+        features|=bit|verifyBit;selected=true;return 1;
+    }
     int toggle(const char* v,bool& selected,uint32_t bit) noexcept {
         if(selected)return -1;
         if(std::strcmp(v,"on")==0)features|=bit;

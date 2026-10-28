@@ -182,15 +182,22 @@ public:
 private:
     struct Sampler {int32_t set=0,min=0,mag=0,s=0,t=0;};
     struct Texture {uint64_t content=0;Sampler sampler{};};
-    // Program sources are hashed without a G2 /*G2{*/.../*}G2*/ section (packed-format scales).
+    // Program sources are hashed without their /*G2{*/.../*}G2*/ (packed-format scales) and
+    // /*G3{*/.../*}G3*/ (uniform buffer bindings) sections: the G1 text of the same program. The
+    // pieces are hashed in a stream, so a text with no section hashes as before.
     static uint64_t hash_text(const char* text) {
         if(!text)return 0;
-        const char* begin=std::strstr(text,"/*G2{*/");
-        const char* end=begin?std::strstr(begin,"/*}G2*/"):nullptr;
-        if(!begin || !end)return XXH3_64bits(text,std::strlen(text));
         XXH3_state_t s;XXH3_64bits_reset(&s);
-        XXH3_64bits_update(&s,text,size_t(begin-text));
-        const char* rest=end+7;
+        const char* rest=text;
+        for(;;) {
+            const char* g2=std::strstr(rest,"/*G2{*/");
+            const char* g3=std::strstr(rest,"/*G3{*/");
+            const char* begin=g2 && (!g3 || g2<g3)?g2:g3;
+            const char* end=begin?std::strstr(begin,begin==g2?"/*}G2*/":"/*}G3*/"):nullptr;
+            if(!begin || !end)break;
+            XXH3_64bits_update(&s,rest,size_t(begin-rest));
+            rest=end+7;
+        }
         XXH3_64bits_update(&s,rest,std::strlen(rest));
         return XXH3_64bits_digest(&s);
     }

@@ -306,6 +306,20 @@ bool ready=false, in_frame=false, offscreen=false;
 // This capability gates BOTH the actual draw rejection and the CPU shortcut.
 // Implementing FBO drawing must change it here; supported passes cannot be skipped.
 constexpr bool OffscreenDrawSupported=false;
+// EFB copies (resolve_pass_into) are not implemented either. A draw that samples a copy would
+// read storage nothing wrote and paint it over the scene: retail water (fbtex_dummy) shows the
+// copied scene behind it, and here it came out opaque black (F_SP104 opening, village, Faron).
+// Leaving the destination untouched is the closest picture until copies exist; implementing
+// them must change this, so that no supported copy is skipped.
+constexpr bool CopyResolveSupported=false;
+bool samples_unresolved_copy(const Pipeline& p) noexcept {
+ const auto& textures=aurora::gx::g_gxState.textures;
+ for(int i=0;i<8;++i) if(p.info.sampledTextures.test(i)) {
+  const auto* texture=static_cast<const Texture*>(textures[i].ref.get());
+  if(texture && texture->efbCopy) return true;
+ }
+ return false;
+}
 VertexDecoderControl shadowImageSkipControl{bool(TWV_VITA_SHADOW_IMAGE_SKIP)};
 // Counted by the game thread's skip queries, merged at end_frame after the FIFO drain:
 // with the GX worker on, hotCounters belong to the worker.
@@ -319,9 +333,11 @@ void tally_offscreen_discard() noexcept {
  for(auto& t:offscreenDiscards) if(!t.draws || (t.w==off_w && t.h==off_h)) {t.w=off_w;t.h=off_h;++t.draws;return;}
 }
 unsigned light_sample_batches=0;
-aurora::gfx::Viewport viewport{0,0,724,544,0,1};
-aurora::gfx::ClipRect scissor{0,0,724,544};
-constexpr int GameLeft=118, GameWidth=724, GameHeight=544;
+// The game lays itself out for the full 960x544 screen (Dusklight widens its logical 2D space and
+// camera aspect to the window), so it is drawn full width: a 724-wide box squeezed it to 75%.
+aurora::gfx::Viewport viewport{0,0,960,544,0,1};
+aurora::gfx::ClipRect scissor{0,0,960,544};
+constexpr int GameLeft=0, GameWidth=960, GameHeight=544;
 }
 void count(const char* name,uint32_t amount) noexcept {
  const auto it=counters.find(name);
@@ -512,7 +528,8 @@ Range push_indices(const uint8_t* data,size_t size,size_t alignment) {
 }
 Range push_uniform(const uint8_t*,size_t size) { return {.size=uint32_t(size)}; }
 Vec2<uint32_t> get_render_target_size() noexcept {
- return twv::vgl::offscreen ? Vec2<uint32_t>{twv::vgl::off_w,twv::vgl::off_h} : Vec2<uint32_t>{724,544};
+ return twv::vgl::offscreen ? Vec2<uint32_t>{twv::vgl::off_w,twv::vgl::off_h} :
+                               Vec2<uint32_t>{twv::vgl::GameWidth,twv::vgl::GameHeight};
 }
 void set_viewport(const Viewport& vp) noexcept { twv::vgl::viewport=vp; }
 void set_scissor(const ClipRect& r) noexcept { twv::vgl::scissor=r; }
@@ -562,6 +579,7 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  auto& p=pipelines[data.pipeline]; const auto& c=p.config;
  if(c.cullMode==GX_CULL_ALL) return;
  if(c.shaderConfig.lineMode) {count("unsupported_line_point_draw");return;}
+ if(!CopyResolveSupported && samples_unresolved_copy(p)) {count("unresolved_copy_draw");return;}
  if(c.shaderConfig.numIndStages) count(CounterId::FallbackIndirectDraw);
  if(c.shaderConfig.fogRangeEnabled) count(CounterId::FallbackFogRangeDraw);
  if(c.blendMode==GX_BM_LOGIC && c.blendOp!=GX_LO_COPY) count(CounterId::FallbackLogicBlendDraw);
@@ -599,7 +617,7 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  const auto& vp=viewport; const auto& r=scissor;
  const int x0=std::max({r.x,int(std::floor(vp.left)),0});
  const int y0=std::max({r.y,int(std::floor(vp.top)),0});
- const int x1=std::min({r.x+r.width,int(std::ceil(vp.left+vp.width)),724});
+ const int x1=std::min({r.x+r.width,int(std::ceil(vp.left+vp.width)),GameWidth});
  const int y1=std::min({r.y+r.height,int(std::ceil(vp.top+vp.height)),544});
  if(x1<=x0||y1<=y0)return;
  const bool trace=!p.drawn;

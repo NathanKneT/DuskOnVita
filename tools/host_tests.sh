@@ -60,7 +60,7 @@ for mode,reason in [('--coordinates-only','sample.divide==referenceDivide'),
     assert 'AddressSanitizer:' not in result.stderr and 'runtime error:' not in result.stderr,result.stderr
     print('Expected V59 shader assertion:',mode)
 PY
-for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy; do
+for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy fast_shadow_collect; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$repo/platform/vita" "$repo/tests/${test}_test.cpp" -o "$out/${test}_test"
   "$out/${test}_test"
@@ -315,6 +315,39 @@ for thread in 0 1; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
     -DTWV_TEST_THREAD=$thread -I "$out" "$repo/tests/fifo_inline_test.cpp" -o "$out/fifo_test_$thread"
   "$out/fifo_test_$thread"
+done
+# --vita-frame-overlap (0009's FIFO and frontend files on top of 0001/0007; its command processor
+# hooks need the earlier processor patches, which the build applies): the same process_to, and the
+# new FIFO functions, extracted from the patched file, with the state machine.
+mkdir -p "$out/aurora/lib/dolphin/gx"
+cp "$repo/external/dusklight/extern/aurora/lib/dolphin/gx/GXManage.cpp" "$out/aurora/lib/dolphin/gx/"
+cp "$repo/external/dusklight/extern/aurora/lib/dolphin/gx/GXAurora.cpp" "$out/aurora/lib/dolphin/gx/"
+python3 - "$repo/patches/aurora/0009-vita-frame-overlap.patch" "$out/frame_overlap_fifo.patch" <<'PY'
+import re, sys
+from pathlib import Path
+parts = re.split(r'(?m)^(?=--- a/)', Path(sys.argv[1]).read_text())
+keep = [p for p in parts if p.startswith('--- a/') and not p.startswith('--- a/lib/gx/command_processor.cpp')]
+assert len(keep) == 4, [p.splitlines()[0] for p in keep]
+Path(sys.argv[2]).write_text(''.join(keep))
+PY
+patch -s -p1 -d "$out/aurora" < "$out/frame_overlap_fifo.patch"
+python3 - "$out/aurora/lib/gx/fifo.cpp" "$out/fifo_process_function.inc" "$out/frame_overlap_fifo_functions.inc" <<'PY'
+from pathlib import Path
+import sys
+source=Path(sys.argv[1]).read_text()
+start=source.index('void process_to(uint64_t target, std::memory_order order) noexcept {')
+end=source.index('\n}\n',start)+3
+assert Path(sys.argv[2]).read_text()==source[start:end], 'patch 0009 changed process_to'
+start=source.index('uint64_t publish_frame() noexcept {')
+end=source.index('uint64_t wait_us() noexcept { return sWaitUs; }\n',start)
+end=source.index('\n',end)+1
+Path(sys.argv[3]).write_text(source[start:end])
+PY
+for thread in 0 1; do
+  ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DTWV_TEST_THREAD=$thread -I "$out" -I "$repo/platform/vita" "$repo/tests/frame_overlap_test.cpp" \
+    -o "$out/frame_overlap_test_$thread"
+  "$out/frame_overlap_test_$thread"
 done
 # Exercise the production uniform upload/release functions with a GL recorder.
 # Both enabled and rollback builds must produce the same live object contents.
@@ -588,6 +621,16 @@ mkdir -p "$out/clock/src/dusk" "$out/clock/src/m_Do"
 cp "$repo/external/dusklight/src/dusk/game_clock.cpp" "$repo/external/dusklight/src/dusk/game_clock.h" "$out/clock/src/dusk/"
 cp "$repo/external/dusklight/src/m_Do/m_Do_main.cpp" "$out/clock/src/m_Do/"
 patch -s -p1 -d "$out/clock" < "$repo/patches/dusklight/0015-vita-fixed-game-ticks.patch"
+# 0019's game clock part (its m_Do_main.cpp part needs the earlier main-loop patches).
+python3 - "$repo/patches/dusklight/0019-vita-frame-overlap-settle.patch" "$out/clock_0019.patch" <<'PY'
+import re, sys
+from pathlib import Path
+parts = re.split(r'(?m)^(?=--- a/)', Path(sys.argv[1]).read_text())
+keep = [p for p in parts if p.startswith('--- a/src/dusk/game_clock.cpp')]
+assert len(keep) == 1
+Path(sys.argv[2]).write_text(keep[0])
+PY
+patch -s -p1 -d "$out/clock" < "$out/clock_0019.patch"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -DTARGET_VITA=1 \
   -I "$out/clock/src" -I "$repo/external/dusklight/extern/aurora/include" \
   -I "$repo/external/dusklight/extern/aurora/lib" -I "$repo/tests/fake_sdl" \

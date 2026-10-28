@@ -281,7 +281,12 @@ if(TWV_VITA_GFX_VGL)
     target_link_options(twv_aurora INTERFACE
         -Wl,--wrap=_ZN6aurora2gx4fifo7processEPKhj
         -Wl,--wrap=_Z13fapGm_Executev -Wl,--wrap=_Z14mDoAud_Executev
-        -Wl,--wrap=_Z15cAPIGph_Painterv -Wl,--wrap=VIWaitForRetrace)
+        -Wl,--wrap=_Z15cAPIGph_Painterv -Wl,--wrap=VIWaitForRetrace
+        -Wl,--wrap=_Z13fpcEx_HandlerPFiPvS_E -Wl,--wrap=_Z13fpcDw_HandlerPFiPFiPvS_EES1_
+        -Wl,--wrap=_ZN13dPa_control_c6calc3DEv -Wl,--wrap=_ZN4cBgS8ShdwDrawEP13cBgS_ShdwDraw
+        -Wl,--wrap=_ZN7dDemo_c6updateEv -Wl,--wrap=_ZN9dBgS_Acch6CrrPosER4dBgS
+        -Wl,--wrap=_ZN4cBgS11GroundCrossEP11cBgS_GndChk -Wl,--wrap=_ZN4cBgS9LineCrossEP11cBgS_LinChk
+        -Wl,--wrap=_ZN4dCcS4MoveEv)
 endif()
 
 # --- Enum-ABI audit of the prebuilt SDK headers used from int-enum code ---

@@ -59,9 +59,9 @@ void project_snapshot(const char* name,const cXyz& point,const view_class& view,
         // These are not measured GPU positions or feedback from the GL viewport.
         const bool mapped=fbWidth && fbHeight;
         std::snprintf(text,sizeof text,
-            "point=%s logical=%.9g,%.9g derived_fit_valid=%u derived_fit724x544_left118=%.9g,%.9g",
+            "point=%s logical=%.9g,%.9g derived_fit_valid=%u derived_fit960x544=%.9g,%.9g",
             name,x,y,
-            unsigned(mapped),mapped?118+724*x/fbWidth:0,mapped?544*y/fbHeight:0);
+            unsigned(mapped),mapped?960*x/fbWidth:0,mapped?544*y/fbHeight:0);
         twv::vita::telemetryText("target_probe_point_screen",text);
     }
     // Original game helper, separately labelled: includes mirror/subviewport policy.

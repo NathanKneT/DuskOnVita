@@ -117,7 +117,13 @@ std::string vertex_shader(const Pipeline& p,unsigned lightCount) {
 std::string fragment_shader(const Pipeline& p) {
     const auto& cfg=p.config.shaderConfig;
     std::string code="float overflow1(float v){float b=v*255.0;return (b-floor(b/256.0)*256.0)/255.0;}\nfloat3 overflow3(float3 v){float3 b=v*255.0;return (b-floor(b/256.0)*256.0)/255.0;}\n";
-    code+="struct In {"+io_fields(p,false)+"};\nfloat4 main(In i, float4 pixel : WPOS, uniform float4 regs[4], uniform float4 konst[4], uniform float4 fog[2]";
+    // G3 step 2 (--vita-gxm-fragment-split, GXM only): the TEV registers and konst colours in fragment
+    // uniform buffer 1, which the backend uploads only when they change. Fog stays in the default
+    // buffer: bound to buffer 1 it changed a few pixels of the Faron fight in Vita3K. The binding
+    // sits between /*G3{*/ and /*}G3*/: the draw digest hashes the source without it.
+    const std::string b1=(twv_gpu_features()&TwvGpuFeatureFragmentSplit) ? "/*G3{*/ : BUFFER[1]/*}G3*/" : "";
+    code+="struct In {"+io_fields(p,false)+"};\nfloat4 main(In i, float4 pixel : WPOS, uniform float4 regs[4]"+b1+
+          ", uniform float4 konst[4]"+b1+", uniform float4 fog[2]";
     for(int n=0;n<8;++n) if(p.info.sampledTextures.test(n)) code+=fmt::format(",uniform sampler2D tex{} : TEXUNIT{}",n,n);
     code+=") : COLOR { float4 r0=regs[0],r1=regs[1],r2=regs[2],r3=regs[3];\n";
     for(unsigned n=0;n<cfg.tevStageCount;++n) {

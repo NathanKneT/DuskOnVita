@@ -327,7 +327,7 @@ Stage* acquire_stage(uint32_t stage,const char* source) {
 // --- programs ---
 constexpr const char* AttributeNames[TwvVertexAttributeCount]={"position","color0","color1","tc0","tc1","tc2","tc3",
     "tc4","tc5","tc6","tc7","normal","pn_index"};
-struct UniformRef {const SceGxmProgramParameter* param=nullptr;bool fragment=false;};
+struct UniformRef {const SceGxmProgramParameter* param=nullptr;bool fragment=false;bool buffer1=false;};
 struct Attribute {int attr=-1;uint16_t regIndex=0;uint8_t components=4;};
 struct VertexVariant {
     TwvVitaVertexLayout layout;
@@ -347,6 +347,16 @@ struct Program {
     std::vector<VertexVariant> vertexVariants;
     std::vector<FragmentVariant> fragmentVariants;
     int discard=-1;uint32_t fragmentBytes=0; // GPU split receipts: alpha test, GXP size (on first use)
+    // G3 uniform split: vertex uniform buffer 1 (empty when the program has none), the lighting
+    // values its bytes were built from, and this frame's copy of it in the ring.
+    std::vector<uint8_t> buffer1;
+    std::vector<float> buffer1Source;uint32_t buffer1Lights=UINT32_MAX;
+    const void* buffer1Copy=nullptr;uint64_t buffer1Frame=0;
+    // G3 step 2 (--vita-gxm-fragment-split): the same for fragment uniform buffer 1 (TEV registers,
+    // konst colours, fog).
+    std::vector<uint8_t> fragmentBuffer1;
+    std::vector<float> fragmentBuffer1Source;
+    const void* fragmentBuffer1Copy=nullptr;uint64_t fragmentBuffer1Frame=0;
 };
 std::vector<Program> programs(1);
 std::vector<uint32_t> freeProgramIds;
@@ -356,10 +366,27 @@ RetireList<PatchedRelease> retiredPrograms;
 
 UniformRef find_uniform(const Program& p,const char* name) {
     if(const auto* param=sceGxmProgramFindParameterByName(p.vs->program(),name))
-        if(sceGxmProgramParameterGetCategory(param)==SCE_GXM_PARAMETER_CATEGORY_UNIFORM)return {param,false};
+        if(sceGxmProgramParameterGetCategory(param)==SCE_GXM_PARAMETER_CATEGORY_UNIFORM)
+            return {param,false,sceGxmProgramParameterGetContainerIndex(param)==1};
     if(const auto* param=sceGxmProgramFindParameterByName(p.fs->program(),name))
-        if(sceGxmProgramParameterGetCategory(param)==SCE_GXM_PARAMETER_CATEGORY_UNIFORM)return {param,true};
+        if(sceGxmProgramParameterGetCategory(param)==SCE_GXM_PARAMETER_CATEGORY_UNIFORM)
+            return {param,true,sceGxmProgramParameterGetContainerIndex(param)==1};
     return {};
+}
+// G3 step 2: bytes of a program's uniform buffer 1 (its last uniform's end, in 32-bit words, at
+// least 1 KiB), 0 when it has none.
+size_t uniform_buffer1_bytes(const SceGxmProgram* program) {
+    size_t words=0;bool found=false;
+    const unsigned count=sceGxmProgramGetParameterCount(program);
+    for(unsigned i=0;i<count;++i) {
+        const auto* param=sceGxmProgramGetParameter(program,i);
+        if(sceGxmProgramParameterGetCategory(param)!=SCE_GXM_PARAMETER_CATEGORY_UNIFORM ||
+           sceGxmProgramParameterGetContainerIndex(param)!=1)continue;
+        found=true;
+        words=std::max<size_t>(words,sceGxmProgramParameterGetResourceIndex(param)+
+            size_t(sceGxmProgramParameterGetArraySize(param))*sceGxmProgramParameterGetComponentCount(param));
+    }
+    return found?std::max<size_t>(1024,(words*4+15)&~size_t(15)):0;
 }
 bool describe_program(Program& p) {
     const char* names[]={"proj_rows","regs","konst","fog"};
@@ -390,6 +417,30 @@ bool describe_program(Program& p) {
     if(p.attributes.size()>15){twv::vita::telemetryText("gxm_program_failure","too many attributes");return false;}
     p.vertexDefaults.assign(sceGxmProgramGetDefaultUniformBufferSize(vs),0);
     p.fragmentDefaults.assign(sceGxmProgramGetDefaultUniformBufferSize(p.fs->program()),0);
+    // G3: vertex uniform buffer 1 holds the uniforms whose container is 1, each at its resource index
+    // (32-bit words). Its size covers the last one, with at least 1 KiB.
+    size_t buffer1Words=0;
+    bool buffer1=false;
+    for(unsigned i=0;i<count;++i) {
+        const auto* param=sceGxmProgramGetParameter(vs,i);
+        if(sceGxmProgramParameterGetCategory(param)!=SCE_GXM_PARAMETER_CATEGORY_UNIFORM ||
+           sceGxmProgramParameterGetContainerIndex(param)!=1)continue;
+        buffer1=true;
+        buffer1Words=std::max<size_t>(buffer1Words,sceGxmProgramParameterGetResourceIndex(param)+
+            size_t(sceGxmProgramParameterGetArraySize(param))*sceGxmProgramParameterGetComponentCount(param));
+    }
+    if(buffer1) {
+        if(!(twv_gpu_features()&TwvGpuFeatureUniformSplit) || buffer1Words*4>4096) {
+            twv::vita::telemetryText("gxm_program_failure","uniform buffer 1 unexpected or too large");return false;
+        }
+        p.buffer1.assign(std::max<size_t>(1024,(buffer1Words*4+15)&~size_t(15)),0);
+    }
+    if(const size_t bytes=uniform_buffer1_bytes(p.fs->program())) {
+        if(!(twv_gpu_features()&TwvGpuFeatureFragmentSplit) || bytes>4096) {
+            twv::vita::telemetryText("gxm_program_failure","fragment uniform buffer 1 unexpected or too large");return false;
+        }
+        p.fragmentBuffer1.assign(bytes,0);
+    }
     return true;
 }
 SceGxmAttributeFormat attribute_format(uint8_t format) {
@@ -571,13 +622,29 @@ const SceGxmVertexProgram* reservedVertexProgram=nullptr;
 const SceGxmFragmentProgram* reservedFragmentProgram=nullptr;
 std::vector<uint8_t> reservedVertexBytes,reservedFragmentBytes;
 uint64_t uniformVertexReuses=0,uniformFragmentReuses=0,uniformVertexUploads=0,uniformFragmentUploads=0;
-void uniform_reservations_end() {reservedVertexProgram=nullptr;reservedFragmentProgram=nullptr;}
+// G3 (--vita-gxm-uniform-split): the lighting uniforms sit in vertex uniform buffer 1 (the shader
+// generator binds them there). Each program keeps that buffer's bytes and the draw-state values they
+// were built from; a draw with the same values reuses this frame's copy instead of rewriting and
+// copying it. Like the reservations, the binding is set again after a program change, a BeginScene
+// or a clear.
+bool uniformSplit=false,uniformSplitVerify=false;
+const void* boundBuffer1=nullptr;
+uint64_t splitUploads=0,splitReuses=0,splitBinds=0,splitRebuilds=0,splitChecks=0,splitMismatches=0;
+std::vector<uint8_t> splitScratch; // verify: the reused buffer rebuilt from the draw's own values
+// G3 step 2 (--vita-gxm-fragment-split): the same for fragment uniform buffer 1.
+bool fragmentSplit=false,fragmentSplitVerify=false;
+const void* boundFragmentBuffer1=nullptr;
+uint64_t fsplitUploads=0,fsplitReuses=0,fsplitBinds=0,fsplitRebuilds=0,fsplitChecks=0,fsplitMismatches=0;
+void uniform_reservations_end() {
+    reservedVertexProgram=nullptr;reservedFragmentProgram=nullptr;boundBuffer1=nullptr;boundFragmentBuffer1=nullptr;
+}
 void set_programs(const SceGxmVertexProgram* vertex,const SceGxmFragmentProgram* fragment) {
     if(!shadow.valid || vertex!=shadow.vertex) {
-        sceGxmSetVertexProgram(ctx,vertex);shadow.vertex=vertex;reservedVertexProgram=nullptr;
+        sceGxmSetVertexProgram(ctx,vertex);shadow.vertex=vertex;reservedVertexProgram=nullptr;boundBuffer1=nullptr;
     }
     if(!shadow.valid || fragment!=shadow.fragment) {
         sceGxmSetFragmentProgram(ctx,fragment);shadow.fragment=fragment;reservedFragmentProgram=nullptr;
+        boundFragmentBuffer1=nullptr;
     }
 }
 void finish_state() {shadow.valid=true;}
@@ -789,6 +856,12 @@ int gxm_init() {
     }
     uniformReuse=(twv_gpu_features()&TwvGpuFeatureUniformReuse)!=0;
     if(uniformReuse)twv::vita::telemetryEvent("gxm_uniform_reuse",1);
+    uniformSplit=(twv_gpu_features()&TwvGpuFeatureUniformSplit)!=0;
+    uniformSplitVerify=uniformSplit && (twv_gpu_features()&TwvGpuFeatureUniformSplitVerify)!=0;
+    if(uniformSplit)twv::vita::telemetryEvent("gxm_uniform_split",uniformSplitVerify?2:1);
+    fragmentSplit=(twv_gpu_features()&TwvGpuFeatureFragmentSplit)!=0;
+    fragmentSplitVerify=fragmentSplit && (twv_gpu_features()&TwvGpuFeatureFragmentSplitVerify)!=0;
+    if(fragmentSplit)twv::vita::telemetryEvent("gxm_fragment_split",fragmentSplitVerify?2:1);
     if(timingOn && (twv_gpu_features()&TwvGpuFeatureSplit)) {
         splitScenes=std::min<uint32_t>(twv_gpu_split_scenes(),MaxTimedScenes);
         for(unsigned i=0;i<FrameRing::Slots*MaxTimedScenes;++i)notifications[SceneNotificationBase+i]=0;
@@ -990,6 +1063,26 @@ void gxm_report() {
     twv::vita::telemetryEvent("gxm_uniform_vertex_reuses",uniformVertexReuses);
     twv::vita::telemetryEvent("gxm_uniform_fragment_uploads",uniformFragmentUploads);
     twv::vita::telemetryEvent("gxm_uniform_fragment_reuses",uniformFragmentReuses);
+    if(uniformSplit) {
+        twv::vita::telemetryEvent("gxm_uniform_split_rebuilds",splitRebuilds); // lighting values changed
+        twv::vita::telemetryEvent("gxm_uniform_split_uploads",splitUploads);   // buffer 1 copied to the ring
+        twv::vita::telemetryEvent("gxm_uniform_split_reuses",splitReuses);     // this frame's copy reused
+        twv::vita::telemetryEvent("gxm_uniform_split_binds",splitBinds);
+        if(uniformSplitVerify) {
+            twv::vita::telemetryEvent("gxm_uniform_split_checks",splitChecks);
+            twv::vita::telemetryEvent("gxm_uniform_split_mismatches",splitMismatches);
+        }
+    }
+    if(fragmentSplit) {
+        twv::vita::telemetryEvent("gxm_fragment_split_rebuilds",fsplitRebuilds);
+        twv::vita::telemetryEvent("gxm_fragment_split_uploads",fsplitUploads);
+        twv::vita::telemetryEvent("gxm_fragment_split_reuses",fsplitReuses);
+        twv::vita::telemetryEvent("gxm_fragment_split_binds",fsplitBinds);
+        if(fragmentSplitVerify) {
+            twv::vita::telemetryEvent("gxm_fragment_split_checks",fsplitChecks);
+            twv::vita::telemetryEvent("gxm_fragment_split_mismatches",fsplitMismatches);
+        }
+    }
     twv::vita::telemetryEvent("gxm_resident_used",residentAllocator.used());
     twv::vita::telemetryEvent("gxm_resident_peak",residentAllocator.peak());
     twv::vita::telemetryEvent("gxm_resident_allocs",residentAllocs);
@@ -1042,8 +1135,90 @@ void gxm_program_delete(uint32_t id) {
 }
 void uniform4(Program& p,const UniformRef& u,int count,const float* values) {
     if(!u.param || count<=0)return;
-    auto& buffer=u.fragment?p.fragmentDefaults:p.vertexDefaults;
+    auto& buffer=u.fragment?(u.buffer1?p.fragmentBuffer1:p.fragmentDefaults):u.buffer1?p.buffer1:p.vertexDefaults;
     if(!buffer.empty())sceGxmSetUniformDataF(buffer.data(),u.param,0,unsigned(count)*4,values);
+}
+// G3: the lighting values a buffer-1 program reads, contiguous in the draw state (light_pos .. light_masks).
+constexpr size_t LightBlockFloats=5*8*4+4*4+4*4+8*4;
+static_assert(offsetof(TwvVitaDrawState,light_masks)+sizeof(TwvVitaDrawState::light_masks)-
+              offsetof(TwvVitaDrawState,light_pos)==LightBlockFloats*sizeof(float));
+// Builds (when the values changed) and copies (once per frame) the program's buffer 1, and binds it.
+// False when the ring is full: the draw is skipped, as for a failed default-uniform reservation.
+bool buffer1_bind(Program& p,const TwvVitaDrawState& s,const UniformRef* refs,const int* counts,
+                  const float* const* values) {
+    bool changed=p.buffer1Source.size()!=LightBlockFloats || p.buffer1Lights!=s.light_count ||
+        std::memcmp(p.buffer1Source.data(),s.light_pos,LightBlockFloats*sizeof(float))!=0;
+    if(!changed && uniformSplitVerify) {
+        // The kept bytes must equal a fresh build from this draw's values; a mismatch is counted and
+        // the buffer rebuilt.
+        splitScratch=p.buffer1;
+        for(int i=2;i<10;++i)if(refs[i].buffer1 && refs[i].param && counts[i]>0)
+            sceGxmSetUniformDataF(splitScratch.data(),refs[i].param,0,unsigned(counts[i])*4,values[i]);
+        ++splitChecks;
+        if(splitScratch!=p.buffer1){++splitMismatches;changed=true;}
+    }
+    if(changed) {
+        for(int i=2;i<10;++i)if(refs[i].buffer1)uniform4(p,refs[i],counts[i],values[i]);
+        p.buffer1Source.assign(s.light_pos,s.light_pos+LightBlockFloats);
+        p.buffer1Lights=s.light_count;++splitRebuilds;
+    }
+    if(changed || !p.buffer1Copy || p.buffer1Frame!=frameSerial) {
+        void* copy=ring_alloc(p.buffer1.size());
+        if(!copy){++uniformReserveFailures;uniform_reservations_end();return false;}
+        std::memcpy(copy,p.buffer1.data(),p.buffer1.size());
+        p.buffer1Copy=copy;p.buffer1Frame=frameSerial;++splitUploads;
+    } else {
+        ++splitReuses;
+    }
+    if(boundBuffer1!=p.buffer1Copy) {
+        if(!ok(sceGxmSetVertexUniformBuffer(ctx,1,p.buffer1Copy),"SetVertexUniformBuffer 1")) {
+            ++uniformReserveFailures;uniform_reservations_end();return false;
+        }
+        boundBuffer1=p.buffer1Copy;++splitBinds;
+    }
+    return true;
+}
+// G3 step 2: the fragment values a fragment buffer-1 program reads, contiguous in the draw state
+// (color_regs, kcolors), and the uniforms they feed (p.uniforms[1..2]: regs, konst). Fog stays in
+// the default buffer (the shader generator binds only these two).
+constexpr size_t FragmentBlockFloats=16+16;
+static_assert(offsetof(TwvVitaDrawState,kcolors)+sizeof(TwvVitaDrawState::kcolors)-
+              offsetof(TwvVitaDrawState,color_regs)==FragmentBlockFloats*sizeof(float));
+void fragment_buffer1_write(Program& p,const TwvVitaDrawState& s,std::vector<uint8_t>& out) {
+    const float* values[]={s.color_regs,s.kcolors};
+    for(int i=0;i<2;++i)if(p.uniforms[i+1].buffer1 && p.uniforms[i+1].fragment && p.uniforms[i+1].param)
+        sceGxmSetUniformDataF(out.data(),p.uniforms[i+1].param,0,16,values[i]);
+}
+// As buffer1_bind, for the fragment stage.
+bool fragment_buffer1_bind(Program& p,const TwvVitaDrawState& s) {
+    bool changed=p.fragmentBuffer1Source.size()!=FragmentBlockFloats ||
+        std::memcmp(p.fragmentBuffer1Source.data(),s.color_regs,FragmentBlockFloats*sizeof(float))!=0;
+    if(!changed && fragmentSplitVerify) {
+        splitScratch=p.fragmentBuffer1;
+        fragment_buffer1_write(p,s,splitScratch);
+        ++fsplitChecks;
+        if(splitScratch!=p.fragmentBuffer1){++fsplitMismatches;changed=true;}
+    }
+    if(changed) {
+        fragment_buffer1_write(p,s,p.fragmentBuffer1);
+        p.fragmentBuffer1Source.assign(s.color_regs,s.color_regs+FragmentBlockFloats);
+        ++fsplitRebuilds;
+    }
+    if(changed || !p.fragmentBuffer1Copy || p.fragmentBuffer1Frame!=frameSerial) {
+        void* copy=ring_alloc(p.fragmentBuffer1.size());
+        if(!copy){++uniformReserveFailures;uniform_reservations_end();return false;}
+        std::memcpy(copy,p.fragmentBuffer1.data(),p.fragmentBuffer1.size());
+        p.fragmentBuffer1Copy=copy;p.fragmentBuffer1Frame=frameSerial;++fsplitUploads;
+    } else {
+        ++fsplitReuses;
+    }
+    if(boundFragmentBuffer1!=p.fragmentBuffer1Copy) {
+        if(!ok(sceGxmSetFragmentUniformBuffer(ctx,1,p.fragmentBuffer1Copy),"SetFragmentUniformBuffer 1")) {
+            ++uniformReserveFailures;uniform_reservations_end();return false;
+        }
+        boundFragmentBuffer1=p.fragmentBuffer1Copy;++fsplitBinds;
+    }
+    return true;
 }
 // GPU split: end the current scene with its own notification and begin the next one on the
 // same surfaces, depth reloaded. Draw state is set again after every BeginScene.
@@ -1105,16 +1280,18 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     finish_state();
     // Uniform values persist per program, as GL uniforms do; each draw writes its fields.
     uniform4(p,p.uniforms[0],4,s->projection);
-    uniform4(p,p.uniforms[1],4,s->color_regs);
-    uniform4(p,p.uniforms[2],4,s->kcolors);
-    uniform4(p,p.uniforms[3],2,s->fog);
+    if(!p.uniforms[1].buffer1)uniform4(p,p.uniforms[1],4,s->color_regs);
+    if(!p.uniforms[2].buffer1)uniform4(p,p.uniforms[2],4,s->kcolors);
+    if(!p.uniforms[3].buffer1)uniform4(p,p.uniforms[3],2,s->fog);
+    if(!p.fragmentBuffer1.empty() && !fragment_buffer1_bind(p,*s))return;
     if(s->gpu_vertex) {
         const float* values[]={s->pn_pos,s->pn_nrm,s->light_pos,s->light_dir,s->light_color,
             s->light_cos,s->light_dist,s->channel_mat,s->channel_amb,s->light_masks};
         const int n=int(s->light_count);
         const int counts[]={int(s->pn_vectors),int(s->pn_vectors),n,n,n,n,n,4,4,8};
-        for(int i=0;i<10;++i)uniform4(p,p.vertexUniforms[i],counts[i],values[i]);
+        for(int i=0;i<10;++i)if(!p.vertexUniforms[i].buffer1)uniform4(p,p.vertexUniforms[i],counts[i],values[i]);
         if(s->texgen_vectors)uniform4(p,p.vertexUniforms[10],int(s->texgen_vectors),s->texgen_rows);
+        if(!p.buffer1.empty() && !buffer1_bind(p,*s,p.vertexUniforms.data(),counts,values))return;
     }
     if(!p.vertexDefaults.empty()) {
         if(uniformReuse && reservedVertexProgram==vertex->program && reservedVertexBytes==p.vertexDefaults) {
@@ -1229,6 +1406,7 @@ const TwvGpuBackend gxmBackend{
     gxm_resident_available,gxm_resident_alloc,gxm_resident_release,
     TwvGpuFeaturePrimitives|TwvGpuFeatureCompact|TwvGpuFeatureCompactColors|TwvGpuFeatureResident|
     TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50|
-    TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo}; // the memo is front-end only, offered with GXM
+    TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo|  // the memo is front-end only, offered with GXM
+    TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}

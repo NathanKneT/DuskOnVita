@@ -7,6 +7,7 @@
 #include "runtime/clock_policy.hpp"
 #include "runtime/run_control.hpp"
 #include "runtime/run_sequence.hpp"
+#include "runtime/fast_shadow_collect.hpp"
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/sysmem.h>
@@ -47,6 +48,8 @@ extern "C" int twv_vita_benchmark_enable(const char*);
 extern "C" int twv_vita_input_script_load(const char* path) __attribute__((weak));
 // patches/dusklight/0015: fixed 30 Hz game ticks, at most N per loop (game clock, plain C entry).
 extern "C" void dusk_vita_fixed_ticks(int max_ticks_per_loop) __attribute__((weak));
+// --vita-frame-overlap (aurora/frame_overlap.hpp): needs the GX worker; absent in null-graphics builds.
+extern "C" int twv_vita_frame_overlap_select(int enabled) __attribute__((weak));
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
 // MEM1/ARAM reserves are bounded independently in the Aurora adapter.
@@ -67,6 +70,15 @@ constexpr const char* PlayProfile[] = {
     "--vita-stream-decode=on", "--vita-small-packets=on", "--vita-uncached-staging=on",
     "--vita-static-geometry=on", "--vita-gx-thread=on", "--vita-shadow-image-skip=on", "--vita-pipeline-fast=on",
     "--vita-gpu=gxm", "--vita-gxm-resident=on", "--vita-gxm-compact=colors", "--vita-gxm-primitives=on"};
+// Real-shadow ground polygons (patches/dusklight/0018) with the play profile when the command line
+// does not choose: on, after Vita3K verify runs (title veil shot, Ordon, the opening) found every
+// fast list identical to the original. It takes the veil shot's tick from 7.4 to 2.4 ms in Vita3K.
+constexpr int FastShadowCollectPlay = twv::vita::FastShadowCollectOn;
+// Frame overlap (aurora/frame_overlap.hpp) with the play profile when the command line does not
+// choose: on. Console g6, Ordon at 75 %: 20.5 FPS off, 25.9 FPS on, both at 30 game ticks/s; the
+// main thread's wait for the GX worker went from 16.2 to 6.7 ms per frame. A Vita3K verify run found
+// no vertex array or static display list changed by the overlapped tick (632,213 and 789,040 checks).
+constexpr int FrameOverlapPlay = 1;
 
 // "<prefix><a>" -> choice 0, "<prefix><b>" -> choice 1 (returns 1); another value or a second
 // time -> -1; any other token -> 0.
@@ -340,16 +352,55 @@ int main(int, char**) {
     //   no renderer option, GPU backend or feature and no --vita-ticks (clocks, exit timers, receipts,
     //   input scripts and diagnostics do not count); never for a sequence.txt run. Explicitly with
     //   diagnostics only.
-    // --vita-ticks=fixed|frames: game ticks at a fixed 30 Hz, at most 2 per loop (patches/dusklight/
-    //   0015), or one per presented frame as before. Default fixed with the play profile.
+    // --vita-ticks=fixed|frames|single: game ticks at a fixed 30 Hz, at most 2 per loop (patches/
+    //   dusklight/0015), or one per presented frame as before. Default fixed with the play profile.
+    //   single: fixed, at most one per loop, so a run slower than 30 FPS (the emulator) runs exactly
+    //   one tick per frame and frames match between runs (A/B captures).
     // --vita-receipts=full|quiet: default quiet with the implicit play profile (free play).
-    int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1;
+    // --vita-frame-overlap=on|off|verify: the next game tick runs while the GX worker finishes the last
+    //   frame (aurora/frame_overlap.hpp). Default on with the play profile (FrameOverlapPlay), off
+    //   otherwise. Needs the GX worker (the play profile has it);
+    //   not a renderer choice, so the implicit play profile stays. verify: frames end as with off, and
+    //   game memory the frame read in place is checked for changes made by the next tick.
+    // --vita-fast-shadow-collect=off|on|verify (runtime/fast_shadow_collect.hpp): not a renderer
+    //   choice, so it leaves the play profile alone. Default: FastShadowCollectPlay with the profile.
+    int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1, overlapChoice = -1, fastShadowChoice = -1;
     bool inputScript = false;
     if (haveArgs) {
         for (char* token = std::strtok(extra, " \t\r\n"); token; token = std::strtok(nullptr, " \t\r\n")) {
+            if (std::strcmp(token, "--vita-frame-overlap=verify") == 0) {
+                if (overlapChoice >= 0) {
+                    twv::vita::telemetryText("args_error", "--vita-frame-overlap needs on, off or verify, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
+                overlapChoice = 2;
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-frame-overlap=", "off", "on", overlapChoice)) {
+                if (choice < 0) {
+                    twv::vita::telemetryText("args_error", "--vita-frame-overlap needs on, off or verify, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
+                continue;
+            }
+            if (const int choice = twv::vita::fastShadowCollectOption(token, fastShadowChoice)) {
+                if (choice < 0) {
+                    twv::vita::telemetryText("args_error", "--vita-fast-shadow-collect needs off, on or verify, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
+                continue;
+            }
+            if (std::strcmp(token, "--vita-ticks=single") == 0) {
+                if (ticksChoice >= 0) {
+                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed, frames or single, once");
+                    twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+                }
+                ticksChoice = 2;
+                continue;
+            }
             if (const int choice = wordOption(token, "--vita-ticks=", "frames", "fixed", ticksChoice)) {
                 if (choice < 0) {
-                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed or frames, once");
+                    twv::vita::telemetryText("args_error", "--vita-ticks needs fixed, frames or single, once");
                     twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
                 }
                 continue;
@@ -425,6 +476,13 @@ int main(int, char**) {
                 twv::vita::telemetryText("args_error", "play profile option rejected");
                 twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
             }
+    // Render size 75 % (720x408, scaled up by the display) unless the command line chose one. Drawn
+    // full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %
+    // (fitted from g4 RUN1/RUN2 on the console). --vita-gxm-scale=100 keeps the full size.
+    if (playProfile && !gpuOptions.scaleSelected && portOption("--vita-gxm-scale=75") != 1) {
+        twv::vita::telemetryText("args_error", "play profile render scale rejected");
+        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+    }
     twv::vita::telemetryText("play_profile", implicitProfile ? "on" : playProfile ? "on (explicit)" :
                              profileChoice == 0 ? "off" : fromSequence ? "off (sequence run)" :
                              explicitRenderer ? "off (renderer or GPU options given)" :
@@ -432,7 +490,8 @@ int main(int, char**) {
     // Fixed 30 Hz game ticks with the play profile: real game speed below 30 FPS. The frame cap is
     // a --cvar before the user's own arguments, so config.json is never rewritten and a later
     // --cvar still wins.
-    const bool fixedTicks = ticksChoice >= 0 ? ticksChoice == 1 : playProfile;
+    const bool fixedTicks = ticksChoice >= 0 ? ticksChoice >= 1 : playProfile;
+    const int maxTicks = ticksChoice == 2 ? 1 : 2;
     if (fixedTicks) {
         static char cvar[] = "--cvar", frameCap[] = "video.maxFrameRate=30";
         if (gameArgc + 2 > 31 || !dusk_vita_fixed_ticks) {
@@ -441,9 +500,27 @@ int main(int, char**) {
         }
         for (int i = gameArgc - 1; i >= 5; --i) gameArgs[i + 2] = gameArgs[i];
         gameArgs[5] = cvar;gameArgs[6] = frameCap;gameArgc += 2;
-        dusk_vita_fixed_ticks(2);
+        dusk_vita_fixed_ticks(maxTicks);
     }
-    twv::vita::telemetryEvent("fixed_game_ticks", fixedTicks ? 2 : 0);
+    twv::vita::telemetryEvent("fixed_game_ticks", fixedTicks ? maxTicks : 0);
+    // Frame overlap: after the GX thread choice (typed or from the profile), before the game starts.
+    // With the play profile and no typed choice: FrameOverlapPlay.
+    const int overlap = overlapChoice >= 0 ? overlapChoice : playProfile ? FrameOverlapPlay : -1;
+    if (overlap >= 0 && (!twv_vita_frame_overlap_select || !twv_vita_frame_overlap_select(overlap))) {
+        twv::vita::telemetryText("args_error", "--vita-frame-overlap=on needs the GX worker (--vita-gx-thread=on, as in the play profile) in a vitaGL/GXM build");
+        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+    }
+    twv::vita::telemetryText("frame_overlap_requested", overlapChoice < 0 ?
+                             (overlap == 1 ? "default on (play profile)" : "default off") :
+                             overlapChoice == 2 ? "verify" : overlapChoice ? "on" : "off");
+    const int fastShadow = fastShadowChoice >= 0 ? fastShadowChoice : playProfile ? FastShadowCollectPlay :
+        int(twv::vita::FastShadowCollectOff);
+    if (!twv_vita_fast_shadow_collect_select(fastShadow)) {
+        twv::vita::telemetryText("args_error", "fast shadow collection mode rejected");
+        twv::vita::telemetryFlush();sceKernelExitProcess(2);return 2;
+    }
+    twv::vita::telemetryText(fastShadowChoice >= 0 ? "fast_shadow_collect_requested" : "fast_shadow_collect_default",
+                             twv::vita::FastShadowCollectNames[fastShadow]);
     // Quiet receipts with the implicit profile (free play); sequence runs, explicit profiles and
     // renderer choices keep every receipt, and --vita-receipts decides either way.
     twv::vita::telemetryQuiet(receiptsChoice >= 0 ? receiptsChoice == 1 : implicitProfile);

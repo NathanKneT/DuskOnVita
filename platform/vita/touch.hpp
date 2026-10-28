@@ -10,8 +10,8 @@ namespace twv::vita::touch {
 // GameLeft/GameWidth/GameHeight (tools/host_tests.sh checks they still match).
 inline constexpr float kScreenWidth = 960.0f;
 inline constexpr float kScreenHeight = 544.0f;
-inline constexpr float kGameLeft = 118.0f;
-inline constexpr float kGameWidth = 724.0f;
+inline constexpr float kGameLeft = 0.0f;
+inline constexpr float kGameWidth = 960.0f;
 inline constexpr float kGameHeight = 544.0f;
 
 enum class Finger { Down, Motion, Up, Canceled }; // SDL_EVENT_FINGER_*

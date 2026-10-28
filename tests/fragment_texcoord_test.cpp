@@ -46,6 +46,7 @@ unsigned unexpectedDiagnostics=0;
 void count(const char*,uint32_t=1){++unexpectedDiagnostics;}
 std::string gpu_vertex_shader(const Pipeline&,unsigned);
 }
+extern "C" uint32_t twv_gpu_features(void) {return 0;} // vitaGL sources: no G3 uniform buffer bindings
 #include "gpu_vertex_shader.cpp.inc"
 #include "shaders.cpp.inc"
 #include "fragment_coordinate_reference.inc"

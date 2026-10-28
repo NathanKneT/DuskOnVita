@@ -154,9 +154,27 @@ int main() {
         assert(native(TwvPrimitiveStrip,5)==listed(strip,5) && native(TwvPrimitiveFan,5)==listed(fan,5));
         assert(native(TwvPrimitiveQuads,8)==listed(quads,8) && native(TwvPrimitiveStrip,5)!=native(TwvPrimitiveFan,5));
         DrawDigest p1,p2;
-        p1.program_created(7,"float4 main(){Out o;int m=0;}","f");
-        p2.program_created(7,"float4 main(){Out o;/*G2{*/position=position*0.00390625;/*}G2*/int m=0;}","f");
+        // Program 5 is the one tri draws with (an unknown program hashes as 0 and would prove nothing).
+        p1.program_created(5,"float4 main(){Out o;int m=0;}","f");
+        p2.program_created(5,"float4 main(){Out o;/*G2{*/position=position*0.00390625;/*}G2*/int m=0;}","f");
         assert(p1.draw(tri,eight.data(),3,nullptr,0)==p2.draw(tri,eight.data(),3,nullptr,0));
+        DrawDigest p3;p3.program_created(5,"float4 main(){Out o;int m=1;}","f");
+        assert(p1.draw(tri,eight.data(),3,nullptr,0)!=p3.draw(tri,eight.data(),3,nullptr,0));
+        // G3: every /*G3{*/.../*}G3*/ section (uniform buffer bindings) is left out too, with a G2 one.
+        DrawDigest g3a,g3b,g3c,g3d;
+        g3a.program_created(5,"main(uniform float4 x[4],uniform float4 y[8]){Out o;int m=0;}","f");
+        g3b.program_created(5,"main(uniform float4 x[4]/*G3{*/ : BUFFER[1]/*}G3*/,uniform float4 y[8]"
+                              "/*G3{*/ : BUFFER[1]/*}G3*/){Out o;int m=0;}","f");
+        g3c.program_created(5,"main(uniform float4 x[4]/*G3{*/ : BUFFER[1]/*}G3*/,uniform float4 y[8]){Out o;"
+                              "/*G2{*/position=position*0.5;/*}G2*/int m=0;}","f");
+        g3d.program_created(5,"main(uniform float4 x[4] : BUFFER[1],uniform float4 y[8]){Out o;int m=0;}","f");
+        const auto da=g3a.draw(tri,eight.data(),3,nullptr,0);
+        assert(da==g3b.draw(tri,eight.data(),3,nullptr,0) && da==g3c.draw(tri,eight.data(),3,nullptr,0));
+        assert(da!=g3d.draw(tri,eight.data(),3,nullptr,0)); // an unmarked change still counts
+        DrawDigest open;open.program_created(5,"main(uniform float4 x[4]/*G3{*/ : BUFFER[1],uniform float4 y[8]){}","f");
+        DrawDigest same;same.program_created(5,"main(uniform float4 x[4]/*G3{*/ : BUFFER[1],uniform float4 y[8]){}","f");
+        const auto dopen=open.draw(tri,eight.data(),3,nullptr,0);
+        assert(dopen==same.draw(tri,eight.data(),3,nullptr,0) && dopen!=da); // an unclosed section is hashed as written
     }
     std::printf("draw_digest_test: handle-free, read-bytes-only, upload/sampler/state/index sensitive, per-frame reset, "
                 "G2 packed/primitive/source canonical forms passed\n");

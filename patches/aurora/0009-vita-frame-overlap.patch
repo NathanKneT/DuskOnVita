@@ -1,0 +1,254 @@
+Vita: --vita-frame-overlap (platform/vita/aurora/frame_overlap.hpp). With the GX worker (0007),
+aurora_end_frame may publish the frame and return without waiting; the worker goes on processing
+it while the game thread runs the next game tick, and the frame is settled (waited for, its bytes
+dropped, presented) at the game's next GXDrawDone (TP's, at the end of the tick's draw phase), or
+at the latest before a second tick or the presentation draw. Commands written in between
+belong to the next frame: they are not published (publish() stays off between frames) and keep
+their stream positions when settle_frame moves them to the front of the buffer.
+
+GXSetDrawDone records its position, so the frame end still waits for the draw-done callback, as
+early in the frame as the game put it (the callback then runs before end returns, as with the
+drain). drain() first lets the platform settle a pending frame (GXDrawDone between frames), and
+AuroraSetViewportPolicy tells the platform that the next update changes worker-read state. The
+game thread's time blocked on the worker (drain and the new waits) is counted for the receipts.
+For --vita-frame-overlap=verify the command processor reports the game memory it reads in place
+(indexed matrix rows, array bases, static display lists) to a weak platform hook.
+Off (the default), nothing changes: the platform still drains at the frame end.
+
+--- a/lib/gx/fifo.hpp
++++ b/lib/gx/fifo.hpp
+@@ -111,6 +111,29 @@
+ // Ensure all buffered commands have been processed.
+ void drain();
+ 
++#if defined(__vita__)
++// Vita frame overlap (patches/aurora/0009, --vita-frame-overlap): the game thread ends a frame
++// without waiting for the worker and settles it later, before anything that may change what the
++// frame's commands read.
++// publish_frame: publishes every buffered byte (a frame is never ended inside a display list) and
++//   returns the stream position the frame ends at.
++// close_frame: ends the frame for publish()/finish_draw() only; end_frame() still runs at settle,
++//   when the worker no longer uses the draw cache.
++// note_draw_done: GXSetDrawDone's position, so the frame end can wait for the draw-done callback
++//   only (draw_done_mark), as early in the frame as the game put it.
++// wait_processed: blocks until the worker has processed up to target (which must be published).
++// settle_frame: wait_processed(end), then drops the processed bytes; bytes written after end (the
++//   next frame's, unpublished between frames) move to the front and keep their stream positions.
++// wait_us: game-thread time spent blocked on the worker so far (drain and the waits above).
++uint64_t publish_frame() noexcept;
++void close_frame() noexcept;
++void note_draw_done() noexcept;
++uint64_t draw_done_mark() noexcept;
++void wait_processed(uint64_t target) noexcept;
++void settle_frame(uint64_t end) noexcept;
++uint64_t wait_us() noexcept;
++#endif
++
+ // Internal buffer inspection
+ const uint8_t* get_buffer_data();
+ uint32_t get_buffer_size();
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -55,6 +55,16 @@
+ thread::Thread sWorkerThread;
+ #endif
+ std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
++#if defined(__vita__)
++// Frame overlap (fifo.hpp): the settle hook (aurora_vita.cpp, weak) runs first in drain(), so a
++// GXDrawDone between frames finishes the pending frame before it waits; the game-thread wait clock
++// (gfx_vgl/gpu_common.cpp, weak) times every block on the worker.
++extern "C" void twv_gx_frame_overlap_settle() noexcept __attribute__((weak));
++extern "C" uint64_t twv_vgl_time_us() __attribute__((weak));
++uint64_t sDrawDoneMark = 0;
++uint64_t sWaitUs = 0;
++uint64_t wait_clock() noexcept { return twv_vgl_time_us ? twv_vgl_time_us() : 0; }
++#endif
+ 
+ void dispatch_draw_done() noexcept {
+   if (const auto callback = sDrawDoneCallback.load(std::memory_order_acquire); callback != nullptr) {
+@@ -301,6 +311,11 @@
+ bool in_display_list() { return detail::sInDisplayList; }
+ 
+ void drain() {
++#if defined(__vita__)
++  if (twv_gx_frame_overlap_settle) {
++    twv_gx_frame_overlap_settle();
++  }
++#endif
+   if (detail::sBufferSize == 0) {
+     return;
+   }
+@@ -320,10 +335,16 @@
+ 
+     uint64_t processed = sProcessed.load(std::memory_order_acquire);
+     if (processed < target) {
++#if defined(__vita__)
++      const uint64_t waitStart = wait_clock();
++#endif
+       do {
+         sProcessed.wait(processed, std::memory_order_acquire);
+         processed = sProcessed.load(std::memory_order_acquire);
+       } while (processed < target);
++#if defined(__vita__)
++      sWaitUs += wait_clock() - waitStart;
++#endif
+     }
+     break;
+   }
+@@ -338,6 +359,68 @@
+   sPendingDraws = 0;
+ }
+ 
++#if defined(__vita__)
++uint64_t publish_frame() noexcept {
++  const uint64_t target = sStreamBase + detail::sBufferSize;
++  if (target > sPublished.load(std::memory_order_relaxed)) {
++    sPendingDraws = 0;
++    sPublished.store(target, std::memory_order_release);
++    if (kProcessingMode == ProcessingMode::Thread) {
++      wake_worker();
++    } else {
++      process_to(target, std::memory_order_relaxed);
++    }
++  }
++  return target;
++}
++
++void close_frame() noexcept { sFrameActive = false; }
++
++void note_draw_done() noexcept {
++  if (!detail::sInDisplayList) {
++    sDrawDoneMark = sStreamBase + detail::sBufferSize;
++  }
++}
++
++uint64_t draw_done_mark() noexcept { return sDrawDoneMark; }
++
++void wait_processed(uint64_t target) noexcept {
++  AURORA_ASSERT(target <= sPublished.load(std::memory_order_relaxed),
++                "fifo::wait_processed: position {} is not published ({})", target,
++                sPublished.load(std::memory_order_relaxed));
++  uint64_t processed = sProcessed.load(std::memory_order_acquire);
++  if (processed >= target) {
++    return;
++  }
++  const uint64_t waitStart = wait_clock();
++  do {
++    sProcessed.wait(processed, std::memory_order_acquire);
++    processed = sProcessed.load(std::memory_order_acquire);
++  } while (processed < target);
++  sWaitUs += wait_clock() - waitStart;
++}
++
++void settle_frame(uint64_t end) noexcept {
++  wait_processed(end);
++  std::unique_lock lock{sBufferMutex, std::defer_lock};
++  if (kProcessingMode != ProcessingMode::Inline) lock.lock();
++  AURORA_ASSERT(sPublished.load(std::memory_order_relaxed) == end && end >= sStreamBase &&
++                    end <= sStreamBase + detail::sBufferSize,
++                "fifo::settle_frame: frame end {} outside [{}, {}] or not the last published position {}", end,
++                sStreamBase, sStreamBase + detail::sBufferSize, sPublished.load(std::memory_order_relaxed));
++  const auto done = static_cast<uint32_t>(end - sStreamBase);
++  const uint32_t tail = detail::sBufferSize - done;
++  if (tail != 0 && done != 0) {
++    std::memmove(detail::sBufferData, detail::sBufferData + done, tail);
++  }
++  sStreamBase = end;
++  detail::sBufferSize = tail;
++  sPendingDraws = 0;
++}
++
++uint64_t wait_us() noexcept { return sWaitUs; }
++#endif
++
+ const uint8_t* get_buffer_data() { return detail::sBufferData; }
+ uint32_t get_buffer_size() { return detail::sBufferSize; }
+ 
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -236,6 +236,9 @@
+ // patches/aurora/0008: the backend draws GX quads, strips and fans itself (start-up choice);
+ // those draws then carry their primitive instead of a generated triangle index list.
+ extern "C" int twv_gx_native_primitives() noexcept __attribute__((weak));
++// patches/aurora/0009 (--vita-frame-overlap=verify, platform/vita/aurora): game memory a command
++// reads in place: 0 an indexed matrix load's rows, 1 an array base (declared size), 2 a static list.
++extern "C" void twv_gx_overlap_read(unsigned kind, const void* data, u32 size) noexcept __attribute__((weak));
+ #endif
+ 
+ // The original command switch, shared by the persistent ByteReader reference path
+@@ -292,6 +295,11 @@
+                     "indexed XF load outside array {}: offset={}, size={}, array size={}", arrayType, srcOffset,
+                     srcSize, array.size);
+       auto const* srcData = static_cast<const u8*>(array.data) + srcOffset;
++#if defined(__vita__)
++      if (twv_gx_overlap_read) {
++        twv_gx_overlap_read(0, srcData, srcSize);
++      }
++#endif
+       if (!copy_xf_data(dstAddr, srcData, len, array.le ? std::endian::little : std::endian::big)) {
+ #ifndef NDEBUG
+         Log.debug("Unimplemented indexed XF load (opcode 0x{:02X}, dstAddr=%04x)", opcode, dstAddr);
+@@ -376,6 +384,9 @@
+   if (twv_gfx_array_base) {
+     twv_gfx_array_base(attrIdx);
+   }
++  if (twv_gx_overlap_read) {
++    twv_gx_overlap_read(1, reinterpret_cast<const void*>(static_cast<uintptr_t>(arrayAddr)), arraySize);
++  }
+ #endif
+   auto& array = g_gxState.arrays[attrIdx];
+   const auto newData = reinterpret_cast<void*>(arrayAddr);
+@@ -772,6 +783,9 @@
+     if (twv_gfx_array_base) {
+       twv_gfx_array_base(attrIdx);
+     }
++    if (twv_gx_overlap_read) {
++      twv_gx_overlap_read(1, reinterpret_cast<const void*>(static_cast<uintptr_t>(arrayAddr)), arraySize);
++    }
+ #endif
+ 
+     auto& array = g_gxState.arrays[attrIdx];
+@@ -938,6 +952,9 @@
+     if (twv_gfx_static_dl) {
+       twv_gfx_static_dl(list, size, id);
+     }
++    if (twv_gx_overlap_read) {
++      twv_gx_overlap_read(2, list, size);
++    }
+     process(list, size);
+     if (twv_gfx_static_dl) {
+       twv_gfx_static_dl(nullptr, 0, 0);
+--- a/lib/dolphin/gx/GXManage.cpp
++++ b/lib/dolphin/gx/GXManage.cpp
+@@ -271,6 +271,9 @@
+   GXFlush();
+   GX_WRITE_RAS_REG(kDrawDoneCommand);
+   aurora::gx::fifo::publish();
++#if defined(__vita__)
++  aurora::gx::fifo::note_draw_done();
++#endif
+ }
+ 
+ GXDrawDoneCallback GXSetDrawDoneCallback(GXDrawDoneCallback cb) { return aurora::gx::fifo::set_draw_done_callback(cb); }
+--- a/lib/dolphin/gx/GXAurora.cpp
++++ b/lib/dolphin/gx/GXAurora.cpp
+@@ -32,8 +32,19 @@
+   GXWriteString(label);
+ }
+ 
++#if defined(__vita__)
++// Vita frame overlap (patches/aurora/0009, aurora_vita.cpp): the next gx::update() changes state the
++// worker reads, so it waits for a frame still being processed.
++extern "C" void twv_gx_viewport_policy_set() noexcept __attribute__((weak));
++#endif
++
+ void AuroraSetViewportPolicy(AuroraViewportPolicy policy) {
+   aurora::gx::set_viewport_policy(policy);
++#if defined(__vita__)
++  if (twv_gx_viewport_policy_set) {
++    twv_gx_viewport_policy_set();
++  }
++#endif
+ }
+ 
+ void AuroraGetRenderSize(u32* width, u32* height) {

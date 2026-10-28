@@ -72,7 +72,20 @@ constexpr uint32_t TWV_PROFILE_VERTEX = 0, TWV_PROFILE_SUBMIT = 1,
     TWV_PROFILE_PRESENT = 5, TWV_PROFILE_FIFO = 6,
     TWV_PROFILE_GAME_EXECUTE = 7, TWV_PROFILE_GAME_AUDIO = 8,
     TWV_PROFILE_VI_CALLBACKS = 9, TWV_PROFILE_PAINTER = 10,
-    TWV_PROFILE_EVENTS = 11, TWV_PROFILE_COUNT = 12;
+    TWV_PROFILE_EVENTS = 11,
+    // Inside the game tick (profile_hooks.cpp, all inclusive and nested in GAME_EXECUTE):
+    // actor Execute, actor/scene Draw, 3D particle calc, real-shadow ground polygon collection
+    // (inside Draw), cutscene update (inside Execute). SHADOW_CALLS adds 1000 per collection.
+    TWV_PROFILE_TICK_EXECUTE = 12, TWV_PROFILE_TICK_DRAW = 13, TWV_PROFILE_TICK_PARTICLE3D = 14,
+    TWV_PROFILE_TICK_SHADOW_COLLECT = 15, TWV_PROFILE_TICK_DEMO = 16,
+    TWV_PROFILE_TICK_SHADOW_CALLS = 17,
+    // Diagnostic runs only (full receipts): actor background correction (dBgS_Acch::CrrPos, which
+    // makes its own ground/wall queries), every ground and line query (many inside CrrPos), hit
+    // collision (dCcS::Move); BG_QUERIES adds 1 per ground or line query.
+    TWV_PROFILE_TICK_BG_ACCH = 18, TWV_PROFILE_TICK_BG_GROUND = 19, TWV_PROFILE_TICK_BG_LINE = 20,
+    TWV_PROFILE_TICK_CC_MOVE = 21, TWV_PROFILE_TICK_BG_QUERIES = 22,
+    // Game thread blocked on the GX worker (FIFO drain, or the --vita-frame-overlap settle).
+    TWV_PROFILE_GX_WAIT = 23, TWV_PROFILE_COUNT = 24;
 uint64_t twv_vgl_time_us(void);
 void twv_vgl_profile_add(uint32_t category, uint64_t microseconds);
 uint32_t twv_vgl_program(const char* vertex, const char* fragment);
@@ -103,6 +116,10 @@ constexpr uint32_t TwvGpuFeatureSplit=32u;        // diagnostic: frames split in
 constexpr uint32_t TwvGpuFeatureScale75=64u,TwvGpuFeatureScale67=128u,TwvGpuFeatureScale50=256u; // diagnostic render size
 constexpr uint32_t TwvGpuFeatureUniformReuse=512u; // reuse unchanged default-uniform reservations (G3 first step)
 constexpr uint32_t TwvGpuFeaturePipelineMemo=1024u; // front end: memo of the last pipeline looked up and checked
+constexpr uint32_t TwvGpuFeatureUniformSplit=2048u; // G3: lighting uniforms in vertex uniform buffer 1, uploaded on change
+constexpr uint32_t TwvGpuFeatureUniformSplitVerify=4096u; // with it: every reuse rebuilt and compared
+constexpr uint32_t TwvGpuFeatureFragmentSplit=8192u; // G3 step 2: TEV registers, konst and fog in fragment uniform buffer 1
+constexpr uint32_t TwvGpuFeatureFragmentSplitVerify=16384u; // with it: every reuse rebuilt and compared
 uint32_t twv_gpu_features(void);
 uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it

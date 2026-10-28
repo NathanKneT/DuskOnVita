@@ -19,6 +19,7 @@ inline Settings& getSettings() {static Settings s; return s;}
 #include "time_internal.hpp"
 
 extern "C" void dusk_vita_fixed_ticks(int);
+extern "C" void dusk_vita_tick_pause_ns(long long);
 
 namespace {
 using namespace std::chrono_literals;
@@ -35,11 +36,18 @@ extern "C" void SDL_DelayPrecise(Uint64 ns) {
     now += asked > earlyWake ? asked - earlyWake : asked;
 }
 namespace {
-// One main-loop pass: advance, then run and commit the ticks it asks for.
-int loop(std::chrono::nanoseconds elapsed) {
+// One main-loop pass: advance, then run and commit the ticks it asks for (each taking tickCost).
+// settle: part of the first tick spent in the frame-overlap settle (patches/dusklight/0019).
+int loop(std::chrono::nanoseconds elapsed, std::chrono::nanoseconds tickCost = std::chrono::nanoseconds{0},
+         std::chrono::nanoseconds settle = std::chrono::nanoseconds{0}) {
     now += elapsed;
     const auto& t = dusk::game_clock::advance();
-    for (int i = 0; i < t.numSimTicks; ++i) {dusk::game_clock::begin_sim_tick();dusk::game_clock::commit_sim_tick();}
+    for (int i = 0; i < t.numSimTicks; ++i) {
+        dusk::game_clock::begin_sim_tick();
+        now += tickCost;
+        if (i == 0) dusk_vita_tick_pause_ns(settle.count());
+        dusk::game_clock::commit_sim_tick();
+    }
     return t.numSimTicks;
 }
 }
@@ -95,8 +103,33 @@ int main() {
     earlyWake = 0ns;
     // A loop more than 4 ms early paints without a tick (no long wait), the next one runs it.
     assert(loop(20ms) == 0 && dusk::game_clock::vita_tick_wait_ns() == 0 && loop(13'400'000ns) == 1);
+    // Ticks that cost more than a frame on their own (the title's veil shot: about 70 ms each on the
+    // console) get no second tick: once the running average passes 33 ms a loop runs one tick, with
+    // the backlog still dropped. Cheap ticks bring the second tick back within a few loops.
+    for (int i = 0; i < 20; ++i) {
+        const int n = loop(20ms, 70ms);
+        assert(n >= 0 && n <= 2);
+        assert(i < 3 || n == 1);
+    }
+    bool second = false;
+    for (int i = 0; i < 6 && !second; ++i) second = loop(100ms) == 2;
+    assert(second);
+    // Frame overlap: 40 ms ticks cost more than a frame (one per loop), but when the first tick spends
+    // 30 of its 40 ms finishing the last frame's GX work (the settle) it costs 10 ms, the average is
+    // 25 ms and slow frames keep their second tick. Outside a tick the call is ignored.
+    for (int i = 0; i < 20; ++i) assert(loop(100ms, 40ms) == 1 || i < 6);
+    dusk_vita_tick_pause_ns(500'000'000);
+    for (int i = 0; i < 20; ++i) assert(loop(100ms, 40ms, 30ms) == 2 || i < 4);
+    // Only the settle is left out: 70 ms ticks with a 20 ms settle still cost 50 ms, one per loop.
+    for (int i = 0; i < 20; ++i) {
+        const int n = loop(20ms, 70ms, 20ms);
+        assert(i < 3 || n == 1);
+    }
+    second = false;
+    for (int i = 0; i < 6 && !second; ++i) second = loop(100ms) == 2;
+    assert(second);
     // Off again: upstream behaviour.
     dusk_vita_fixed_ticks(0);
     assert(loop(100ms) == 1 && !dusk::game_clock::g_frameTiming.separatePresentation);
-    std::printf("game_clock_test: fixed 30 Hz ticks, 1.5 per loop at 20 FPS, cap 2 with backlog dropped, one tick after a gap, no 0-tick loops at 33.2-33.4 ms (short waits, early wakes) passed\n");
+    std::printf("game_clock_test: fixed 30 Hz ticks, 1.5 per loop at 20 FPS, cap 2 with backlog dropped, one tick after a gap, no 0-tick loops at 33.2-33.4 ms (short waits, early wakes), one tick per loop while ticks cost over 33 ms, frame-overlap settle left out of the tick cost passed\n");
 }

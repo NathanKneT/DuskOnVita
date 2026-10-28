@@ -37,7 +37,12 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     const char* names[] = {"prof_vertex_cpu_us", "prof_gl_submit_us", "prof_shader_us",
         "prof_state_us", "prof_pipeline_us", "prof_present_us",
         "prof_fifo_inclusive_us", "prof_game_execute_inclusive_us", "prof_game_audio_us",
-        "prof_vi_callbacks_us", "prof_painter_inclusive_us", "prof_events_us"};
+        "prof_vi_callbacks_us", "prof_painter_inclusive_us", "prof_events_us",
+        "prof_tick_execute_inclusive_us", "prof_tick_draw_inclusive_us", "prof_tick_particle3d_us",
+        "prof_tick_shadow_collect_us", "prof_tick_demo_us", "prof_tick_shadow_collect_calls_x1000",
+        "prof_tick_bg_acch_us", "prof_tick_bg_ground_us", "prof_tick_bg_line_us", "prof_tick_cc_move_us",
+        "prof_tick_bg_queries", "prof_gx_wait_us"};
+    static_assert(sizeof names/sizeof names[0]==TWV_PROFILE_COUNT);
     twv::vita::telemetryEvent("prof_frame_samples",pacing.frames);
     twv::vita::telemetryEvent("prof_draw_timers_enabled",TWV_VITA_DRAW_TIMERS);
     twv::vita::telemetryEvent("prof_interval_samples",pacing.intervals);

@@ -31,6 +31,9 @@ struct Pipeline {
 struct Texture : aurora::gfx::TextureRef {
     uint32_t gpu = 0;
     bool deferredUpload = false;
+    // Destination of an EFB copy (or of its palette conversion). Nothing writes it while
+    // resolve_pass_into is unsupported: its storage stays as created (zero on GXM).
+    bool efbCopy = false;
     Texture(uint32_t w,uint32_t h,uint32_t mips,uint32_t format,bool deferred=false);
     ~Texture();
 };

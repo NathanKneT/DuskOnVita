@@ -131,9 +131,47 @@ PIPELINE_MEMO = [
      ' ++sPipelineInfoReuse.reused;return 1;\n'),
 ]
 
+# g4 console fixes (28 Oct): the game drawn full width (it is laid out for 960x544), and draws that
+# sample an EFB copy nothing wrote skipped (black water). Outside the sampled-texture loop: the
+# helper has its own copy of the loop header, in a separate function.
+CONSOLE_FIXES = [
+    ('constexpr bool OffscreenDrawSupported=false;\n',
+     'constexpr bool OffscreenDrawSupported=false;\n'
+     '// EFB copies (resolve_pass_into) are not implemented either. A draw that samples a copy would\n'
+     '// read storage nothing wrote and paint it over the scene: retail water (fbtex_dummy) shows the\n'
+     '// copied scene behind it, and here it came out opaque black (F_SP104 opening, village, Faron).\n'
+     '// Leaving the destination untouched is the closest picture until copies exist; implementing\n'
+     '// them must change this, so that no supported copy is skipped.\n'
+     'constexpr bool CopyResolveSupported=false;\n'
+     'bool samples_unresolved_copy(const Pipeline& p) noexcept {\n'
+     ' const auto& textures=aurora::gx::g_gxState.textures;\n'
+     ' for(int i=0;i<8;++i) if(p.info.sampledTextures.test(i)) {\n'
+     '  const auto* texture=static_cast<const Texture*>(textures[i].ref.get());\n'
+     '  if(texture && texture->efbCopy) return true;\n'
+     ' }\n'
+     ' return false;\n'
+     '}\n'),
+    ('aurora::gfx::Viewport viewport{0,0,724,544,0,1};\n'
+     'aurora::gfx::ClipRect scissor{0,0,724,544};\n'
+     'constexpr int GameLeft=118, GameWidth=724, GameHeight=544;\n',
+     '// The game lays itself out for the full 960x544 screen (Dusklight widens its logical 2D space and\n'
+     '// camera aspect to the window), so it is drawn full width: a 724-wide box squeezed it to 75%.\n'
+     'aurora::gfx::Viewport viewport{0,0,960,544,0,1};\n'
+     'aurora::gfx::ClipRect scissor{0,0,960,544};\n'
+     'constexpr int GameLeft=0, GameWidth=960, GameHeight=544;\n'),
+    (' return twv::vgl::offscreen ? Vec2<uint32_t>{twv::vgl::off_w,twv::vgl::off_h} : Vec2<uint32_t>{724,544};\n',
+     ' return twv::vgl::offscreen ? Vec2<uint32_t>{twv::vgl::off_w,twv::vgl::off_h} :\n'
+     '                               Vec2<uint32_t>{twv::vgl::GameWidth,twv::vgl::GameHeight};\n'),
+    (' if(c.shaderConfig.lineMode) {count("unsupported_line_point_draw");return;}\n',
+     ' if(c.shaderConfig.lineMode) {count("unsupported_line_point_draw");return;}\n'
+     ' if(!CopyResolveSupported && samples_unresolved_copy(p)) {count("unresolved_copy_draw");return;}\n'),
+    (' const int x1=std::min({r.x+r.width,int(std::ceil(vp.left+vp.width)),724});\n',
+     ' const int x1=std::min({r.x+r.width,int(std::ceil(vp.left+vp.width)),GameWidth});\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
-    off-screen edits and the pipeline memo."""
+    off-screen edits, the pipeline memo and the g4 console fixes."""
     expected = original.replace(OLD, NEW, 1)
     for anchor, inserted in G2_INSERTIONS:
         if expected.count(anchor) != 1:
@@ -146,6 +184,10 @@ def audited(original):
     for old, new in PIPELINE_MEMO:
         if expected.count(old) != 1:
             raise SystemExit('Audited pipeline-memo edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in CONSOLE_FIXES:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited console-fix edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

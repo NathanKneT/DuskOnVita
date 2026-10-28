@@ -1,0 +1,191 @@
+Vita (--vita-fast-shadow-collect=off|on|verify): real-time shadow ground polygon collection
+(realPolygonCheck -> cBgS::ShdwDraw -> dBgWKCol / cBgW walkers -> psdRealCallBack) with the same
+receiver list. The fast walk stops once the 256-triangle list is full (later callbacks can change
+nothing) and skips a KC prism before building its vertices when psdRealCallBack would reject its
+plane on the light/centre tests (same expressions, vertices unused). verify runs the original walk
+for the game, then the fast walk into a scratch list, and reports lists that differ bit for bit.
+Off (0) unless the Vita entry selects it; the counts go to runtime/fast_shadow_collect.cpp.
+
+--- a/src/d/d_bg_s.cpp
++++ b/src/d/d_bg_s.cpp
+@@ -20,6 +20,9 @@
+ #include "dusk/settings.h"
+ #include "helpers/offset_ptr.h"
+ #endif
++#if TARGET_VITA
++#include "d/d_vita_shadow_fast.h"
++#endif
+ 
+ #if DEBUG
+ int g_ground_counter;
+@@ -433,10 +436,18 @@
+ void cBgS::Draw() {}
+ 
+ void cBgS::ShdwDraw(cBgS_ShdwDraw* pshdw) {
++#if TARGET_VITA
++    const dVitaShadowFast_c* fast = dVitaShadowFast_get(pshdw);
++#endif
+     cBgS_ChkElm* elm = m_chk_element;
+     for (int i = 0; i < 0x100; i++) {
+         if (elm->ChkUsed()) {
+             elm->m_bgw_base_ptr->ShdwDraw(pshdw);
++#if TARGET_VITA
++            if (fast != NULL && fast->full()) {
++                return;
++            }
++#endif
+         }
+         elm++;
+     }
+--- a/src/d/d_bg_w_kcol.cpp
++++ b/src/d/d_bg_w_kcol.cpp
+@@ -10,6 +10,9 @@
+ 
+ #include "SSystem/SComponent/c_bg_s_shdw_draw.h"
+ #include "SSystem/SComponent/c_m2d.h"
++#if TARGET_VITA
++#include "d/d_vita_shadow_fast.h"
++#endif
+ 
+ #define MAX_DRAW_BIT 0x200
+ 
+@@ -636,6 +639,12 @@
+ }
+ 
+ void dBgWKCol::ShdwDraw(cBgS_ShdwDraw* param_0) {
++#if TARGET_VITA
++    const dVitaShadowFast_c* fast = dVitaShadowFast_get(param_0);
++    if (fast != NULL && fast->full()) {
++        return;
++    }
++#endif
+     cM3dGAab* bnd_spAC = param_0->GetBndP();
+     cXyz* minP_spA8 = bnd_spAC->GetMinP();
+     cXyz* maxP_spA4 = bnd_spAC->GetMaxP();
+@@ -815,6 +824,14 @@
+ 
+                                         if (!ChkShdwDrawThrough(&polyCode_sp108)) {
+                                             prismData_sp20 = getPrismData(p_prismList[0]);
++#if TARGET_VITA
++                                            if (fast != NULL) {
++                                                const cM3dGPla pre = GetTriPla(p_prismList[0]);
++                                                if (fast->rejects(&pre)) {
++                                                    continue;
++                                                }
++                                            }
++#endif
+ 
+                                             sp11C[0] =
+                                                 m_pkc_head->m_pos_data[prismData_sp20->pos_i];
+@@ -853,6 +870,11 @@
+                                                     (param_0->mCallbackFun)(
+                                                         param_0, (cBgD_Vtx_t*)&sp11C,
+                                                         0, 1, 2, &pla_spF4);
++#if TARGET_VITA
++                                                    if (fast != NULL && fast->full()) {
++                                                        return;
++                                                    }
++#endif
+                                                 }
+                                             }
+                                         }
+--- a/src/d/d_drawlist.cpp
++++ b/src/d/d_drawlist.cpp
+@@ -15,6 +15,12 @@
+ #if TARGET_VITA
+ extern "C" int twv_vita_shadow_image_skip();
+ extern "C" void twv_vita_shadow_image_skipped(unsigned models, unsigned shapes);
++// patches/dusklight/0018: --vita-fast-shadow-collect=off|on|verify (runtime/fast_shadow_collect.cpp).
++#include <string.h>
++#include "d/d_vita_shadow_fast.h"
++extern "C" int twv_vita_fast_shadow_collect_mode();
++extern "C" void twv_vita_fast_shadow_collect_report(unsigned tris, unsigned full, int mismatch);
++dVitaShadowFast_c* g_dVitaShadowFast = NULL;
+ #endif
+ 
+ #if TARGET_PC
+@@ -1236,7 +1242,35 @@
+     shdwDrawPoly.setCenter(param_0);
+     shdwDrawPoly.setLightVec(param_3);
+     shdwDrawPoly.setPoly(param_4);
++#if TARGET_VITA
++    // 0 the original walk only; 1 the fast walk (d_vita_shadow_fast.h); 2 verify: the original walk
++    // fills the receiver list the game uses, the fast walk a scratch list, compared bit for bit.
++    const int fastMode = twv_vita_fast_shadow_collect_mode();
++    int mismatch = -1;
++    if (fastMode == 1) {
++        dVitaShadowFast_c fast = {&shdwDrawPoly, &param_4->mCount, param_4->getTriMax(), param_3, param_0};
++        g_dVitaShadowFast = &fast;
++        dComIfG_Bgsp().ShdwDraw(&shdwDrawPoly);
++        g_dVitaShadowFast = NULL;
++    } else {
++        dComIfG_Bgsp().ShdwDraw(&shdwDrawPoly);
++        if (fastMode == 2) {
++            static dDlst_shadowRealPoly_c s_check;
++            s_check.reset();
++            shdwDrawPoly.setPoly(&s_check);
++            dVitaShadowFast_c fast = {&shdwDrawPoly, &s_check.mCount, s_check.getTriMax(), param_3, param_0};
++            g_dVitaShadowFast = &fast;
++            dComIfG_Bgsp().ShdwDraw(&shdwDrawPoly);
++            g_dVitaShadowFast = NULL;
++            shdwDrawPoly.setPoly(param_4);
++            mismatch = s_check.mCount != param_4->mCount || s_check.getTriMax() != param_4->getTriMax() ||
++                memcmp(s_check.getTri(), param_4->getTri(), param_4->mCount * sizeof(dDlst_shadowTri_c)) != 0;
++        }
++    }
++    twv_vita_fast_shadow_collect_report(param_4->mCount, param_4->mCount >= param_4->getTriMax(), mismatch);
++#else
+     dComIfG_Bgsp().ShdwDraw(&shdwDrawPoly);
++#endif
+     return TRUE;
+ }
+ 
+--- /dev/null
++++ b/include/d/d_vita_shadow_fast.h
+@@ -0,0 +1,46 @@
++#ifndef D_VITA_SHADOW_FAST_H
++#define D_VITA_SHADOW_FAST_H
++
++// Vita (--vita-fast-shadow-collect, patches/dusklight/0018): real-time shadow ground polygon
++// collection with the same result. While realPolygonCheck walks the collision for one shadow on
++// the fast path, the walkers may
++//  - stop once the receiver list is full: from then on psdRealCallBack can only return through
++//    dDlst_shadowPoly_c::set's "mCount >= getTriMax()" exit or its own rejections, which change
++//    nothing, and the walkers themselves have no other effect;
++//  - skip a KC prism before building its vertices when psdRealCallBack would reject it on its
++//    light and plane tests (the same expressions on the same plane), which never read vertices.
++// Walk order, drawBits, through-checks, IsZero tests and vertex math are unchanged.
++#include "SSystem/SComponent/c_bg_s_shdw_draw.h"
++#include "SSystem/SComponent/c_m3d_g_pla.h"
++
++struct dVitaShadowFast_c {
++    const cBgS_ShdwDraw* mpOwner;
++    const u16* mpCount;
++    s32 mMax;
++    const cXyz* mpLight;
++    const cXyz* mpCenter;
++
++    bool full() const { return *mpCount >= mMax; }
++
++    // True when psdRealCallBack (d_drawlist.cpp) returns 1 without calling set() for this plane.
++    bool rejects(const cM3dGPla* plane) const {
++        const cXyz* normal = plane->GetNP();
++        if (mpLight->inprod(*normal) < -0.2f) {
++            const cXyz* center = mpCenter;
++            if (normal->x * center->x + normal->y * center->y + normal->z * center->z + plane->GetD() > -90.f) {
++                return false;
++            }
++        }
++        return true;
++    }
++};
++
++// Set by realPolygonCheck around one fast walk, NULL otherwise (game thread only).
++extern dVitaShadowFast_c* g_dVitaShadowFast;
++
++inline dVitaShadowFast_c* dVitaShadowFast_get(const cBgS_ShdwDraw* shdw) {
++    dVitaShadowFast_c* fast = g_dVitaShadowFast;
++    return fast != NULL && fast->mpOwner == shdw ? fast : NULL;
++}
++
++#endif /* D_VITA_SHADOW_FAST_H */
