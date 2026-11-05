@@ -11,7 +11,7 @@ Game code and libraries (git submodules)
 
   Dusklight
     Source: https://github.com/TwilitRealm/dusklight
-    Pin: 34a144a493b7f57adeb4034d382317c826eb5c8d
+    Pin: 77705f8bb95ef7b7dca4675b149c4bcb6a48da34
     CC0 1.0 Universal (LICENSES/Dusklight.txt). Dusklight is built on the Twilight Princess
     decompilation, https://github.com/zeldaret/tp, which is credited here as its origin.
 
