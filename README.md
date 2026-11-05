@@ -13,15 +13,17 @@ Vita side of things: a renderer that turns Aurora's GX commands into GXM (or
 [vitaGL](https://github.com/Rinnegatamante/vitaGL)), audio, input, memory, a lot of logging, and a
 small stack of patches on top of the pinned upstreams.
 
-## Where it's at (28 Oct 2026)
+## Where it's at (5 Nov 2026)
 
-- **You can play it, but it's not comfy yet.** On my PS Vita 1000 it boots from your disc image to
-  the title screen, a new game starts, the opening in Ordon plays, and saving works.
+- **First release: you can install it and play, but it's not comfy yet.** On my PS Vita 1000 it
+  boots from your disc image to the title screen, a new game starts, the opening in Ordon plays, and
+  saving works.
 - **It's slow.** 12 to 28 FPS in the places I've measured, where the original runs at 30. The game
   keeps its normal speed down to 15 FPS; below that, everything slows down with it.
+- **New:** an in-game settings page (two fingers held on the rear touch pad, or three on the screen), your disc as `.iso`, `.ciso`
+  or `.gcz`, the game in your Vita's language, and Cross/Circle following your Vita's Enter button.
 - **Not there yet:** the minimap and map screens, Link's real-time shadow, water effects, bloom and
-  depth of field (everything that needs frame-buffer copies). No settings menu either (options live
-  in text files), and no language picker.
+  depth of field (everything that needs frame-buffer copies).
 - **Known bugs:** some textures flicker.
 - **Not tested yet:** dungeons, the rest of the story, a full playthrough, sleep and resume, and any
   disc other than the European one.
@@ -87,6 +89,9 @@ Where the GX worker's time went in the house on g2c:
 | Real game speed | ✅ | fixed 30 game ticks per second, held down to 15 FPS |
 | Controls (both sticks, buttons) | ✅ | |
 | PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork |
+| Settings page | ✅ | two fingers held on the rear touch pad, or three on the screen; presets, render size, FPS counter, prompts, confirm button, language, gyro, camera. Works on the console |
+| Disc images: ISO, CISO, GCZ | ⚠️ | read in place, any name, region from the disc; checked in the emulator with the European disc |
+| Your Vita's language and Enter button | ⚠️ | text in the console's language when the disc has it, Circle confirms when the Vita does (prompts follow); checked in the emulator |
 | Front touch in menus, gyro aim | ✅ | work on the console |
 | 3D lock-on marker | ✅ | works on the console |
 | Start-up screens | ✅ | the progress screen while shaders get ready works on the console; the error screens (no disc, wrong disc, missing shader compiler) are checked in the emulator |
@@ -98,9 +103,10 @@ Where the GX worker's time went in the house on g2c:
 ## What you need
 
 - A homebrew-enabled PS Vita with VitaShell.
-- Your own GameCube disc image as a plain `.iso`/`.gcm` (RVZ, WIA, CISO and other containers don't
-  work yet). I develop and test with the European release, **GZ2P01, revision 0**; other releases
-  haven't been tried on this port.
+- Your own dump of the GameCube disc as `.iso`, `.ciso` or `.gcz` (RVZ, WIA, WBFS and NKit images
+  aren't read: convert them to ISO first, for example with Dolphin's Convert File). I develop and
+  test with the European release, **GZ2P01, revision 0**; the USA (GZ2E01) and Japanese (GZ2J01)
+  releases are accepted but haven't been tried on this port.
 - The shader compiler module `ur0:data/libshacccg.suprx`, extracted on your own console.
 
 ## Build
@@ -122,36 +128,56 @@ applies `patches/` there (the submodules stay untouched), downloads the hash-pin
 downloads game data. You get `build-vita/twilight_vita.vpk`; `link_report.txt` next to it lists the
 symbols that are still trap stubs.
 
-For measuring, build the performance VPK instead: `bash tools/vita_perf_build.sh` compiles in every
-start-up renderer switch (each off unless you pick it) and leaves out the per-draw diagnostics
+To play or to measure, build the performance VPK instead (the releases are this build):
+`bash tools/vita_perf_build.sh` compiles in every start-up renderer switch, so the default play
+profile can use them, and leaves out the per-draw diagnostics
 ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 
-## Run
+## Install
 
-1. Install the VPK with VitaShell.
-2. Copy your disc image to `ux0:data/twilight-vita/game.iso`.
-3. Copy `args.example` to `ux0:data/twilight-vita/args.txt` (it starts in Link's house).
+1. Install the VPK from the release page with VitaShell.
+2. Put the shader compiler at `ur0:data/libshacccg.suprx`. It comes from your own console's system
+   files: extract it with the ShaRKBR33D app. Without it the game shows a screen saying so.
+3. Copy your disc image into `ux0:data/twilight-vita/` (create the folder). Any name works;
+   `game.iso` is looked at first. If you already keep the disc in `ux0:data/dusklight/` (`Zelda.iso`
+   or `Zelda.ciso`), it's found there too. Images are read where they are, never copied.
 4. Launch **DuskOnVita (dev)**.
 
-`args.txt` takes whitespace-separated options, 511 bytes at most, no quoting or comments. Stage
-syntax: `--stage=STAGE,ROOM,SPAWN,LAYER`. A `sequence.txt` in the same folder runs a list of
-configurations, one per launch. Each run adds its logs to `ux0:data/twilight-vita/runtime.jsonl`;
-Dusklight's own logs and caches go to `ux0:data/TwilitRealm/Dusklight/`. The port keeps backups of
-your saves now, but an extra copy somewhere else never hurts.
+There's no shader pack in the release (it would be derived from the game's materials). So the first
+time you visit an area, the game stutters for a while as the Vita compiles its shaders; they're
+cached, and the next visit is smooth. Saves go to `ux0:data/twilight-vita/<region>/Card A/`, with
+three rolling backups; an extra copy somewhere else never hurts. If something's wrong with the disc
+image (missing, cut short, a format the port can't read, another game), a screen says what and
+where.
+
+For testing, `args.txt` in the same folder takes extra options (whitespace-separated, 511 bytes at
+most, no quoting or comments), for example `--stage=STAGE,ROOM,SPAWN,LAYER` to start somewhere; see
+`args.example`. A `sequence.txt` runs a list of configurations, one per launch. Each run adds its
+logs to `ux0:data/twilight-vita/runtime.jsonl`; Dusklight's own logs and caches go to
+`ux0:data/TwilitRealm/Dusklight/`.
 
 ## Controls
 
 | Vita | GameCube |
 | --- | --- |
 | Left stick / right stick | control stick / C stick |
-| Cross / Circle | A / B |
+| Cross / Circle | A / B (swapped when your Vita confirms with Circle) |
 | Square / Triangle | X / Y |
 | L / R | L / R (targeting on L) |
 | Select | Z |
 | Start, D-pad | Start, D-pad |
 
 Button prompts show the PlayStation symbols. In menus you can tap the front touch screen. Aiming
-also follows the gyro (on by default; the game's gyro aim setting turns it off).
+also follows the gyro (on by default).
+
+**Settings:** hold two fingers still on the rear touch pad for a second, or tap the screen with
+three fingers. The game pauses and a page opens: a preset (Quality 100 %, Balanced 75 %, Battery
+50 % with the console's own clocks), render size, an FPS counter, button prompts (PlayStation or
+GameCube), the confirm button (System, Cross or Circle), the language (from the ones on your disc),
+gyro aim, sensitivity, invert and recentre, camera invert, and a reset. D-pad and Cross to change,
+Circle or START to close (or tap). Render size, performance, language and the confirm button apply
+at the next start. Game settings go to Dusklight's `config.json`, the port's own to
+`ux0:data/twilight-vita/vita_settings.json`.
 
 ## Measuring
 
@@ -175,7 +201,9 @@ prove anything about the picture on the GPU or speed on the console.
   as long as the game behaves exactly like the original.
 - **Frame-buffer effects:** EFB copies and off-screen passes on GXM, for the minimap, the map screen,
   shadows and bloom.
-- **Texture flicker:** still hunting the cause; a matched Dolphin capture of the same scene helps.
+- **Texture flicker:** still hunting the cause (an upstream texture filter fix is in, but it didn't
+  change the picture where I looked). The place and a short video help; a matched Dolphin capture of
+  the same scene helps even more.
 - **Testing on hardware:** a Vita 1000 or 2000 (or a PSTV), the place, the build and your
   `runtime.jsonl`.
 

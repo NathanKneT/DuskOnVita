@@ -157,11 +157,47 @@ card operation, and every error ends in a receipt.
 Aurora's own card code through the CARD API the game uses, with and without the hooks: what the game
 reads back must be the same.
 
+## Disc, language and buttons
+
+At start-up, before the game, `disc/disc_locate.cpp` looks for the disc image: `backend.isoPath` in
+Dusklight's `config.json`, then `ux0:data/twilight-vita/game.iso`, then any image in that folder,
+then the same in `ux0:data/dusklight/`. The first supported Twilight Princess GameCube disc
+(GZ2E01, GZ2P01 or GZ2J01, disc 0 revision 0, as Dusklight accepts them) wins. `disc/disc_image.hpp`
+reads ISO/GCM, CISO (block map, no compression) and GCZ (zlib blocks, Adler-32 checked) in place;
+RVZ, WIA, WBFS, NFS, TGC, PSP CSO and NKit are recognised and named, not read. Then the chosen
+image's disc header and file table are read through its container: an image that ends before its
+last file (a copy that stopped early) is refused. Every problem has its own start-up screen
+(`runtime/startup_check.hpp`).
+
+The region comes from the disc header (it picks the save folder `EUR`, `USA` or `JAP`).
+`runtime/player_settings.hpp` picks the language: `--vita-language=` in `args.txt`, then
+`game.language` in `config.json`, then the Vita's system language, fitted to the disc (Europe:
+English, German, French, Spanish, Italian; USA: English; Japan: Japanese; Portuguese maps to
+Spanish). The confirm button follows `--vita-confirm=`, then `vita.confirmButton`, then the Vita's
+Enter button: with Circle, A is on Circle and B on Cross, and the PlayStation prompts follow. A
+language from the console is passed as a `--cvar` and never written to `config.json`.
+
+## Settings page
+
+Two fingers held still on the rear touch pad for a second, or three fingers on the screen, open it
+(other fingers resting on the rear pad are ignored); no game button does, since the game never reads
+the rear pad. The
+page pauses the game the way a lost window focus does (no ticks, no draws, audio paused, the game
+clock stopped), takes no pad input from the game, and is drawn by the CPU into its own buffer with
+the start-up screens' font, over the game's last frame. Game settings (prompts, confirm button,
+language, gyro, camera) go through Dusklight's own config system to `config.json`; the port's
+(preset, render size, performance, FPS counter, how the page opens) go to
+`ux0:data/twilight-vita/vita_settings.json`, only the values that differ from the defaults, written
+to a temporary file and renamed. An option typed in `args.txt` wins over both; a `sequence.txt` run
+ignores `vita_settings.json`. Logic and drawing are host-tested (`tests/settings_page_test.cpp`).
+
 ## Files
 
-- `ux0:data/twilight-vita/`: `game.iso`, `args.txt`, `sequence.txt`, `shader_warmup.bin`,
-  `runtime.jsonl`, `import/` (saves to copy in), and Dusklight's user directory (`--user-dir`).
+- `ux0:data/twilight-vita/`: your disc image (`game.iso` or any `.iso`, `.ciso`, `.gcz`),
+  `args.txt`, `sequence.txt`, `shader_warmup.bin`, `vita_settings.json`, `runtime.jsonl`, `import/`
+  (saves to copy in), and Dusklight's user directory (`--user-dir`).
+- `ux0:data/dusklight/`: searched for a disc image too, read in place.
 - `ux0:data/TwilitRealm/Dusklight/`: Dusklight's logs and caches.
 - `ur0:data/libshacccg.suprx`: the shader compiler, extracted on your own console.
 - The disc reader (`platform/vita/disc/gcm_nod.cpp`) implements the part of the nod API that Aurora
-  and Borealis call, for plain ISO/GCM images only. The VPK carries no Dusklight resource files.
+  and Borealis call, over `disc/disc_image.hpp`. The VPK carries no Dusklight resource files.
