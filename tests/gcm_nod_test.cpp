@@ -7,6 +7,8 @@
 //   tools/host_tests.sh   (builds with the host compiler and runs)
 #include <nod.h>
 
+#include <miniz.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -175,11 +177,57 @@ int main() {
   nod_free(file);
   CHECK(m.closes == 1);
 
-  // Container formats and Wii discs.
-  Memory ciso{make_image()};
-  std::memcpy(ciso.bytes.data(), "CISO", 4);
-  CHECK(open(ciso) == nullptr && std::string(nod_error_message()).find("CISO") != std::string::npos);
-  CHECK(ciso.closes == 1);
+  // CISO and GCZ (disc/disc_image.hpp; tests/disc_image_test.cpp covers them in depth): the same
+  // disc through either container shows the same header, metadata and files.
+  for (int kind = 0; kind < 2; ++kind) {
+    const std::vector<uint8_t> plain = make_image();
+    Memory wrapped;
+    if (kind == 0) {
+      wrapped.bytes.assign(0x8000, 0);
+      std::memcpy(wrapped.bytes.data(), "CISO", 4);
+      wrapped.bytes[5] = 0x80; // block size 0x8000, little-endian
+      wrapped.bytes[8] = 1;    // block 0 present
+      wrapped.bytes.insert(wrapped.bytes.end(), plain.begin(), plain.end());
+    } else {
+      std::vector<uint8_t> packed(mz_compressBound(mz_ulong(plain.size())));
+      mz_ulong n = mz_ulong(packed.size());
+      CHECK(mz_compress(packed.data(), &n, plain.data(), mz_ulong(plain.size())) == MZ_OK);
+      packed.resize(n);
+      const uint32_t adler = uint32_t(mz_adler32(MZ_ADLER32_INIT, packed.data(), packed.size()));
+      wrapped.bytes.assign(32 + 12, 0);
+      const uint64_t fields[] = {0xB10BC001u, 0, n, plain.size(), 0x8000, 1}; // magic, type, sizes, block, count
+      const size_t at[] = {0, 4, 8, 16, 24, 28}, width[] = {4, 4, 8, 8, 4, 4};
+      for (int f = 0; f < 6; ++f)
+        for (size_t b = 0; b < width[f]; ++b) wrapped.bytes[at[f] + b] = uint8_t(fields[f] >> (8 * b));
+      for (int b = 0; b < 4; ++b) wrapped.bytes[40 + b] = uint8_t(adler >> (8 * b)); // offset 0, then the hash
+      wrapped.bytes.insert(wrapped.bytes.end(), packed.begin(), packed.end());
+    }
+    NodHandle* d = open(wrapped);
+    CHECK(d != nullptr);
+    if (!d) continue;
+    CHECK(nod_disc_header(d, &header) == NOD_RESULT_OK && std::memcmp(header.game_id, "GZ2E01", 6) == 0);
+    CHECK(nod_disc_size(d) == (kind == 0 ? 1459978240ull : plain.size()));
+    NodHandle* p = nullptr;
+    CHECK(nod_disc_open_partition_kind(d, NOD_PARTITION_KIND_DATA, nullptr, &p) == NOD_RESULT_OK);
+    CHECK(nod_partition_meta(p, &meta) == NOD_RESULT_OK && meta.raw_dol.size == 0x160 && meta.raw_dol.data[0x15F] == 0xAB);
+    NodHandle* f = nullptr;
+    CHECK(nod_partition_open_file(p, 5, &f) == NOD_RESULT_OK);
+    std::vector<uint8_t> got(0x1000);
+    CHECK(f && nod_read(f, got.data(), got.size()) == 0x1000 && std::memcmp(got.data(), plain.data() + 0x5200, 0x1000) == 0);
+    nod_free(f);
+    nod_free(p);
+    nod_free(d);
+    CHECK(wrapped.closes == 1);
+  }
+
+  // Unsupported containers and Wii discs.
+  Memory rvz{make_image()};
+  std::memcpy(rvz.bytes.data(), "RVZ\x01", 4);
+  CHECK(open(rvz) == nullptr && std::string(nod_error_message()).find("RVZ") != std::string::npos);
+  CHECK(rvz.closes == 1);
+  Memory badCiso{make_image()};
+  std::memcpy(badCiso.bytes.data(), "CISO", 4); // block size and map are header bytes: refused
+  CHECK(open(badCiso) == nullptr && std::string(nod_error_message()).find("CISO") != std::string::npos);
   Memory wii{make_image()};
   std::memset(wii.bytes.data() + 0x1C, 0, 4);
   const uint8_t wiiMagic[4]{0x5D, 0x1C, 0x9E, 0xA3};

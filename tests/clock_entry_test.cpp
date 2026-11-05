@@ -257,6 +257,46 @@ extern "C" int twv_vita_bundle_select(std::uint32_t features, std::uint32_t memo
     state.bundleFeatures = features; state.memoryProfile = memory; return state.bundleAvailable;
 }
 extern "C" std::uint32_t twv_vita_bundle_compiled() { return 1; }
+// The disc search (disc/disc_locate.cpp, tested in disc_image_test.cpp): here game.iso when the
+// fixture file exists, its ID and region from its first bytes, read in place as an ISO. A search
+// problem the entry must show is forced with discStatus/discFormat/discDetail.
+int systemLanguage = -1, systemEnter = -1, confirmCircle = -1;
+int discStatus = TWV_DISC_OK;
+const char* discFormat = "ISO";
+const char* discDetail = "";
+std::string readDiscFixture() {
+    std::ifstream file("ux0:data/twilight-vita/game.iso", std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+extern "C" int twv_disc_find(const char* configured, TwvDiscReport* out) {
+    (void)configured;
+    *out = TwvDiscReport{};
+    std::snprintf(out->path, sizeof out->path, "%s", "ux0:data/twilight-vita/game.iso");
+    std::snprintf(out->searched, sizeof out->searched, "%s", "ux0:data/twilight-vita/game.iso=ok");
+    if (!std::filesystem::exists("ux0:data/twilight-vita/game.iso")) return out->status = TWV_DISC_NO_IMAGE;
+    const std::string image = readDiscFixture();
+    out->file_bytes = out->disc_bytes = image.size();
+    std::snprintf(out->format, sizeof out->format, "%s", discFormat);
+    std::snprintf(out->detail, sizeof out->detail, "%s", discDetail);
+    for (std::size_t i = 0; i < 6 && i < image.size(); ++i) out->game_id[i] = image[i] >= 0x20 && image[i] < 0x7f ? image[i] : '?';
+    out->region = out->game_id[3];
+    return out->status = discStatus;
+}
+extern "C" long long twv_disc_read(const char* path, unsigned long long offset, void* out, unsigned len) {
+    assert(std::string(path) == "ux0:data/twilight-vita/game.iso");
+    const std::string image = readDiscFixture();
+    if (offset >= image.size()) return 0;
+    const std::size_t n = std::min<std::size_t>(len, image.size() - offset);
+    std::memcpy(out, image.data() + offset, n);
+    return (long long)n;
+}
+extern "C" const char* twv_disc_status_name(int status) { return status == TWV_DISC_OK ? "ok" : "problem"; }
+extern "C" const char* twv_disc_card_folder(char region) { return region == 'P' ? "EUR" : "USA"; }
+extern "C" int twv_disc_read_test(const char*, unsigned, unsigned, TwvDiscReadTest* out) { *out = {}; return 0; }
+extern "C" int twv_vita_system_params(int* language, int* enter, int* init) {
+    *language = systemLanguage; *enter = systemEnter; *init = 0; return systemLanguage >= 0;
+}
+extern "C" void twv_vita_set_confirm_circle(int circle) { confirmCircle = circle; }
 #if TWV_VITA_BENCHMARK
 extern "C" int twv_vita_benchmark_enable(const char* name) {
     state.calls.emplace_back("benchmark");
@@ -611,10 +651,11 @@ int main() {
            state.text.at("screen_problem") == "--vita-ticks needs fixed, frames or single, once.");
     // The disc, checked before anything else: missing (disc-like files in the folder are named), too
     // short to read, not a disc, the other regions Dusklight accepts, another game, cut short.
-    folder = {"notes.txt", "Zelda.iso", "game.iso.txt", "tp.rvz"};
+    // (The search reads .iso/.ciso/.gcz images itself; the hint names files it does not take.)
+    folder = {"notes.txt", "game.iso.txt", "Zelda.nkit", "game.iso.zip"};
     assert(run("--vita-clocks=system", false) == 2 && state.gameCalls == 0 && state.nativeCalls.empty());
     assert(state.text.at("startup_screen") == "disc_missing" && state.text.count("no_disc") &&
-           state.text.at("disc_similar_files") == "Zelda.iso, game.iso.txt" &&
+           state.text.at("disc_similar_files") == "game.iso.txt, Zelda.nkit" &&
            state.text.at("screen_path") == "ux0:data/twilight-vita/game.iso");
     folder.clear();
     discImage = "host fixture";
@@ -632,6 +673,61 @@ int main() {
     discImage = gameCubeImage("GZ2P01");
     assert(run("--vita-clocks=system") == 7 && state.text.at("disc_check") == "ok" &&
            state.events.at("disc_tested_on_vita") == 1 && !state.text.count("startup_screen"));
+    // The search's own problems, each on its screen: a format it only names, a damaged CISO, NKit, a
+    // Wii disc, a Twilight Princess revision Dusklight does not take; the chosen CISO's files then
+    // read through its container (here the plain fixture).
+    const struct { int status; const char* format; const char* detail; const char* screen; } searchProblems[] = {
+        {TWV_DISC_UNSUPPORTED_FORMAT, "RVZ", "RVZ disc images are not supported by the Vita build", "disc_container"},
+        {TWV_DISC_UNSUPPORTED_FORMAT, "CISO", "CISO file size mismatch", "disc_damaged"},
+        {TWV_DISC_UNSUPPORTED_FORMAT, "NKit", "NKit images are not supported", "disc_nkit"},
+        {TWV_DISC_WRONG_DISC, "ISO", "a Wii disc; the Vita reads the GameCube disc", "disc_wii"},
+        {TWV_DISC_WRONG_DISC, "ISO", "GZ2P01 disc 0 revision 1; Dusklight accepts disc 0 revision 0", "disc_wrong_game"},
+        {TWV_DISC_UNREADABLE, "", "the file is empty", "disc_unreadable"},
+        {TWV_DISC_UNREADABLE, "", "not a file", "disc_not_a_file"},
+        {TWV_DISC_NOT_GAMECUBE, "unknown", "no GameCube disc magic", "disc_not_gamecube"},
+    };
+    for (const auto& problem : searchProblems) {
+        discStatus = problem.status; discFormat = problem.format; discDetail = problem.detail;
+        assert(run(nullptr) == 2 && state.gameCalls == 0 && state.text.at("startup_screen") == problem.screen &&
+               state.text.at("screen_path") == "ux0:data/twilight-vita/game.iso");
+    }
+    assert(state.text.at("disc_detail") == "no GameCube disc magic");
+    discStatus = TWV_DISC_OK; discDetail = "";
+    discFormat = "CISO";
+    assert(run("--vita-clocks=system") == 7 && state.text.at("disc_check") == "ok" && state.text.at("disc_format") == "CISO");
+    discImage = gameCubeImage("GZ2P01").substr(0, 0x2900);
+    assert(run(nullptr) == 2 && state.text.at("startup_screen") == "disc_truncated");
+    discImage = gameCubeImage("GZ2P01");
+    discFormat = "ISO";
+    // Language and confirm button (runtime/player_settings.hpp; the disc is the fake GZ2P01).
+    // English with no choice anywhere: Dusklight's default, nothing added.
+    systemLanguage = -1; systemEnter = -1;
+    assert(run("--vita-clocks=system") == 7 && state.gameArgs.size() == 5 && confirmCircle == 0);
+    assert(state.text.at("language") == "english (default)" && state.events.at("game_language_override") == 0);
+    assert(state.text.at("confirm_button") == "cross (default system, unread)");
+    // The console in Brazilian Portuguese with circle as Enter: Spanish, A on circle.
+    systemLanguage = 17; systemEnter = 0;
+    assert(run("--vita-clocks=system --stage R_SP01,4,2,0") == 7 && confirmCircle == 1);
+    assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
+        (std::vector<std::string>{"--cvar", "game.language=3", "--stage", "R_SP01,4,2,0"}));
+    assert(state.text.at("language") == "spanish (system)" && state.events.at("system_language") == 17);
+    assert(state.text.at("confirm_button") == "circle (default system, console circle)");
+    // args.txt wins over the console; config.json's own language is left to Dusklight.
+    assert(run("--vita-language=it --vita-confirm=cross") == 7 && confirmCircle == 0);
+    assert(state.gameArgs.size() == 7 && state.gameArgs[6] == "game.language=4");
+    assert(state.text.at("confirm_button") == "cross (args cross)");
+    writeFile("ux0:data/twilight-vita/config.json",
+              "{\n    \"backend.isoPath\": \"ux0:data/twilight-vita/game.iso\",\n    \"game.language\": 1,\n"
+              "    \"vita.confirmButton\": \"cross\"\n}");
+    assert(run("--vita-clocks=system") == 7 && state.gameArgs.size() == 5 && confirmCircle == 0);
+    assert(state.text.at("language") == "german (config)" && state.text.at("confirm_button") == "cross (config cross)");
+    assert(run("--vita-language=system") == 7 && state.gameArgs[6] == "game.language=3");
+    std::filesystem::remove("ux0:data/twilight-vita/config.json");
+    systemLanguage = -1; systemEnter = -1;
+    for (const char* bad : {"--vita-language=portuguese", "--vita-language=en --vita-language=de",
+                            "--vita-confirm=square", "--vita-confirm=cross --vita-confirm=circle",
+                            "--vita-disc-read-test=0", "--vita-disc-read-test=2000"})
+        checkRejected(run(bad));
 #if TWV_VITA_BENCHMARK
     assert(run("--vita-clocks=legacy444 --vita-benchmark=C1-FIGHT") == 7);
     checkClocks(true, true); assert(state.benchmarkCalls == 1 && state.gameArgs.size() == 5);

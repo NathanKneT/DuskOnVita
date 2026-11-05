@@ -4,7 +4,7 @@
 # where the Vita needs a different implementation, the replacement lives in
 # platform/vita/ and the reason is written at the top of that file.
 #
-#   twv_nod        nod C API subset on plain GCM/ISO images (the Rust crate has no Vita target)
+#   twv_nod        nod C API subset on GCM/ISO, CISO and GCZ images (the Rust crate has no Vita target)
 #   twv_borealis   log, io, data, cli, task, url, presentation, disc, file_select; http/ws/update
 #                  with no backend (BOREALIS_HTTP_BACKEND=none); discord and sentry off; net
 #                  reports unavailable (patches/borealis/0001); crash is a Vita no-op
@@ -39,8 +39,11 @@ target_link_libraries(twv_platform_headers INTERFACE
 target_compile_options(twv_platform_headers INTERFACE -fsigned-char)
 
 # --- nod (disc reader) ---
-add_library(twv_nod STATIC platform/vita/disc/gcm_nod.cpp)
-target_include_directories(twv_nod PUBLIC "${TWV_NOD_INCLUDE}")
+# disc_image.hpp: ISO, CISO and GCZ (inflated with miniz); disc_locate.cpp: the start-up disc
+# search and probe main_vita.cpp calls (disc/disc_report.h, plain C types).
+add_library(twv_nod STATIC platform/vita/disc/gcm_nod.cpp platform/vita/disc/disc_locate.cpp)
+target_include_directories(twv_nod PUBLIC "${TWV_NOD_INCLUDE}" PRIVATE "${CMAKE_SOURCE_DIR}/platform/vita")
+target_link_libraries(twv_nod PRIVATE twv_miniz)
 
 # --- Borealis ---
 add_library(twv_borealis STATIC

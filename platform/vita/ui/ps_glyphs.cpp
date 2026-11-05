@@ -1,6 +1,7 @@
 // PlayStation-style button glyphs, drawn in code (see ps_glyphs.hpp). Shapes are signed distance
 // functions in texel units with one texel of anti-aliasing; letters come from a 5x7 pixel font.
 #include "ui/ps_glyphs.hpp"
+#include "runtime/player_settings.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -166,7 +167,7 @@ void text_centred(Canvas& c, const char* str, float cx, float cy, float cw, floa
 enum Kind {
     // Layout: white symbols and white bases (the layout tints them), IA8.
     SymCross, SymCircle, SymSquare, SymTriangle, SymSelect,
-    BaseDisc, BaseKey, FullSquare, FullTriangle, DarkCircle, LeftStick, RightStick,
+    BaseDisc, BaseKey, FullSquare, FullTriangle, DarkCircle, DarkCross, LeftStick, RightStick,
     // In-text: full colour, RGBA8.
     TextCross, TextCircle, TextSquare, TextTriangle, TextL, TextR, TextSelect,
     TextLeftStick, TextLeftStickTilt, TextRightStick,
@@ -179,7 +180,9 @@ void draw(Canvas& c, Kind kind, float stretch) {
     const float fit = std::min(m, W * 0.94f / stretch); // the stretched shape stays inside
     switch (kind) {
     // Sized to the visual weight of the GameCube letters they replace (checked in Vita3K captures).
-    case SymCross: cross(c, cx, cy, m * 0.86f, kWhite); break;
+    // The cross keeps inside a stretched pane like the circle (only the B pane is stretched, and it
+    // shows a cross when circle confirms).
+    case SymCross: cross(c, cx, cy, std::min(m * 0.86f, fit), kWhite); break;
     case SymCircle: circle(c, cx, cy, std::min(m * 0.96f, fit), kWhite); break;
     case SymSquare: square(c, cx, cy, std::min(m * 0.84f, fit), kWhite); break;
     case SymTriangle: triangle(c, cx, cy, m * 0.96f, kWhite); break;
@@ -215,6 +218,12 @@ void draw(Canvas& c, Kind kind, float stretch) {
         const float r = m * 0.48f;
         disc(c, cx, cy, r, kBlack);
         circle(c, cx, cy, r * 1.15f, kWhite);
+        break;
+    }
+    case DarkCross: {
+        const float r = m * 0.48f;
+        disc(c, cx, cy, r, kBlack);
+        cross(c, cx, cy, r * 1.05f, kWhite);
         break;
     }
     case LeftStick:
@@ -451,17 +460,41 @@ constexpr const char* kTextLabel[TextCount] = {"text_cross", "text_circle", "tex
                                                "text_l", "text_r", "text_select", "text_left_stick",
                                                "text_left_stick_tilt", "text_right_stick"};
 
+// With circle confirming (runtime/player_settings.hpp: A on circle, B on cross) the A and B prompts
+// trade symbols; their HUD colours follow the symbol (ps_hud_tint).
+Kind confirm_swapped(Kind k) {
+    switch (k) {
+    case SymCross: return SymCircle;
+    case SymCircle: return SymCross;
+    case DarkCircle: return DarkCross;
+    case TextCross: return TextCircle;
+    case TextCircle: return TextCross;
+    default: return k;
+    }
+}
+
 struct Set {
+    bool circleConfirms;
     Owned layout[kLayoutCount];
     Owned text[TextCount];
-    Set() {
+    explicit Set(bool circle) : circleConfirms(circle) {
         for (int i = 0; i < kLayoutCount; ++i)
-            make(layout[i], kLayout[i].name, kLayout[i].w * 2, kLayout[i].h * 2, kLayout[i].kind, kLayout[i].stretch);
-        for (int i = 0; i < TextCount; ++i) make(text[i], kTextLabel[i], 48, 48, kTextKind[i], 1.0f);
+            make(layout[i], kLayout[i].name, kLayout[i].w * 2, kLayout[i].h * 2, layout_kind(i), kLayout[i].stretch);
+        for (int i = 0; i < TextCount; ++i) {
+            const bool traded = circle && (i == TCross || i == TCircle); // the label names what is drawn
+            make(text[i], kTextLabel[traded ? TCross + TCircle - i : i], 48, 48,
+                 circle ? confirm_swapped(kTextKind[i]) : kTextKind[i], 1.0f);
+        }
     }
+    Kind layout_kind(int i) const { return circleConfirms ? confirm_swapped(kLayout[i].kind) : kLayout[i].kind; }
 };
+// One set per confirm button, drawn at first use (the game reads the choice made before it starts).
 const Set& glyphs() {
-    static const Set set;
+    if (twv_vita_confirm_circle()) {
+        static const Set swapped(true);
+        return swapped;
+    }
+    static const Set set(false);
     return set;
 }
 
@@ -529,7 +562,7 @@ bool ps_hud_tint(const void* timg, unsigned* rgb) {
     }
     for (int i = 0; i < kLayoutCount; ++i) {
         if (glyphs().layout[i].tex.timg != timg) continue;
-        switch (kLayout[i].kind) {
+        switch (glyphs().layout_kind(i)) {
         case BaseDisc: case BaseKey: *rgb = kHudBase; return true;
         case SymCross: *rgb = kHudCross; return true;
         case SymCircle: *rgb = kHudCircle; return true;

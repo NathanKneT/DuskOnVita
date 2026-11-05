@@ -248,10 +248,21 @@ for lazy in 0 1; do
     done
   done
 done
+# Disc images: the nod C API (gcm_nod_test) and the containers, the start-up search and probe
+# (disc_image_test), with miniz as the Vita build links it (GCZ blocks).
+${CC:-gcc} -O1 -g -c "$work/deps/miniz/miniz.c" -I "$work/deps/miniz" -o "$out/miniz.o"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
-  -I "$work/deps/nodheaders/nod-ffi/include" \
-  "$repo/tests/gcm_nod_test.cpp" "$repo/platform/vita/disc/gcm_nod.cpp" -o "$out/gcm_nod_test"
+  -I "$work/deps/nodheaders/nod-ffi/include" -I "$repo/platform/vita" -isystem "$work/deps/miniz" \
+  "$repo/tests/gcm_nod_test.cpp" "$repo/platform/vita/disc/gcm_nod.cpp" "$out/miniz.o" -o "$out/gcm_nod_test"
 "$out/gcm_nod_test"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" -isystem "$work/deps/miniz" \
+  "$repo/tests/disc_image_test.cpp" "$repo/platform/vita/disc/disc_locate.cpp" "$out/miniz.o" -o "$out/disc_image_test"
+"$out/disc_image_test"
+# Language and confirm button (runtime/player_settings.hpp), with the input script's CROSS/CIRCLE.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/player_settings_test.cpp" -o "$out/player_settings_test"
+"$out/player_settings_test"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined \
   -I "$repo/platform/vita" \
   "$repo/tests/scratch_alloc_test.cpp" -o "$out/scratch_alloc_test"
@@ -657,7 +668,7 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 # game.buttonPrompts=playstation: glyphs drawn in code as GX textures (patches/dusklight/0016).
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/platform/vita/ui/ps_glyphs.cpp" "$repo/tests/ps_glyphs_test.cpp" \
-  -o "$out/ps_glyphs_test"
+  "$repo/platform/vita/runtime/player_settings.cpp" -o "$out/ps_glyphs_test"
 "$out/ps_glyphs_test"
 # Main-thread actor profile: type slots, distance bins, top-N choice, receipt text, sampling.
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

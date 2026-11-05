@@ -1,6 +1,7 @@
 // Vita process entry. Validates port options and records clock policy before
 // handing control to Dusklight's unmodified PC entry point
-// (src/m_Do/m_Do_main.cpp game_main) with the disc at its fixed Vita location.
+// (src/m_Do/m_Do_main.cpp game_main) with the disc image the start-up search found
+// (disc/disc_report.h), the console's language and its confirm button (runtime/player_settings.hpp).
 #include "runtime/telemetry.hpp"
 #include "runtime/renderer_options.hpp"
 #include "runtime/gpu_options.hpp"
@@ -12,6 +13,8 @@
 #include "ui/startup_screen.hpp"
 #include "runtime/fast_actors.hpp"
 #include "runtime/fast_painter.hpp"
+#include "runtime/player_settings.hpp"
+#include "disc/disc_report.h"
 
 #include <psp2/io/dirent.h>
 #include <psp2/kernel/processmgr.h>
@@ -60,6 +63,8 @@ extern "C" void dusk_vita_fixed_ticks(int max_ticks_per_loop) __attribute__((wea
 extern "C" int twv_vita_frame_overlap_select(int enabled) __attribute__((weak));
 // --vita-import-saves (aurora/save_safety.cpp): strong, so the card's save-safety hooks are linked.
 extern "C" int twv_vita_save_import_select(int mode);
+// runtime/system_params.cpp: the console's language and Enter button (SCE_SYSTEM_PARAM_*), -1 unread.
+extern "C" int twv_vita_system_params(int* language, int* enterButton, int* initResult);
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
 // MEM1/ARAM reserves are bounded independently in the Aurora adapter.
@@ -128,37 +133,20 @@ void argsError(const char* text) {
     twv::vita::startupErrorExit(startupText, 2);
 }
 
-// The disc image at `path`: header, then FST and file extents (gcm_nod.cpp reads the same bytes).
-twv::vita::DiscCheck checkDisc(const char* path) {
+// The image the disc search chose: its disc header, then FST and file extents, read through its
+// container (gcm_nod.cpp reads the same bytes). An image whose files end past the disc's last byte
+// (a copy or dump that stopped early) gets its own screen.
+twv::vita::DiscCheck checkDiscFiles(const TwvDiscReport& report) {
     using namespace twv::vita;
-    DiscCheck d;
-    struct stat info{};
-    if (stat(path, &info) != 0) {
-        d.problem = DiscProblem::Missing;
-        return d;
-    }
-    if (!S_ISREG(info.st_mode)) {
-        d.problem = DiscProblem::NotAFile;
-        return d;
-    }
-    const uint64_t size = static_cast<uint64_t>(info.st_size);
-    FILE* file = std::fopen(path, "rb");
-    if (!file) {
-        d.problem = DiscProblem::Unreadable;
-        d.size = size;
-        return d;
-    }
     static uint8_t head[DiscHeaderBytes];
-    const std::size_t n = std::fread(head, 1, sizeof head, file);
-    d = check_disc_header(head, n, size);
+    const long long n = twv_disc_read(report.path, 0, head, sizeof head);
+    DiscCheck d = check_disc_header(head, n > 0 ? std::size_t(n) : 0, report.disc_bytes);
     if (d.problem == DiscProblem::None) {
         std::unique_ptr<uint8_t[]> fst(new (std::nothrow) uint8_t[d.fstSize]);
-        const bool read = fst && std::fseek(file, long(d.fstOffset), SEEK_SET) == 0 &&
-                          std::fread(fst.get(), 1, d.fstSize, file) == d.fstSize;
-        if (read) check_disc_files(d, fst.get(), d.fstSize);
+        if (fst && twv_disc_read(report.path, d.fstOffset, fst.get(), d.fstSize) == (long long)d.fstSize)
+            check_disc_files(d, fst.get(), d.fstSize);
         else d.problem = DiscProblem::Unreadable;
     }
-    std::fclose(file);
     return d;
 }
 
@@ -188,6 +176,33 @@ bool similarDiscFiles(char* out, std::size_t size) {
     }
     sceIoDclose(dir);
     return found != 0;
+}
+
+// config.json in the data folder (Dusklight's user settings), for the few keys read before the game
+// starts: backend.isoPath, game.language and vita.confirmButton. Empty when absent or too large.
+const char* readConfigJson() {
+    static char text[64 * 1024];
+    text[0] = 0;
+    char path[160];
+    std::snprintf(path, sizeof path, "%s/config.json", twv::vita::DataRoot);
+    if (FILE* file = std::fopen(path, "rb")) {
+        const auto n = std::fread(text, 1, sizeof text - 1, file);
+        const bool tooLong = n == sizeof text - 1 && std::fgetc(file) != EOF;
+        std::fclose(file);
+        text[tooLong ? 0 : n] = 0;
+        if (tooLong) twv::vita::telemetryText("config_json", "larger than 64 KiB; not read before the game");
+    }
+    return text;
+}
+
+// Inserts two game arguments before the user's own (index 5), so a later user --cvar still wins.
+bool insertGameArgs(char** gameArgs, int& gameArgc, char* a, char* b) {
+    if (gameArgc + 2 > 31) return false;
+    for (int i = gameArgc - 1; i >= 5; --i) gameArgs[i + 2] = gameArgs[i];
+    gameArgs[5] = a;
+    gameArgs[6] = b;
+    gameArgc += 2;
+    return true;
 }
 
 void logFreeMemory(const char* phase) {
@@ -249,33 +264,58 @@ int main(int, char**) {
     static char arg1[] = "--user-dir";
     static char arg2[128];
     static char arg3[] = "--dvd";
-    static char arg4[128];
+    static char arg4[TWV_DISC_PATH_BYTES];
     std::snprintf(arg2, sizeof arg2, "%s", twv::vita::DataRoot);
-    std::snprintf(arg4, sizeof arg4, "%s", twv::vita::DefaultDisc);
     twv::vita::telemetryText("user_dir", arg2);
-    twv::vita::telemetryText("disc_path", arg4);
 
-    // The disc before anything else: Dusklight's own checks would end in its prelaunch menu, which the
-    // Vita build does not have (a black screen). Each problem gets a screen that says what to do.
+    // The disc image before anything else (disc/disc_report.h): config.json's backend.isoPath,
+    // game.iso, then any image in our folder or ux0:data/dusklight/, read in place; then the chosen image's
+    // files, through its container. Dusklight's own checks would end in its prelaunch menu, which the
+    // Vita build does not have (a black screen): each problem gets a screen that says what to do.
+    // The disc header decides the region (save folder) and the languages on offer.
+    const char* configJson = readConfigJson();
+    static char configuredDisc[TWV_DISC_PATH_BYTES];
+    if (!twv::vita::json_string(twv::vita::json_top_level_value(configJson, "backend.isoPath"), configuredDisc,
+                                sizeof configuredDisc))
+        configuredDisc[0] = 0;
+    static TwvDiscReport disc;
+    twv_disc_find(configuredDisc, &disc);
+    twv::vita::telemetryText("disc_search", disc.searched);
+    twv::vita::telemetryText("disc_status", twv_disc_status_name(disc.status));
+    twv::vita::telemetryText("disc_path", disc.path);
+    if (disc.format[0]) twv::vita::telemetryText("disc_format", disc.format);
+    if (disc.game_id[0]) twv::vita::telemetryText("disc_id", disc.game_id);
+    if (disc.detail[0]) twv::vita::telemetryText("disc_detail", disc.detail);
     {
         using namespace twv::vita;
-        const DiscCheck disc = checkDisc(arg4);
-        telemetryText("disc_check", DiscProblemNames[int(disc.problem)]);
-        if (disc.gameId[0]) telemetryText("disc_id", disc.gameId);
-        telemetryEvent("disc_bytes", static_cast<long long>(disc.size));
-        if (disc.needed) telemetryEvent("disc_needed_bytes", static_cast<long long>(disc.needed));
-        if (disc.problem == DiscProblem::None) telemetryEvent("disc_tested_on_vita", disc.tested);
-        if (disc.problem != DiscProblem::None) {
-            if (disc.problem == DiscProblem::Missing)
+        DiscCheck check = disc_search_problem(disc);
+        if (check.problem == DiscProblem::None) check = checkDiscFiles(disc);
+        telemetryText("disc_check", DiscProblemNames[int(check.problem)]);
+        if (check.needed) telemetryEvent("disc_needed_bytes", static_cast<long long>(check.needed));
+        if (check.problem != DiscProblem::None) {
+            if (check.problem == DiscProblem::Missing)
                 telemetryText("no_disc", "Supply your own game.iso in ux0:data/twilight-vita/");
             static char similar[SimilarLimit + 1];
-            const bool found = (disc.problem == DiscProblem::Missing || disc.problem == DiscProblem::NotAFile) &&
+            const bool found = (check.problem == DiscProblem::Missing || check.problem == DiscProblem::NotAFile) &&
                                similarDiscFiles(similar, sizeof similar);
             if (found) telemetryText("disc_similar_files", similar);
-            disc_message(startupText, disc, arg4, found ? similar : nullptr);
+            disc_message(startupText, check, disc.path, found ? similar : nullptr);
             startupErrorExit(startupText, 2);
         }
     }
+    {
+        char text[96];
+        std::snprintf(text, sizeof text, "%c %s rev %d, saves in %s/", disc.region,
+                      disc.region == 'P' ? "Europe" : disc.region == 'J' ? "Japan" : "USA", disc.revision,
+                      twv_disc_card_folder(disc.region));
+        twv::vita::telemetryText("disc_region", text);
+        twv::vita::telemetryText("disc_languages", twv::vita::disc_languages_text(disc.region));
+        twv::vita::telemetryEvent("disc_bytes", (long long)disc.disc_bytes);
+        twv::vita::telemetryEvent("disc_file_bytes", (long long)disc.file_bytes);
+        if (disc.block_bytes) twv::vita::telemetryEvent("disc_block_bytes", disc.block_bytes);
+        twv::vita::telemetryEvent("disc_tested_on_vita", disc.region == 'P');
+    }
+    std::snprintf(arg4, sizeof arg4, "%s", disc.path);
     // Optional native test entry; no actor/camera placement or fabricated save.
     // Original game_main owns option validation and original stage/spawn loading.
     static char extra[512];
@@ -484,6 +524,10 @@ int main(int, char**) {
     //   saves for this disc and the card has no file of that name; never moved or overwritten.
     // --vita-fast-<name>=off|on|verify (runtime/fast_actors.hpp): the same as the shadow collection,
     //   per switch; default FastActorPlay with the profile, off otherwise.
+    // --vita-language=system|english|german|french|spanish|italian|japanese (or en de fr es it ja) and
+    // --vita-confirm=system|cross|circle: player settings (runtime/player_settings.hpp), over
+    // config.json's game.language / vita.confirmButton. --vita-disc-read-test=MIB: read speed of
+    // the disc image through its container before the game starts (receipts only).
     int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1, overlapChoice = -1, fastShadowChoice = -1;
     int importChoice = -1;
     int fastActorChoices[twv::vita::FastActorSwitchCount];
@@ -492,6 +536,8 @@ int main(int, char**) {
     //   choices either. Default: FastPainterPlay with the profile, off otherwise.
     int fastPainterChoices[twv::vita::FastPainterOptionCount];
     for (int& c : fastPainterChoices) c = -1;
+    int languageArg = twv::vita::LangNone, confirmArg = -1;
+    long discReadTestMib = 0;
     bool inputScript = false;
     if (haveArgs) {
         for (char* token = std::strtok(extra, " \t\r\n"); token; token = std::strtok(nullptr, " \t\r\n")) {
@@ -499,6 +545,31 @@ int main(int, char**) {
             if (const int choice = twv::vita::fastActorOption(token, fastActorChoices)) {
                 if (choice < 0) {
                     argsError("--vita-fast-<name> needs off, on or verify, once per name");
+                    argsExit();
+                }
+                continue;
+            }
+            if (std::strncmp(token, "--vita-language=", 16) == 0) {
+                if (languageArg != twv::vita::LangNone ||
+                    (languageArg = twv::vita::parse_language(token + 16)) == twv::vita::LangNone) {
+                    argsError("--vita-language needs system, english, german, french, spanish, italian or japanese, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (std::strncmp(token, "--vita-confirm=", 15) == 0) {
+                twv::vita::Confirm choice;
+                if (confirmArg >= 0 || !twv::vita::parse_confirm(token + 15, choice)) {
+                    argsError("--vita-confirm needs system, cross or circle, once");
+                    argsExit();
+                }
+                confirmArg = int(choice);
+                continue;
+            }
+            if (std::strncmp(token, "--vita-disc-read-test=", 22) == 0) {
+                if (discReadTestMib || !twv::vita::json_int(token + 22, discReadTestMib) || discReadTestMib < 1 ||
+                    discReadTestMib > 1024) {
+                    argsError("--vita-disc-read-test needs 1..1024 MiB, once");
                     argsExit();
                 }
                 continue;
@@ -654,6 +725,70 @@ int main(int, char**) {
         dusk_vita_fixed_ticks(maxTicks);
     }
     twv::vita::telemetryEvent("fixed_game_ticks", fixedTicks ? maxTicks : 0);
+    // Language and confirm button (runtime/player_settings.hpp): the console's settings unless the
+    // player chose in args.txt or config.json; the language fitted to what this disc carries.
+    {
+        using namespace twv::vita;
+        int systemLanguage = -1, systemEnter = -1, appUtil = 0;
+        twv_vita_system_params(&systemLanguage, &systemEnter, &appUtil);
+        telemetryEvent("system_language", systemLanguage);
+        telemetryText("system_language_name", system_language_name(systemLanguage));
+        telemetryEvent("system_enter_button", systemEnter);
+        telemetryEvent("system_params_apputil_init", appUtil);
+        long configValue = 0;
+        const int configLanguage = json_int(json_top_level_value(configJson, "game.language"), configValue)
+                                       ? config_language(configValue) : LangNone;
+        const LanguageChoice language = choose_language(disc.region, languageArg, configLanguage, systemLanguage);
+        char text[160];
+        std::snprintf(text, sizeof text, "%s (%s%s%s%s)", language_name(language.language), language.source,
+                      language.fitted ? ": " : "", language.fitted ? language_name(language.requested) : "",
+                      language.fitted ? " is not on this disc" : "");
+        telemetryText("language", text);
+        telemetryEvent("game_language", language.language);
+        // Only when Dusklight would pick something else (config.json's value, or English when it has
+        // none): a --cvar before the user's own. An override is never saved to config.json, and it
+        // replaces a saved value there at Dusklight's next save, so it is left out when not needed.
+        const int dusklightWould = configLanguage >= 0 ? configLanguage : LangEnglish;
+        telemetryEvent("game_language_override", language.language != dusklightWould);
+        if (language.language != dusklightWould) {
+            static char cvar[] = "--cvar", value[40];
+            std::snprintf(value, sizeof value, "game.language=%d", language.language);
+            if (!insertGameArgs(gameArgs, gameArgc, cvar, value)) {
+                argsError("too many arguments for the language setting");
+                argsExit();
+            }
+        }
+        Confirm confirm = Confirm::System;
+        const char* confirmSource = "default";
+        char configConfirm[16];
+        if (confirmArg >= 0) {
+            confirm = Confirm(confirmArg);
+            confirmSource = "args";
+        } else if (json_string(json_top_level_value(configJson, "vita.confirmButton"), configConfirm,
+                               sizeof configConfirm)) {
+            if (parse_confirm(configConfirm, confirm)) confirmSource = "config";
+            else telemetryText("config_json", "vita.confirmButton needs system, cross or circle; using system");
+        }
+        const bool circle = confirm_on_circle(confirm, systemEnter);
+        twv_vita_set_confirm_circle(circle);
+        std::snprintf(text, sizeof text, "%s (%s %s%s)", circle ? "circle" : "cross", confirmSource,
+                      ConfirmNames[int(confirm)], confirm == Confirm::System ? (systemEnter < 0 ? ", unread" :
+                      systemEnter == SysEnterCircle ? ", console circle" : ", console cross") : "");
+        telemetryText("confirm_button", text);
+    }
+    if (discReadTestMib) {
+        // Two passes over the same bytes: 1 MiB requests (whole files) and 32 KiB (small reads).
+        static const unsigned chunks[] = {1u << 20, 32u << 10};
+        for (unsigned chunk : chunks) {
+            TwvDiscReadTest test{};
+            const int ok = twv_disc_read_test(disc.path, unsigned(discReadTestMib), chunk, &test);
+            char text[160];
+            std::snprintf(text, sizeof text, "%s %s chunk=%u bytes=%llu us=%llu kib_per_s=%llu inflated=%llu", disc.format,
+                          ok ? "ok" : "failed", chunk, test.bytes, test.micros,
+                          test.micros ? test.bytes * 1000000ull / 1024ull / test.micros : 0ull, test.blocks_inflated);
+            twv::vita::telemetryText("disc_read_test", text);
+        }
+    }
     // Frame overlap: after the GX thread choice (typed or from the profile), before the game starts.
     // With the play profile and no typed choice: FrameOverlapPlay.
     const int overlap = overlapChoice >= 0 ? overlapChoice : playProfile ? FrameOverlapPlay : -1;

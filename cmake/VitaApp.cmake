@@ -26,6 +26,8 @@ add_library(twv_vita_runtime STATIC
         platform/vita/runtime/fast_shadow_collect.cpp
         platform/vita/runtime/fast_actors.cpp
         platform/vita/runtime/fast_painter.cpp
+        platform/vita/runtime/player_settings.cpp
+        platform/vita/runtime/system_params.cpp
         platform/vita/gfx_vgl/bundle_options.cpp
         platform/vita/gfx_vgl/gx_fast_control.cpp
         platform/vita/audio/audio_out.cpp)
@@ -43,7 +45,8 @@ target_link_options(twv_vita_runtime INTERFACE -Wl,--wrap=abort)
 target_link_options(twv_vita_runtime INTERFACE -Wl,--defsym=__sce_headroom=0x2000)
 target_link_libraries(twv_vita_runtime PUBLIC
         SceLibKernel_stub SceIofilemgr_stub SceKernelThreadMgr_stub SceProcessmgr_stub SceSysmem_stub ScePower_stub
-        SceAudio_stub SceDisplay_stub SceCtrl_stub)
+        SceAudio_stub SceDisplay_stub SceCtrl_stub
+        SceAppUtil_stub) # SceAppUtil: runtime/system_params.cpp (language, Enter button)
 set_source_files_properties(platform/vita/main_vita.cpp platform/vita/compat/newlib_gaps.c PROPERTIES COMPILE_OPTIONS -fshort-enums)
 # patches/dusklight/0016: game.buttonPrompts=playstation draws its button glyphs here (no artwork).
 target_sources(twv_vita_runtime PRIVATE platform/vita/ui/ps_glyphs.cpp)

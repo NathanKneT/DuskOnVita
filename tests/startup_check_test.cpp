@@ -174,11 +174,13 @@ int main(int argc, char** argv) {
 
     // Messages: one per problem, each fits the screen (with long worst cases) and names the path.
     MessageText t;
-    for (int p = 1; p <= int(DiscProblem::Truncated); ++p) {
+    for (int p = 1; p <= int(DiscProblem::Damaged); ++p) {
         DiscCheck dc = check(pal, 0x50200000ull - 1);
         dc.problem = DiscProblem(p);
         dc.format = "CISO";
         std::strcpy(dc.gameId, "RZDP01");
+        // The longest reader message (disc_image.hpp), for the damaged screen.
+        dc.detail = "CISO file size mismatch: expected at least 1459978240 bytes, got 1073741824";
         // The longest list main_vita.cpp passes: SimilarLimit characters.
         const char* similar = "The Legend of Zelda - Twilight Princess (Europe) (En,Fr,De,Es,It).iso, game.iso.iso";
         static_assert(std::char_traits<char>::length("The Legend of Zelda - Twilight Princess (Europe) (En,Fr,De,Es,It).iso, game.iso.iso") >= SimilarLimit - 4);
@@ -188,6 +190,45 @@ int main(int argc, char** argv) {
         assert(namesPath);
         assert(std::strcmp(t.kind + 5, DiscProblemNames[p]) == 0);
         render(t.kind, t);
+    }
+    // The disc search's result (disc/disc_report.h) on its screen.
+    {
+        TwvDiscReport r{};
+        assert(disc_search_problem(r).problem == DiscProblem::None);
+        const struct { int status; const char* format; const char* detail; DiscProblem problem; } cases[] = {
+            {TWV_DISC_NO_IMAGE, "", "", DiscProblem::Missing},
+            {TWV_DISC_UNREADABLE, "", "not a file", DiscProblem::NotAFile},
+            {TWV_DISC_UNREADABLE, "", "the file is empty", DiscProblem::Unreadable},
+            {TWV_DISC_UNSUPPORTED_FORMAT, "RVZ", "RVZ disc images are not supported", DiscProblem::Container},
+            {TWV_DISC_UNSUPPORTED_FORMAT, "CISO", "Invalid CISO block map", DiscProblem::Damaged},
+            {TWV_DISC_UNSUPPORTED_FORMAT, "GCZ", "GCZ file is cut short", DiscProblem::Damaged},
+            {TWV_DISC_UNSUPPORTED_FORMAT, "NKit", "NKit images are not supported", DiscProblem::NKit},
+            {TWV_DISC_NOT_GAMECUBE, "unknown", "no GameCube disc magic", DiscProblem::NotGameCube},
+            {TWV_DISC_WRONG_DISC, "ISO", "a Wii disc; the Vita reads the GameCube disc", DiscProblem::Wii},
+            {TWV_DISC_WRONG_DISC, "ISO", "not Twilight Princess for GameCube", DiscProblem::WrongGame},
+        };
+        for (const auto& c : cases) {
+            r = TwvDiscReport{};
+            r.status = c.status;
+            std::strcpy(r.format, c.format);
+            std::strcpy(r.detail, c.detail);
+            std::strcpy(r.game_id, "GALE01");
+            r.file_bytes = 1234;
+            const DiscCheck d = disc_search_problem(r);
+            assert(d.problem == c.problem && d.size == 1234 && std::strcmp(d.gameId, "GALE01") == 0);
+            disc_message(t, d, path, nullptr);
+            assert(std::strcmp(t.kind + 5, DiscProblemNames[int(c.problem)]) == 0 && t.message.title);
+        }
+        // A Twilight Princess revision Dusklight does not take is named with the search's words.
+        std::strcpy(r.game_id, "GZ2P01");
+        std::strcpy(r.detail, "GZ2P01 disc 0 revision 1; Dusklight accepts disc 0 revision 0");
+        disc_message(t, disc_search_problem(r), path, nullptr);
+        assert(std::strstr(t.message.items[0].text, "revision 1") && !std::strstr(t.message.items[0].text, "not Twilight"));
+        r.status = TWV_DISC_UNSUPPORTED_FORMAT;
+        std::strcpy(r.format, "GCZ");
+        std::strcpy(r.detail, "GCZ block 7 checksum mismatch");
+        disc_message(t, disc_search_problem(r), path, nullptr);
+        assert(std::strstr(t.message.items[0].text, "GCZ image") && std::strstr(t.message.items[0].text, "checksum"));
     }
     disc_message(t, check(make_image("GALE01", {{0x30000, 16}}), GameCubeDiscBytes), path, nullptr);
     assert(std::strstr(t.message.items[0].text, "GALE01") && std::strstr(t.message.items[2].text, "GZ2E01"));

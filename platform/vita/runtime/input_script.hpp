@@ -14,6 +14,10 @@
 //                          the light world; a test fixture for tours, never in a player's script
 //   loop                   back to the first step; the run then ends only by --vita-exit-after
 //   # comment, blank lines
+// CROSS and CIRCLE name the Vita buttons: they press A or B as the confirm setting maps them
+// (runtime/player_settings.hpp), so a script can drive menus with the X/O swap on or off.
+#include "player_settings.hpp"
+
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +27,15 @@ namespace twv::vita {
 constexpr uint32_t ScriptButtonLeft=0x1,ScriptButtonRight=0x2,ScriptButtonDown=0x4,ScriptButtonUp=0x8,
     ScriptTriggerZ=0x10,ScriptTriggerR=0x20,ScriptTriggerL=0x40,ScriptButtonA=0x100,ScriptButtonB=0x200,
     ScriptButtonX=0x400,ScriptButtonY=0x800,ScriptButtonStart=0x1000;
+// Vita face buttons, resolved when the step is read (resolve_vita_buttons).
+constexpr uint32_t ScriptVitaCross=0x10000,ScriptVitaCircle=0x20000;
+inline uint32_t resolve_vita_buttons(uint32_t bits,bool circleConfirms) noexcept {
+    const FaceButtons face=face_buttons(circleConfirms);
+    uint32_t out=bits&0xFFFFu;
+    if(bits&ScriptVitaCross)out|=face.cross;
+    if(bits&ScriptVitaCircle)out|=face.circle;
+    return out;
+}
 
 constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3;
 struct InputStep {uint32_t reads=0,buttons=0;int x=0,y=0;uint8_t kind=StepPad;char stage[8]{};int room=0,point=0,layer=0;};
@@ -36,7 +49,8 @@ struct InputScript {
         struct Name {const char* text;uint32_t bit;};
         static constexpr Name names[]={{"A",ScriptButtonA},{"B",ScriptButtonB},{"X",ScriptButtonX},{"Y",ScriptButtonY},
             {"Z",ScriptTriggerZ},{"L",ScriptTriggerL},{"R",ScriptTriggerR},{"START",ScriptButtonStart},
-            {"UP",ScriptButtonUp},{"DOWN",ScriptButtonDown},{"LEFT",ScriptButtonLeft},{"RIGHT",ScriptButtonRight}};
+            {"UP",ScriptButtonUp},{"DOWN",ScriptButtonDown},{"LEFT",ScriptButtonLeft},{"RIGHT",ScriptButtonRight},
+            {"CROSS",ScriptVitaCross},{"CIRCLE",ScriptVitaCircle}};
         for(const auto& b:names)if(std::strlen(b.text)==n && std::strncmp(b.text,name,n)==0)return b.bit;
         return 0;
     }

@@ -3,11 +3,14 @@
 // each (ui/startup_canvas.hpp draws it, ui/startup_screen.cpp shows it). SDK-free, host-tested
 // (tests/startup_check_test.cpp).
 //
-// The disc check reads what gcm_nod.cpp would read first: the 0x440-byte disc header and the FST. It
-// accepts the GameCube discs Dusklight accepts (src/dusk/iso_validate.cpp: GZ2E01, GZ2J01, GZ2P01);
-// the Wii ones are refused because the Vita disc reader has no Wii partition support. Container
-// formats are named as gcm_nod.cpp names them. A plain image is complete when it holds the header
-// blocks, the DOL, the FST and every file the FST lists (a trimmed image passes; a cut one does not).
+// The disc search (disc/disc_locate.cpp) chooses the image and reads ISO, CISO and GCZ; its result
+// becomes one of the problems below (disc_search_problem). Then the chosen image's disc header and
+// FST are read through its container, what gcm_nod.cpp would read first. It accepts the GameCube
+// discs Dusklight accepts (src/dusk/iso_validate.cpp: GZ2E01, GZ2J01, GZ2P01); the Wii ones are
+// refused because the Vita disc reader has no Wii partition support. An image is complete when its
+// disc holds the header blocks, the DOL, the FST and every file the FST lists (a trimmed image
+// passes; a cut one does not).
+#include "disc/disc_report.h"
 #include "ui/startup_canvas.hpp"
 
 #include <cstddef>
@@ -25,10 +28,11 @@ constexpr const char* DiscFolder = "ux0:data/twilight-vita/";
 constexpr const char* ShaderCompilerPaths[] = {"ur0:data/libshacccg.suprx", "ur0:data/external/libshacccg.suprx"};
 
 enum class DiscProblem : uint8_t {
-    None, Missing, NotAFile, Unreadable, Container, NKit, Wii, NotGameCube, WrongGame, Truncated
+    None, Missing, NotAFile, Unreadable, Container, NKit, Wii, NotGameCube, WrongGame, Truncated, Damaged
 };
 constexpr const char* DiscProblemNames[] = {"ok", "missing", "not_a_file", "unreadable", "container",
-                                            "nkit", "wii", "not_gamecube", "wrong_game", "truncated"};
+                                            "nkit", "wii", "not_gamecube", "wrong_game", "truncated",
+                                            "damaged"};
 
 struct DiscCheck {
     DiscProblem problem = DiscProblem::None;
@@ -37,6 +41,7 @@ struct DiscCheck {
     uint64_t size = 0, needed = 0;
     bool tested = false; // GZ2P01: the only disc run on the Vita so far
     uint32_t fstOffset = 0, fstSize = 0;
+    const char* detail = nullptr; // the disc search's own words, for WrongGame and Damaged
 };
 
 inline uint32_t read_be32(const uint8_t* p) {
@@ -129,6 +134,35 @@ inline void check_disc_files(DiscCheck& d, const uint8_t* fst, std::size_t n) {
     if (d.size < d.needed) d.problem = DiscProblem::Truncated;
 }
 
+// The disc search's result (disc/disc_report.h) as the problem its screen shows; None when it found an
+// image, which check_disc_header / check_disc_files then read. `r` must outlive the result.
+inline DiscCheck disc_search_problem(const TwvDiscReport& r) {
+    DiscCheck d;
+    d.size = r.file_bytes;
+    std::memcpy(d.gameId, r.game_id, sizeof d.gameId - 1);
+    d.format = r.format[0] ? r.format : nullptr;
+    d.detail = r.detail[0] ? r.detail : nullptr;
+    switch (r.status) {
+    case TWV_DISC_OK: break;
+    case TWV_DISC_NO_IMAGE: d.problem = DiscProblem::Missing; break;
+    case TWV_DISC_UNREADABLE:
+        d.problem = std::strcmp(r.detail, "not a file") == 0 ? DiscProblem::NotAFile : DiscProblem::Unreadable;
+        break;
+    case TWV_DISC_UNSUPPORTED_FORMAT:
+        // A CISO or GCZ the reader refused is damaged; NKit and the formats it only names are not read.
+        d.problem = std::strcmp(r.format, "NKit") == 0 ? DiscProblem::NKit :
+                    std::strcmp(r.format, "CISO") == 0 || std::strcmp(r.format, "GCZ") == 0 ? DiscProblem::Damaged :
+                    DiscProblem::Container;
+        break;
+    case TWV_DISC_NOT_GAMECUBE: d.problem = DiscProblem::NotGameCube; break;
+    case TWV_DISC_WRONG_DISC:
+        d.problem = std::strncmp(r.detail, "a Wii disc", 10) == 0 ? DiscProblem::Wii : DiscProblem::WrongGame;
+        break;
+    default: d.problem = DiscProblem::Unreadable; break;
+    }
+    return d;
+}
+
 // --- messages ---
 enum class StartupProblem : uint8_t {
     None, Disc, ShaderCompiler, Memory, Arguments, Graphics
@@ -166,7 +200,7 @@ inline void disc_message(MessageText& t, const DiscCheck& d, const char* path, c
     case DiscProblem::Missing:
     case DiscProblem::NotAFile:
         m.title = "Game disc image not found";
-        m.items[0] = {ui::Style::Text, "Copy your own dump of the GameCube disc, a plain .iso file, to:"};
+        m.items[0] = {ui::Style::Text, "Copy your own dump of the GameCube disc (.iso, .ciso or .gcz) to:"};
         m.items[1] = {ui::Style::Path, path};
         if (similar) {
             std::snprintf(t.buffers[0], sizeof t.buffers[0], "Found there: %s. If it is the disc, rename it "
@@ -183,7 +217,7 @@ inline void disc_message(MessageText& t, const DiscCheck& d, const char* path, c
     case DiscProblem::Container:
         m.title = "Disc image format not supported";
         std::snprintf(t.buffers[0], sizeof t.buffers[0],
-                      "This file is a compressed %s image. The Vita port reads plain, full .iso images only. "
+                      "This file is a %s image, which the Vita port cannot read (it reads ISO, CISO and GCZ). "
                       "Convert it to ISO on a PC (for example in Dolphin: Convert File, format ISO).", d.format);
         m.items[0] = {ui::Style::Text, t.buffers[0]};
         m.items[1] = {ui::Style::Path, path};
@@ -211,7 +245,12 @@ inline void disc_message(MessageText& t, const DiscCheck& d, const char* path, c
         break;
     case DiscProblem::WrongGame:
         m.title = "Wrong game";
-        std::snprintf(t.buffers[0], sizeof t.buffers[0], "This disc is %s, not Twilight Princess.", d.gameId);
+        // A Twilight Princess disc number or revision Dusklight does not take has the search's words.
+        if (std::strncmp(d.gameId, "GZ2", 3) == 0 && d.detail)
+            std::snprintf(t.buffers[0], sizeof t.buffers[0], "This disc is not the one Dusklight accepts: %s.",
+                          d.detail);
+        else
+            std::snprintf(t.buffers[0], sizeof t.buffers[0], "This disc is %s, not Twilight Princess.", d.gameId);
         m.items[0] = {ui::Style::Text, t.buffers[0]};
         m.items[1] = {ui::Style::Path, path};
         m.items[2] = {ui::Style::Note, SupportedDiscs};
@@ -221,6 +260,14 @@ inline void disc_message(MessageText& t, const DiscCheck& d, const char* path, c
         std::snprintf(t.buffers[0], sizeof t.buffers[0],
                       "The file has %s but the disc needs at least %s (a full image is 1392 MB). The copy or "
                       "the dump stopped early: copy it again.", size, needed);
+        m.items[0] = {ui::Style::Text, t.buffers[0]};
+        m.items[1] = {ui::Style::Path, path};
+        break;
+    case DiscProblem::Damaged:
+        m.title = "Disc image is damaged";
+        std::snprintf(t.buffers[0], sizeof t.buffers[0], "This %s image cannot be read (%s). Copy it to the memory "
+                      "card again, or convert the disc to ISO on a PC.", d.format ? d.format : "compressed",
+                      d.detail ? d.detail : "damaged");
         m.items[0] = {ui::Style::Text, t.buffers[0]};
         m.items[1] = {ui::Style::Path, path};
         break;

@@ -57,7 +57,7 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
         dComIfGs_onDarkClearLV(step->layer);
     }
     auto& p=status[0];p={};p.err=PAD_ERR_NONE;
-    p.button=static_cast<u16>(step->buttons);
+    p.button=static_cast<u16>(twv::vita::resolve_vita_buttons(step->buttons,twv_vita_confirm_circle()!=0));
     p.stickX=static_cast<s8>(step->x);p.stickY=static_cast<s8>(step->y);
     p.triggerLeft=(step->buttons&twv::vita::ScriptTriggerL)?255:0;
     p.triggerRight=(step->buttons&twv::vita::ScriptTriggerR)?255:0;

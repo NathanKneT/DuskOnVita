@@ -10,8 +10,11 @@
 //   * a file handle reads [offset, offset + length) of its FST node;
 //   * nod_partition_iterate_fst visits nodes from index 1 and continues at the
 //     index the callback returns.
+// Containers (disc/disc_image.hpp): plain ISO/GCM, CISO and GCZ are read in place, the disc
+// handle seeing the logical disc as nod's block readers present it; GCZ blocks are inflated with
+// miniz (the zlib nod uses for them).
 // Differences, all visible as errors rather than approximations:
-//   * container formats (CISO, GCZ, NFS, RVZ, WBFS, WIA, TGC) fail with
+//   * the other container formats (NFS, RVZ, WBFS, WIA, TGC, PSP-style CSO) fail with
 //     NOD_RESULT_ERR_FORMAT and a message naming the format;
 //   * Wii discs open (so the header can be inspected) but their encrypted
 //     partitions do not;
@@ -22,6 +25,10 @@
 // thread may read different files at once, and the SDL stream behind them is not
 // thread-safe.
 #include <nod.h>
+
+#include "disc/disc_image.hpp"
+
+#include <miniz.h>
 
 #include <algorithm>
 #include <array>
@@ -57,19 +64,20 @@ std::uint32_t be32(const std::uint8_t* p) {
   return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) | (std::uint32_t(p[2]) << 8) | p[3];
 }
 
-const char* container_name(const std::uint8_t* p) {
-  if (std::memcmp(p, "CISO", 4) == 0) return "CISO";
-  if (std::memcmp(p, "WBFS", 4) == 0) return "WBFS";
-  if (std::memcmp(p, "RVZ\x01", 4) == 0) return "RVZ";
-  if (std::memcmp(p, "WIA\x01", 4) == 0) return "WIA";
-  if (std::memcmp(p, "EGGS", 4) == 0) return "NFS";
-  if (be32(p) == 0xB10BC001u) return "GCZ";
-  if (be32(p) == 0xAE0F38A2u) return "TGC";
-  return nullptr;
+// zlib stream to exactly outLen bytes (GCZ blocks).
+bool inflate_block(const std::uint8_t* in, std::size_t inLen, std::uint8_t* out, std::size_t outLen) {
+  mz_ulong written = static_cast<mz_ulong>(outLen);
+  return mz_uncompress(out, &written, in, static_cast<mz_ulong>(inLen)) == MZ_OK && written == outLen;
+}
+
+std::int64_t stream_read(void* user, std::uint64_t offset, void* out, std::size_t len) {
+  const auto* stream = static_cast<const NodDiscStream*>(user);
+  return stream->read_at(stream->user_data, offset, out, len);
 }
 
 struct Image {
   NodDiscStream stream{};
+  twv::disc::Image container; // the logical disc over `stream`
   std::mutex lock;
   std::uint64_t size = 0;
   std::array<std::uint8_t, kBootSize> boot{};
@@ -84,13 +92,13 @@ struct Image {
     }
   }
 
-  // Fills `len` bytes at `offset` unless the stream ends first. Returns bytes read, or -1.
+  // Fills `len` bytes at `offset` of the logical disc unless it ends first. Bytes read, or -1.
   std::int64_t read_at(std::uint64_t offset, void* out, std::size_t len) {
     std::lock_guard guard{lock};
     auto* dst = static_cast<std::uint8_t*>(out);
     std::size_t total = 0;
     while (total < len) {
-      const std::int64_t n = stream.read_at(stream.user_data, offset + total, dst + total, len - total);
+      const std::int64_t n = container.read(offset + total, dst + total, len - total);
       if (n < 0) {
         return -1;
       }
@@ -241,20 +249,22 @@ NodResult nod_disc_open_stream(const NodDiscStream* stream, const NodDiscOptions
   if (length < 0) {
     return fail(NOD_RESULT_ERR_IO, "Failed to get the disc stream length");
   }
-  image->size = static_cast<std::uint64_t>(length);
+  std::string containerError;
+  if (!image->container.open({&image->stream, stream_read, static_cast<std::uint64_t>(length)}, inflate_block,
+                             containerError)) {
+    return fail(image->container.io_failure() ? NOD_RESULT_ERR_IO : NOD_RESULT_ERR_FORMAT, containerError);
+  }
+  image->size = image->container.size();
   if (image->size < kBootSize || !image->read_exact(0, image->boot.data(), image->boot.size())) {
     return fail(NOD_RESULT_ERR_IO, "Failed to read the disc header");
-  }
-  if (const char* container = container_name(image->boot.data())) {
-    return fail(NOD_RESULT_ERR_FORMAT,
-                std::string(container) + " disc images are not supported by the Vita build; use a plain ISO/GCM");
   }
   static constexpr std::uint8_t kGcn[4]{0xC2, 0x33, 0x9F, 0x3D}, kWii[4]{0x5D, 0x1C, 0x9E, 0xA3};
   image->wii = std::memcmp(image->boot.data() + 0x18, kWii, 4) == 0;
   if (!image->wii && std::memcmp(image->boot.data() + 0x1C, kGcn, 4) != 0) {
     return fail(NOD_RESULT_ERR_FORMAT, "Unknown disc format (no GameCube or Wii magic)");
   }
-  NodHandle* handle = new_handle(Kind::Disc, std::move(image), 0, static_cast<std::uint64_t>(length));
+  const std::uint64_t discBytes = image->size;
+  NodHandle* handle = new_handle(Kind::Disc, std::move(image), 0, discBytes);
   if (handle == nullptr) {
     return fail(NOD_RESULT_ERR_OTHER, "out of memory");
   }

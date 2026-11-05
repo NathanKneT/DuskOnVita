@@ -11,6 +11,9 @@
 // In-text icons are full-colour RGBA8 and are drawn with a neutral tint (d_msg_out_font.cpp).
 // Mapping (platform/vita/InputVita.cpp): A=cross, B=circle, X=square, Y=triangle, Z=SELECT,
 // control stick=left stick, C stick=right stick; L, R, START and the D-pad keep their art.
+// When circle confirms (runtime/player_settings.hpp), A=circle and B=cross: the A prompts (layout
+// letters, the in-text A icon) show the circle in red, the B prompts the cross in blue, and the
+// dark B button icon a cross. One glyph set per choice, drawn at first use.
 #include <cstddef>
 #include <cstdint>
 

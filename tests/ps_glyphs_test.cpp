@@ -2,6 +2,7 @@
 // glyphs look like where it matters (transparent corners, coloured symbol, white layout symbols).
 // TWV_PS_GLYPH_DUMP=<dir> writes each glyph as <label>.rgba (8-byte header: u32 w, u32 h) for review.
 #include "ui/ps_glyphs.hpp"
+#include "runtime/player_settings.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -156,6 +157,62 @@ int main() {
     CHECK(twv::ui::ps_text_glyph(9, 1) && twv::ui::ps_text_glyph(9, 1) != twv::ui::ps_text_glyph(9, 0));
     CHECK(twv::ui::ps_text_glyph(-1, 0) == nullptr && twv::ui::ps_text_glyph(70, 0) == nullptr);
     CHECK(twv_ps_glyph_text(5, 0) == twv::ui::ps_text_glyph(5, 0)->timg);
+
+    // Circle confirms (runtime/player_settings.hpp): A prompts show the circle, B prompts the cross,
+    // with the matching HUD colours; everything else is drawn as before.
+    {
+        twv_vita_set_confirm_circle(1);
+        CHECK(twv::ui::ps_glyph_count() == count);
+        const GlyphTexture* sa = twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "main2d", aText);
+        CHECK(sa && sa != a && sa->width == 64 && sa->height == 92 && sa->format == 3);
+        if (sa) {
+            std::uint8_t p[4];
+            texel(*sa, 32, 46, p);
+            CHECK(p[3] == 0);                  // the ring's hollow middle (the cross filled it)
+            texel(*sa, 3, 46, p);
+            CHECK(p[3] == 255 && p[0] == 255); // the ring's left side
+        }
+        unsigned rgb = 0;
+        CHECK(sa && twv::ui::ps_hud_tint(sa->timg, &rgb) && rgb == twv::ui::kHudCircle);
+        const GlyphTexture* sb = twv::ui::ps_layout_glyph("tt_zelda_button_b_text.bti", "main2d", original(0, 24, 40));
+        CHECK(sb && twv::ui::ps_hud_tint(sb->timg, &rgb) && rgb == twv::ui::kHudCross);
+        if (sb) {
+            std::uint8_t p[4];
+            texel(*sb, 24, 40, p);
+            CHECK(p[3] == 255);                // the cross's centre
+            texel(*sb, 1, 40, p);
+            CHECK(p[3] == 0);                  // inside the stretched pane's margin
+        }
+        const GlyphTexture* s8 = twv::ui::ps_layout_glyph("tt_zelda_button_a_8ia.bti", "title2d", original(1, 32, 46));
+        CHECK(s8 && twv::ui::ps_hud_tint(s8->timg, &rgb) && rgb == twv::ui::kHudCircle);
+        const GlyphTexture* bb = twv::ui::ps_layout_glyph("tt_ia4_bbtn.bti", "saveres", original(2, 32, 32));
+        CHECK(bb != nullptr);
+        if (bb) {
+            std::uint8_t p[4];
+            texel(*bb, 32, 32, p);
+            CHECK(p[3] == 255 && p[0] > 200); // a white cross in the dark disc (B is on cross)
+        }
+        // Square, triangle and the rest are untouched.
+        const GlyphTexture* sx = twv::ui::ps_layout_glyph("tt_zelda_button_x_text.bti", "main2d", original(0, 32, 45));
+        CHECK(sx && twv::ui::ps_hud_tint(sx->timg, &rgb) && rgb == twv::ui::kHudSquare);
+        // In-text: A (icon 0) is a red circle, B (icon 1) a blue cross.
+        const GlyphTexture* ta = twv::ui::ps_text_glyph(0, 0);
+        const GlyphTexture* tb = twv::ui::ps_text_glyph(1, 0);
+        CHECK(ta && tb && ta != cross && std::string(ta->label) == "text_circle" && std::string(tb->label) == "text_cross");
+        if (ta && tb) {
+            std::uint8_t p[4];
+            texel(*ta, 24, 24, p);
+            CHECK(p[3] == 255 && p[0] < 60);                   // dark middle of the ring
+            texel(*ta, 34, 24, p);
+            CHECK(p[3] == 255 && p[0] > 200 && p[2] < 150);    // red ring
+            texel(*tb, 24, 24, p);
+            CHECK(p[3] == 255 && p[2] > 200 && p[0] < 150);    // blue cross
+        }
+        CHECK(twv_ps_glyph_text(0, 0) == (ta ? ta->timg : nullptr));
+        twv_vita_set_confirm_circle(0);
+        CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "main2d", aText) == a);
+        CHECK(twv::ui::ps_text_glyph(0, 0) == cross);
+    }
 
     if (const char* dir = std::getenv("TWV_PS_GLYPH_DUMP")) {
         for (std::size_t i = 0; i < count; ++i) {
