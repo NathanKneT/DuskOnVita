@@ -1,0 +1,56 @@
+Vita: --vita-fast-mtx=off|on|verify (runtime/fast_actors.hpp switch "mtx"). C_MTXConcat, the 3x4
+matrix product behind MTXConcat, PSMTXConcat and the matrix stack, gets a NEON kernel that computes
+every element with the C code's operations in the C code's order (platform/vita/runtime/fast_mtx.h),
+so the result is the same bit for bit; verify keeps the original result and counts any difference
+(subnormal values or NaN payloads, where NEON flushes to zero). Off: one integer test per call.
+No game behaviour changes.
+
+--- a/lib/dolphin/mtx/mtx.c
++++ b/lib/dolphin/mtx/mtx.c
+@@ -3,6 +3,17 @@
+ #include <assert.h>
+ #include <math.h>
+ 
++#if TARGET_VITA
++/* Vita (patches/aurora/0022, --vita-fast-mtx): C_MTXConcat through NEON with the same result bit
++ * for bit (platform/vita/runtime/fast_mtx.h says why). 0 off, 1 on, 2 verify: the original result
++ * is kept and the NEON one compared with it, every difference counted. */
++#include "runtime/fast_mtx.h"
++#include <string.h>
++int twv_fast_mtx_mode = 0;
++void twv_vita_fast_actor_count(int which, int fast, int mismatch) __attribute__((weak));
++#define TWV_FAST_MTX_SWITCH 4 /* runtime/fast_actors.hpp FastMtx */
++#endif
++
+ void C_MTXIdentity(Mtx m) {
+   assert(m && "MtxIdentity():  NULL Mtx 'm' ");
+   m[0][0] = 1;
+@@ -41,6 +52,16 @@
+ void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
+   Mtx mTmp;
+   MtxPtr m;
++#if TARGET_VITA
++  Mtx twvFast;
++  if (twv_fast_mtx_mode == 1) {
++    twv_mtx_concat_neon(a, b, ab);
++    return;
++  }
++  if (twv_fast_mtx_mode == 2) {
++    twv_mtx_concat_neon(a, b, twvFast);
++  }
++#endif
+ 
+   assert(a && "MTXConcat():  NULL MtxPtr 'a'  ");
+   assert(b && "MTXConcat():  NULL MtxPtr 'b'  ");
+@@ -70,6 +91,11 @@
+   if (m == mTmp) {
+     C_MTXCopy(mTmp, ab);
+   }
++#if TARGET_VITA
++  if (twv_fast_mtx_mode == 2 && twv_vita_fast_actor_count) {
++    twv_vita_fast_actor_count(TWV_FAST_MTX_SWITCH, 0, memcmp(twvFast, ab, sizeof twvFast) != 0);
++  }
++#endif
+ }
+ 
+ void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) {

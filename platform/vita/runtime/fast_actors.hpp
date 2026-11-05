@@ -20,10 +20,13 @@ constexpr const char* FastActorModeNames[] = {"off", "on", "verify"};
 //    are registered and released, instead of testing all 256 (walls: three times 256).
 //  flow-bind (0034): a message flow binding is kept per resource and group while no message
 //    resource was set since, instead of parsing the whole BMG on every dMsgFlow_c::init (doors).
+//  mtx (aurora 0022): C_MTXConcat, every 3x4 matrix product (joints, envelopes, draw matrices,
+//    the matrix stack), through NEON with the C code's operations in its order (runtime/fast_mtx.h).
+//    Not limited to actor execute; verify counts every product (subnormals, NaN payloads differ).
 enum FastActorSwitch : int { FastObstacle = 0, FastSearch = 1, FastBgList = 2, FastFlowBind = 3,
-                             FastActorSwitchCount };
+                             FastMtx = 4, FastActorSwitchCount };
 constexpr const char* FastActorSwitchNames[FastActorSwitchCount] = {"obstacle", "search", "bg-list",
-                                                                    "flow-bind"};
+                                                                    "flow-bind", "mtx"};
 
 // "--vita-fast-<name>=off|on|verify" for a known name: 1 (choices[name] set), -1 for another value
 // or a second time, 0 for any other token.

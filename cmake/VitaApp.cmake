@@ -118,6 +118,9 @@ add_library(twv_aurora_mtx STATIC
         ${DUSK_ROOT}/extern/aurora/lib/dolphin/mtx/quat.c)
 target_include_directories(twv_aurora_mtx PUBLIC "${DUSK_ROOT}/extern/aurora/include")
 target_compile_definitions(twv_aurora_mtx PRIVATE MTX_USE_PS=1) # as Dusklight's CMakeLists.txt sets it
+# patches/aurora/0022 (--vita-fast-mtx): C_MTXConcat's NEON kernel, runtime/fast_mtx.h.
+target_compile_definitions(twv_aurora_mtx PRIVATE TARGET_VITA=1)
+target_include_directories(twv_aurora_mtx PRIVATE "${CMAKE_SOURCE_DIR}/platform/vita")
 
 # In-tree freeverb (Dusklight's reverb for the DSP emulation); its own CMakeLists.
 add_subdirectory("${DUSK_ROOT}/libs/freeverb" "${CMAKE_BINARY_DIR}/_deps/freeverb" EXCLUDE_FROM_ALL)
@@ -158,6 +161,11 @@ endif()
 target_sources(twv_game PRIVATE platform/vita/runtime/actor_profile.cpp)
 set_property(SOURCE platform/vita/runtime/actor_profile.cpp APPEND PROPERTY
     INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita/runtime")
+# J3D probe build (measurement only, patches/dusklight/0036): repeats one joint-calc step per profile
+# window on sampled frames, so the console splits the calc's cost. Never in a play or release build.
+option(TWV_VITA_J3D_PROBE "Repeat one J3D joint-calc step per profile window (measurement build)" OFF)
+set_property(SOURCE platform/vita/runtime/actor_profile.cpp APPEND PROPERTY
+    COMPILE_DEFINITIONS TWV_VITA_J3D_PROBE=$<BOOL:${TWV_VITA_J3D_PROBE}>)
 target_link_options(twv_game INTERFACE -Wl,-u,twv_actprof_phase
     -Wl,--wrap=_Z13fpcEx_ExecuteP18base_process_class -Wl,--wrap=_Z13fpcDw_ExecuteP18base_process_class
     -Wl,--wrap=_Z19fopAcM_cullingCheckPK10fopAc_ac_c -Wl,--wrap=_Z17fpcM_DrawIteraterPFiPvS_E

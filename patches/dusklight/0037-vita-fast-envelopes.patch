@@ -1,0 +1,94 @@
+Vita: --vita-fast-mtx (with patches/aurora/0022). J3DMtxBuffer::calcWeightEnvelopeMtx keeps each
+envelope's weighted sum in a local matrix and stores it once, instead of reading and writing the
+output matrix on every mix (the compiler cannot keep it in registers: the output may alias). Same
+additions, same order, same 0.0f start, same scale flags: the same result bit for bit. On: the local
+loop instead of the original; verify: the original writes what the game uses, then each envelope is
+summed again locally and compared (counts under the "mtx" switch). Off: one integer test. No game
+behaviour changes.
+
+--- a/libs/JSystem/src/J3DGraphAnimator/J3DMtxBuffer.cpp
++++ b/libs/JSystem/src/J3DGraphAnimator/J3DMtxBuffer.cpp
+@@ -5,6 +5,16 @@
+ #include "JSystem/J3DGraphBase/J3DMaterial.h"
+ #include "JSystem/J3DGraphLoader/J3DModelLoader.h"
+ #include "JSystem/JKernel/JKRHeap.h"
++#if TARGET_VITA
++#include <cstring>
++// Vita (patches/dusklight/0037, --vita-fast-mtx): the envelope sums are kept in a local matrix and
++// stored once, instead of read and written through the output matrix on every mix. Same additions
++// in the same order from the same 0.0f start: same result bit for bit. 1 on; 2 verify (the original
++// writes the result the game uses, then each envelope is summed again locally and compared).
++// patches/aurora/0022 owns the mode; the counts go to the same "mtx" switch.
++extern "C" int twv_fast_mtx_mode;
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++#endif
+ 
+ DUSK_GAME_DATA Mtx J3DMtxBuffer::sNoUseDrawMtx;
+ 
+@@ -286,6 +296,54 @@
+     indices = mJointTree->getWEvlpMixMtxIndex() - 1;
+     weights = mJointTree->getWEvlpMixWeight() - 1;
+ 
++#if TARGET_VITA
++    // Every envelope summed in a local matrix: stored (compare false) or compared with what the
++    // original loop stored (compare true).
++    auto twvEnvelopes = [&](bool compare) {
++        BE(u16)* mixIndex = mJointTree->getWEvlpMixMtxIndex() - 1;
++        BE(f32)* mixWeight = mJointTree->getWEvlpMixWeight() - 1;
++        for (int e = 0; e < max; ++e) {
++            Mtx sum, product, inverse;
++            u8 scale = 1;
++            sum[0][0] = sum[0][1] = sum[0][2] = sum[0][3] = sum[1][0] = sum[1][1] = sum[1][2] = sum[1][3] =
++            sum[2][0] = sum[2][1] = sum[2][2] = sum[2][3] = 0.0f;
++            const int mixes = mJointTree->getWEvlpMixMtxNum(e);
++            int k = 0;
++            do {
++                const int joint = *++mixIndex;
++                mJointTree->getInvJointMtx((u16)joint).to_host(inverse);
++                MTXConcat(mpAnmMtx[joint], inverse, product);
++                const f32 w = *++mixWeight;
++                sum[0][0] += product[0][0] * w;
++                sum[0][1] += product[0][1] * w;
++                sum[0][2] += product[0][2] * w;
++                sum[0][3] += product[0][3] * w;
++                sum[1][0] += product[1][0] * w;
++                sum[1][1] += product[1][1] * w;
++                sum[1][2] += product[1][2] * w;
++                sum[1][3] += product[1][3] * w;
++                sum[2][0] += product[2][0] * w;
++                sum[2][1] += product[2][1] * w;
++                sum[2][2] += product[2][2] * w;
++                sum[2][3] += product[2][3] * w;
++                scale &= mpScaleFlagArr[joint];
++            } while (++k < mixes);
++            if (compare) {
++                const bool differs = std::memcmp(sum, mpWeightEvlpMtx[e], sizeof sum) != 0 ||
++                                     scale != mpEvlpScaleFlagArr[e];
++                twv_vita_fast_actor_count(4, 0, differs ? 1 : 0);
++            } else {
++                std::memcpy(mpWeightEvlpMtx[e], sum, sizeof sum);
++                mpEvlpScaleFlagArr[e] = scale;
++            }
++        }
++    };
++    if (twv_fast_mtx_mode == 1) {
++        twvEnvelopes(false);
++        return;
++    }
++#endif
++
+     #if !DEBUG && __MWERKS__
+     asm {
+         psq_l var_f27, 0x0(var_r7), 0, 0 /* qr0 */
+@@ -407,6 +465,11 @@
+         }
+         #endif
+     }
++#if TARGET_VITA
++    if (twv_fast_mtx_mode == 2) {
++        twvEnvelopes(true);
++    }
++#endif
+ }
+ 
+ void J3DMtxBuffer::calcDrawMtx(u32 mdlFlag, Vec const& param_1, Mtx const& param_2) {

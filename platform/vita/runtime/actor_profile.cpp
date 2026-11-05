@@ -26,6 +26,8 @@ using namespace twv::vita::actprof;
 extern "C" {
 // Read by patches/dusklight/0020 (J3DModel.cpp) before each part.
 unsigned char twv_j3d_prof_on = 0;
+// patches/dusklight/0036 (J3D probe build only): the step repeated on this J3D frame, 0 = none.
+unsigned char twv_j3d_probe_mode = 0;
 // Read by patches/dusklight/0030 (execute detail scopes) and the wraps below: 1 while a sub frame's
 // execute handler runs.
 unsigned char twv_actsub_on = 0;
@@ -121,11 +123,21 @@ long long clock_ns() {
     return ns;
 }
 
+#if TWV_VITA_J3D_PROBE
+// J3D probe build: the step repeated in this window (one per window, in turn; see 0036).
+constexpr unsigned ProbeModes = 5;
+unsigned gProbe = 0;
+#endif
+
 void publish() {
     using twv::vita::telemetryEvent;
     using twv::vita::telemetryText;
     Window& w = gWin;
     telemetryEvent("actprof_window", (long long)++gWindowNo);
+#if TWV_VITA_J3D_PROBE
+    telemetryEvent("actprof_j3d_probe", gProbe);
+    gProbe = (gProbe + 1) % ProbeModes;
+#endif
     telemetryEvent("actprof_frames", w.frames);
     const char* tickNames[3] = {"actprof_frames_0tick", "actprof_frames_1tick", "actprof_frames_2tick"};
     for (unsigned i = 0; i < 3; ++i) telemetryEvent(tickNames[i], w.framesByTicks[i]);
@@ -247,6 +259,9 @@ void frame_end() {
     if (w.frames >= WindowFrames) publish();
     gMode = twv::vita::telemetryIsQuiet() ? ModeNone : frame_mode(++gFrameNo);
     twv_j3d_prof_on = gMode == ModeJ3D ? 1 : 0;
+#if TWV_VITA_J3D_PROBE
+    twv_j3d_probe_mode = twv_j3d_prof_on ? static_cast<unsigned char>(gProbe) : 0;
+#endif
     twv_actsub_on = 0;
     gWhere = WhereOther;
 }

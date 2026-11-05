@@ -4,6 +4,9 @@
 #include "runtime/telemetry.hpp"
 #include <cstdio>
 
+// patches/aurora/0022 (lib/dolphin/mtx/mtx.c): the mtx switch's mode, read on every product.
+extern "C" int twv_fast_mtx_mode __attribute__((weak));
+
 namespace {
 int sMode[twv::vita::FastActorSwitchCount] = {};
 twv::vita::FastActorStats sStats[twv::vita::FastActorSwitchCount];
@@ -42,6 +45,16 @@ extern "C" int twv_vita_fast_actor_select(int which, int mode) {
     if (which < 0 || which >= twv::vita::FastActorSwitchCount) return 0;
     if (mode < twv::vita::FastActorOff || mode > twv::vita::FastActorVerify) return 0;
     sMode[which] = mode;
+    if (which == twv::vita::FastMtx) {
+        if (&twv_fast_mtx_mode) twv_fast_mtx_mode = mode;
+#if defined(__arm__)
+        // NEON flushes subnormals to zero; the VFP does too when FPSCR.FZ (bit 24) is set. With FZ
+        // set the fast product equals the C one for every input (tests/fast_mtx_arm_test.cpp).
+        unsigned fpscr;
+        asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
+        twv::vita::telemetryEvent("fast_mtx_fpscr", (long long)fpscr);
+#endif
+    }
     return 1;
 }
 
