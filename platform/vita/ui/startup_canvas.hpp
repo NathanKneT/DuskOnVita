@@ -282,14 +282,16 @@ struct Progress {
     uint32_t done = 0, total = 0;
     bool bar = false;
     const char* note = nullptr;
+    const char* hint = nullptr; // bottom line: how to open the settings page (ui/settings_screen.hpp)
 };
-constexpr int BarX = 180, BarY = 300, BarW = 600, BarH = 26, CountY = 346, LabelY = 244, NoteY = 420;
+constexpr int BarX = 180, BarY = 300, BarW = 600, BarH = 26, CountY = 346, LabelY = 244, NoteY = 420, HintY = 492;
 // full: the whole screen; otherwise the bar interior, the count and the label lines only.
 inline void draw_progress(const Canvas& c, const Progress& p, bool full) {
     constexpr int CountScale = 3, LabelScale = 3;
     if (full) {
         fill_rect(c, 0, 0, c.width, c.height, palette::Background);
         draw_centered(c, 150, 6, palette::Text, AppName);
+        if (p.hint) draw_centered(c, HintY, 2, palette::Note, p.hint);
     } else {
         fill_rect(c, 0, LabelY, c.width, FontRows * LabelScale, palette::Background);
     }

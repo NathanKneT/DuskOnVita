@@ -1,0 +1,24 @@
+Vita: config.json saves when the file already exists. Dusklight writes .config.json.tmp and
+renames it over config.json; where the Vita's rename refuses to replace an existing file, the old
+file is removed and the rename tried once more. A rename that replaces works as before (one
+call). Other platforms are unchanged. The settings page saves through this (dusk::config::save).
+
+--- a/src/dusk/config.cpp
++++ b/src/dusk/config.cpp
+@@ -155,6 +155,16 @@
+ void ReplaceFile(const std::filesystem::path& source, const std::filesystem::path& target) {
+     std::error_code ec;
+     std::filesystem::rename(source, target, ec);
++#if TARGET_VITA
++    if (ec) {
++        // A rename on the Vita's file system may refuse to replace an existing file: remove the old
++        // config.json and rename again (the temporary file holds the complete new text).
++        std::error_code removeError;
++        std::filesystem::remove(target, removeError);
++        ec.clear();
++        std::filesystem::rename(source, target, ec);
++    }
++#endif
+     if (ec) {
+         const auto renameError = ec;
+         std::filesystem::remove(source, ec);

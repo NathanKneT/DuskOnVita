@@ -52,6 +52,17 @@ set_source_files_properties(platform/vita/main_vita.cpp platform/vita/compat/new
 target_sources(twv_vita_runtime PRIVATE platform/vita/ui/ps_glyphs.cpp)
 # Start-up progress and error screens (ui/startup_screen.hpp): CPU-drawn, shown with sceDisplay.
 target_sources(twv_vita_runtime PRIVATE platform/vita/ui/startup_screen.cpp)
+# The app version and source commit (settings page footer, build_version receipt), regenerated at
+# every build and rewritten only when it changes (cmake/BuildVersion.cmake).
+set(TWV_BUILD_VERSION_HEADER "${CMAKE_BINARY_DIR}/generated/twv_build_version.h")
+add_custom_target(twv_build_version
+        COMMAND "${CMAKE_COMMAND}" -DOUT=${TWV_BUILD_VERSION_HEADER} -DSRC=${CMAKE_SOURCE_DIR}
+                -DVERSION=${TWV_VERSION} -P "${CMAKE_SOURCE_DIR}/cmake/BuildVersion.cmake"
+        BYPRODUCTS "${TWV_BUILD_VERSION_HEADER}"
+        COMMENT "Build version header"
+        VERBATIM)
+add_dependencies(twv_vita_runtime twv_build_version)
+target_include_directories(twv_vita_runtime PRIVATE "${CMAKE_BINARY_DIR}/generated")
 # The shader warm-up bundle inside the VPK (app0:shader_warmup.bin), read when the data folder has
 # none. Off by default: the bundle is derived from the game's materials and whether to distribute it
 # is the project owner's decision. It is never part of the repository; name a local file to package.
@@ -78,8 +89,11 @@ set(TWV_DUSK_AUDIO_FILES
 # patches/dusklight/0004: the mods gfx service (WebGPU device access) is not built on the Vita.
 list(REMOVE_ITEM DUSK_FILES "${DUSK_ROOT}/src/dusk/mods/svc/gfx.cpp")
 # platform/vita/touch.cpp: front touch to the menu pointer (patches/dusklight/0017).
+# platform/vita/dusk/settings_bridge.cpp: the settings page's game side (Dusklight settings).
 add_library(twv_dusk STATIC ${DUSK_FILES} ${TWV_DUSK_AUDIO_FILES} platform/vita/dusk/mods_gfx_vita.cpp
-        platform/vita/touch.cpp)
+        platform/vita/touch.cpp platform/vita/dusk/settings_bridge.cpp)
+set_property(SOURCE platform/vita/dusk/settings_bridge.cpp APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita")
 # patches/dusklight/0003: DuskAudioSystem.cpp includes the Vita output header (plain types only).
 set_property(SOURCE ${DUSK_ROOT}/src/dusk/audio/DuskAudioSystem.cpp APPEND PROPERTY
         INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita")
@@ -207,7 +221,9 @@ if(TWV_VITA_GFX_VGL)
         platform/vita/gfx_vgl/gpu_common.cpp
         platform/vita/gfx_vgl/frame_capture.cpp
         platform/vita/gfx_vgl/shader_preparation.cpp
-        platform/vita/gfx_vgl/resident_geometry.cpp)
+        platform/vita/gfx_vgl/resident_geometry.cpp
+        # The settings page (ui/settings_screen.hpp): opened from aurora_vita.cpp, game paused.
+        platform/vita/ui/settings_screen.cpp)
     set_property(SOURCE platform/vita/gfx_vgl/gpu_common.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS TWV_VITA_DRAW_TIMERS=$<BOOL:${TWV_VITA_DRAW_TIMERS}>)
     # G1: the direct GXM backend, selected at start-up with --vita-gpu=gxm (vitaGL stays default).

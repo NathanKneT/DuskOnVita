@@ -10,6 +10,7 @@
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_ext.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
+#include "SSystem/SComponent/c_counter.h"
 #include "telemetry.hpp"
 #include "simulation_probe.hpp"
 #include "target_probe.hpp"
@@ -141,4 +142,24 @@ extern "C" void twv_vita_scene_probe(unsigned frame) {
         twv::vita::telemetryText("camera_state",value);
     }
     twv::vita::telemetryFlush();
+}
+
+// Settings page (ui/settings_screen.cpp): the game at the moment the page opens and closes. Equal
+// texts (ticks, game counters, Link, camera) show the page changed nothing while it was open.
+extern "C" void twv_vita_scene_snapshot(const char* tag) {
+    char value[320];
+    int n = std::snprintf(value, sizeof value, "%s ticks=%llu counter=%lu timer=%lu", tag,
+                          static_cast<unsigned long long>(twv::vita::simulationExecuteCalls),
+                          static_cast<unsigned long>(g_Counter.mCounter0), static_cast<unsigned long>(g_Counter.mTimer));
+    if (const auto* player = dComIfGp_getPlayer(0); player && n > 0 && n < int(sizeof value)) {
+        n += std::snprintf(value + n, sizeof value - n, " pos=%.6f,%.6f,%.6f rot=%d,%d,%d speed=%.6f",
+                           double(player->current.pos.x), double(player->current.pos.y), double(player->current.pos.z),
+                           int(player->shape_angle.x), int(player->shape_angle.y), int(player->shape_angle.z),
+                           double(player->speedF));
+    }
+    if (const auto* camera = dComIfGp_getCamera(0); camera && n > 0 && n < int(sizeof value)) {
+        std::snprintf(value + n, sizeof value - n, " eye=%.6f,%.6f,%.6f", double(camera->view.lookat.eye.x),
+                      double(camera->view.lookat.eye.y), double(camera->view.lookat.eye.z));
+    }
+    twv::vita::telemetryText("settings_snapshot", value);
 }

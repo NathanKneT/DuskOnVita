@@ -13,7 +13,15 @@
 //                          in the running save (dComIfGs_onDarkClearLV), so the next stage loads in
 //                          the light world; a test fixture for tours, never in a player's script
 //   loop                   back to the first step; the run then ends only by --vita-exit-after
+//   page open              (one pad read, no input) asks for the settings page, as its gesture does
+//   page gesture           (one pad read, no input) puts two fingers on the rear pad, held still: the
+//                          page's own gesture recogniser opens it 1 s later (pad reads wait meanwhile)
+//   page KEY               one key on the open settings page, read by the page, not by a pad read:
+//                          UP DOWN LEFT RIGHT CONFIRM BACK DEFAULT START, or SHOT (a PNG of the page)
+//   page wait N            the open page shows N passes with no key (time for a window capture)
 //   # comment, blank lines
+// While the settings page is open the game reads no pad, so "page KEY" steps cost no pad read and
+// the pad steps after them run exactly as without the page.
 // CROSS and CIRCLE name the Vita buttons: they press A or B as the confirm setting maps them
 // (runtime/player_settings.hpp), so a script can drive menus with the X/O swap on or off.
 #include "player_settings.hpp"
@@ -37,8 +45,17 @@ inline uint32_t resolve_vita_buttons(uint32_t bits,bool circleConfirms) noexcept
     return out;
 }
 
+// Settings page keys (ui/settings_page.hpp Key bits, ui/settings_screen.hpp TwvPageShot; the host
+// test checks they match), and the open request.
+constexpr uint32_t ScriptPageUp=1u<<0,ScriptPageDown=1u<<1,ScriptPageLeft=1u<<2,ScriptPageRight=1u<<3,
+    ScriptPageConfirm=1u<<4,ScriptPageBack=1u<<5,ScriptPageDefault=1u<<6,ScriptPageStart=1u<<7,
+    ScriptPageShot=1u<<16,ScriptPageWait=1u<<17,ScriptPageGesture=1u<<30,ScriptPageOpen=1u<<31;
+// Steps a pad read consumes ("page open", "page gesture"); the other page steps are the page's.
+constexpr bool script_pad_page_step(uint32_t page) noexcept {return page==ScriptPageOpen || page==ScriptPageGesture;}
+
 constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3;
-struct InputStep {uint32_t reads=0,buttons=0;int x=0,y=0;uint8_t kind=StepPad;char stage[8]{};int room=0,point=0,layer=0;};
+struct InputStep {uint32_t reads=0,buttons=0;int x=0,y=0;uint8_t kind=StepPad;char stage[8]{};int room=0,point=0,layer=0;
+                  uint32_t page=0;};
 
 struct InputScript {
     static constexpr unsigned MaxSteps=2048; // stage tours: about six steps per place
@@ -68,14 +85,32 @@ struct InputScript {
     // The step for this pad read, or nullptr once the script has ended. "loop" is never returned: it
     // restarts at step 0, which line() guarantees lasts at least one read.
     const InputStep* next() noexcept {
+        advance();
+        if(index>=count)return nullptr;
+        ++used;return &steps[index];
+    }
+    // The next step is the settings page's (a key or a page wait): a pad read leaves it for the page.
+    bool page_pending() noexcept {
+        advance();
+        return index<count && steps[index].page && !script_pad_page_step(steps[index].page);
+    }
+    // The settings page's next key, consumed, when the next step is a "page KEY" step; else 0.
+    // A "page wait N" step answers ScriptPageWait N times (one per page pass).
+    uint32_t page_key() noexcept {
+        advance();
+        if(index>=count || !steps[index].page || script_pad_page_step(steps[index].page))return 0;
+        if(steps[index].page==ScriptPageWait){++used;return ScriptPageWait;}
+        used=steps[index].reads;
+        return steps[index].page;
+    }
+private:
+    // Past finished steps; "loop" restarts at step 0.
+    void advance() noexcept {
         while(index<count && (steps[index].kind==StepLoop || used>=steps[index].reads)) {
             if(steps[index].kind==StepLoop){index=0;used=0;++loops;continue;}
             ++index;used=0;
         }
-        if(index>=count)return nullptr;
-        ++used;return &steps[index];
     }
-private:
     static const char* skip(const char* p,const char* end) noexcept {while(p<end && (*p==' '||*p=='\t'||*p=='\r'))++p;return p;}
     static const char* word(const char* p,const char* end) noexcept {while(p<end && *p!=' '&&*p!='\t'&&*p!='\r')++p;return p;}
     static bool integer(const char* a,const char* b,long lo,long hi,long& out) noexcept {
@@ -128,6 +163,22 @@ private:
         } else if(n==4 && std::strncmp(p,"loop",4)==0) {
             if(k!=0 || count==0)return false; // a first-step loop would never read the pad
             s.kind=StepLoop;
+        } else if(n==4 && std::strncmp(p,"page",4)==0) {
+            struct Name {const char* text;uint32_t bit;};
+            static constexpr Name keys[]={{"open",ScriptPageOpen},{"gesture",ScriptPageGesture},{"UP",ScriptPageUp},{"DOWN",ScriptPageDown},
+                {"LEFT",ScriptPageLeft},{"RIGHT",ScriptPageRight},{"CONFIRM",ScriptPageConfirm},{"BACK",ScriptPageBack},
+                {"DEFAULT",ScriptPageDefault},{"START",ScriptPageStart},{"SHOT",ScriptPageShot}};
+            if(k==2 && ends[0]-fields[0]==4 && std::strncmp(fields[0],"wait",4)==0) {
+                if(!integer(fields[1],ends[1],1,100000,v))return false;
+                s.page=ScriptPageWait;s.reads=uint32_t(v);
+                steps[count++]=s;
+                return true;
+            }
+            if(k!=1)return false;
+            const std::size_t m=std::size_t(ends[0]-fields[0]);
+            for(const auto& key:keys)if(std::strlen(key.text)==m && std::strncmp(key.text,fields[0],m)==0)s.page=key.bit;
+            if(!s.page)return false;
+            s.reads=1;
         } else return false;
         steps[count++]=s;
         return true;

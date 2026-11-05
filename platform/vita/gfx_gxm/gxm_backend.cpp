@@ -23,6 +23,7 @@
 #include "gxm_state.hpp"
 #include "gxm_timing.hpp"
 #include "runtime/telemetry.hpp"
+#include "ui/startup_canvas.hpp"
 #include "ui/startup_screen.hpp"
 #include <psp2/display.h>
 #include <psp2/gxm.h>
@@ -197,9 +198,33 @@ void timing_wait(uint64_t frame,uint32_t scene,bool vertex,const SceGxmNotificat
     sceKernelSignalSema(timingSema,1);
 }
 
+// --- FPS counter (settings page "Show FPS", ui/settings_screen.hpp) ---
+// Counted on the display queue's thread for every flip; when on, drawn by the CPU into the finished
+// frame just before it is shown (the GPU is done with it: the callback runs after its sync). A few
+// thousand pixels; frame captures and draw digests are taken before this and never include it.
+std::atomic<int> fpsOverlay{0};
+uint64_t fpsWindowStart=0;
+uint32_t fpsFlips=0,fpsShown=0;
+void fps_counter(void* base) {
+    const uint64_t now=twv::vita::processTimeUs();
+    ++fpsFlips;
+    if(!fpsWindowStart)fpsWindowStart=now;
+    if(now-fpsWindowStart>=1000000) {
+        const uint64_t span=now-fpsWindowStart;
+        fpsShown=uint32_t((uint64_t(fpsFlips)*1000000+span/2)/span);
+        fpsFlips=0;fpsWindowStart=now;
+    }
+    if(!fpsOverlay.load(std::memory_order_relaxed))return;
+    char text[16];std::snprintf(text,sizeof text,"%u FPS",unsigned(fpsShown));
+    const twv::ui::Canvas c{static_cast<uint32_t*>(base),int(renderWidth),int(renderHeight),int(renderStride)};
+    twv::ui::fill_rect(c,4,4,twv::ui::text_width(std::strlen(text),2)+8,twv::ui::FontRows*2+6,twv::ui::rgb(0,0,0));
+    twv::ui::draw_text(c,8,7,2,twv::ui::rgb(255,255,255),text);
+}
+
 void display_callback(const void* data) {
     const auto* d=static_cast<const DisplayData*>(data);
     const uint64_t start=timingOn?twv::vita::processTimeUs():0;
+    fps_counter(d->address);
     SceDisplayFrameBuf fb{};
     fb.size=sizeof fb;fb.base=d->address;fb.pitch=renderStride;
     fb.pixelformat=SCE_DISPLAY_PIXELFORMAT_A8B8G8R8;fb.width=renderWidth;fb.height=renderHeight;
@@ -1467,3 +1492,9 @@ const TwvGpuBackend gxmBackend{
     TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}
+// Settings page (ui/settings_screen.hpp): the FPS counter on or off, at any time (kept for gxm_init
+// when called before it). 1 when this backend draws the game.
+extern "C" int twv_gxm_fps_overlay(int on) {
+    fpsOverlay.store(on?1:0,std::memory_order_relaxed);
+    return ready?1:0;
+}

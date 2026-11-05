@@ -39,11 +39,15 @@ public:
       }
       mActive = true;
       mId = id;
+      mX = x;
+      mY = y;
       return PointerEvent{Pointer::Press, x, y};
     case Finger::Motion:
       if (!mActive || mId != id) {
         return std::nullopt;
       }
+      mX = x;
+      mY = y;
       return PointerEvent{Pointer::Move, x, y};
     case Finger::Up:
     case Finger::Canceled:
@@ -58,9 +62,21 @@ public:
 
   void reset() noexcept { mActive = false; }
 
+  // The settings page opens (ui/settings_screen.hpp): the finger the pointer follows, if any, is
+  // cancelled where it last was (a cancel never clicks), and its later events are ignored.
+  std::optional<PointerEvent> cancel() noexcept {
+    if (!mActive) {
+      return std::nullopt;
+    }
+    mActive = false;
+    return PointerEvent{Pointer::Cancel, mX, mY};
+  }
+
 private:
   bool mActive = false;
   std::uint64_t mId = 0;
+  float mX = 0.0f;
+  float mY = 0.0f;
 };
 
 } // namespace twv::vita::touch

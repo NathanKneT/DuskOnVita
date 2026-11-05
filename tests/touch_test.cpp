@@ -78,6 +78,15 @@ int main(int argc, char** argv) {
   CHECK(!t.event(Finger::Up, 4, 0.5f, 0.5f, true));
   expect(t.event(Finger::Down, 5, 0.5f, 0.5f, true), Pointer::Press, 480.0f, 272.0f);
 
+  // The settings page opens: the followed finger is cancelled where it last was, once; its later
+  // events are ignored, and a new finger starts the pointer again.
+  expect(t.event(Finger::Motion, 5, 0.25f, 0.5f, true), Pointer::Move, 240.0f, 272.0f);
+  expect(t.cancel(), Pointer::Cancel, 240.0f, 272.0f);
+  CHECK(!t.cancel());
+  CHECK(!t.event(Finger::Motion, 5, 0.3f, 0.5f, true));
+  CHECK(!t.event(Finger::Up, 5, 0.3f, 0.5f, true));
+  expect(t.event(Finger::Down, 6, 0.5f, 0.5f, true), Pointer::Press, 480.0f, 272.0f);
+
   std::puts("touch_test: ok");
   return 0;
 }

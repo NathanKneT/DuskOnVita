@@ -12,16 +12,31 @@
 
 namespace {
 twv::vita::touch::FrontTouch g_front;
+void deliver(const std::optional<twv::vita::touch::PointerEvent>& e);
 }
 
 extern "C" void twv_vita_front_touch(int finger, std::uint64_t id, float nx, float ny) noexcept {
   namespace mp = dusk::menu_pointer;
-  using twv::vita::touch::Pointer;
   if (!mp::enabled()) {
     g_front.reset();
     return;
   }
-  const auto e = g_front.event(static_cast<twv::vita::touch::Finger>(finger), id, nx, ny, mp::active());
+  deliver(g_front.event(static_cast<twv::vita::touch::Finger>(finger), id, nx, ny, mp::active()));
+}
+
+// The settings page opens (ui/settings_screen.hpp): a finger the pointer follows is cancelled.
+extern "C" void twv_vita_front_touch_cancel(void) {
+  if (dusk::menu_pointer::enabled()) {
+    deliver(g_front.cancel());
+  } else {
+    g_front.reset();
+  }
+}
+
+namespace {
+void deliver(const std::optional<twv::vita::touch::PointerEvent>& e) {
+  namespace mp = dusk::menu_pointer;
+  using twv::vita::touch::Pointer;
   if (!e) {
     return;
   }
@@ -43,3 +58,4 @@ extern "C" void twv_vita_front_touch(int finger, std::uint64_t id, float nx, flo
     twv::vita::telemetryText("menu_touch", text);
   }
 }
+}  // namespace

@@ -34,6 +34,12 @@ for p in "$repo"/patches/*/*.patch; do
     < <(sed -n 's#^+++ b/\([^[:space:]]*\).*#\1#p' "$p")
 done
 rsync -a --delete --exclude-from="$exclude" "$repo/" "$work/src/"
+# The source commit for the build version (cmake/BuildVersion.cmake): the mirror has no .git.
+{
+  git -C "$repo" rev-parse --short=8 HEAD 2>/dev/null || echo unknown
+  git -C "$repo" log -1 --format=%cs 2>/dev/null || echo
+  [ -n "$(git -C "$repo" -c core.fileMode=false status --porcelain --untracked-files=no 2>/dev/null)" ] && echo changes
+} > "$work/src/build_commit.txt" || true
 
 stage="$work/patch-stage"; rm -rf "$stage"; mkdir -p "$stage"
 for f in "${patched[@]}"; do

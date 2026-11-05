@@ -31,6 +31,8 @@
 #include "gfx_vgl/backend.hpp"
 #include "gfx_vgl/profile_scope.hpp"
 #include "frame_overlap.hpp"
+#include "time_internal.hpp"
+#include "ui/settings_screen.hpp"
 #endif
 #include "runtime/telemetry.hpp"
 
@@ -182,6 +184,73 @@ void settle_in_tick(twv::vita::SettleSite site) noexcept {
 bool g_viewportPolicySet = false;
 // Game-thread time blocked on the worker, added to the profile once per presented frame.
 uint64_t g_waitReported = 0;
+
+// Settings page (ui/settings_screen.hpp). While it is open the game is paused the way a lost window
+// focus pauses it: Aurora's game clock is held (its own pause reason, apart from the window's), the
+// loop gets AURORA_PAUSED (Dusklight pauses audio) and then AURORA_UNPAUSED (audio resumes, the game
+// clock restarts without catching up), and no frame begins, so no tick, draw or pad read runs. No
+// SDL event reaches the game while the page is open, nor on the passes that open and close it.
+constexpr auto kSettingsPause = static_cast<time::internal::PauseReason>(1u << 8);
+bool g_settingsOpen = false;
+std::vector<AuroraEvent> g_settingsEvents;
+
+// Every finger of both panels to the page (its opening gesture, or its taps while open).
+void settings_touch(const AuroraEvent* events) noexcept {
+  for (const AuroraEvent* e = events; e->type != AURORA_NONE; ++e) {
+    if (e->type != AURORA_SDL_EVENT) {
+      continue;
+    }
+    int phase;
+    switch (e->sdl.type) {
+    case SDL_EVENT_FINGER_DOWN: phase = 0; break;
+    case SDL_EVENT_FINGER_MOTION: phase = 1; break;
+    case SDL_EVENT_FINGER_UP: phase = 2; break;
+    case SDL_EVENT_FINGER_CANCELED: phase = 3; break;
+    default: continue;
+    }
+    const SDL_TouchFingerEvent& t = e->sdl.tfinger;
+    twv_settings_touch(static_cast<int>(t.touchID), phase, static_cast<unsigned long long>(t.fingerID), t.x, t.y);
+  }
+}
+
+const AuroraEvent* settings_events(const AuroraEvent* events) noexcept {
+  settings_touch(events);
+  bool opened = false;
+  bool closed = false;
+  if (!g_settingsOpen) {
+    if (twv_settings_poll_open()) {
+      // The frame in flight is presented first; the page then owns the display.
+      g_overlap.settle(twv::vita::SettleSite::Other);
+      twv_vita_front_touch_cancel();
+      if (twv_settings_open()) {
+        opened = g_settingsOpen = true;
+        time::internal::set_pause_reason(kSettingsPause, true);
+      }
+    }
+  } else if (!twv_settings_frame()) {
+    closed = true;
+    g_settingsOpen = false;
+    time::internal::set_pause_reason(kSettingsPause, false);
+  }
+  if (!opened && !closed && !g_settingsOpen) {
+    return events;
+  }
+  g_settingsEvents.clear();
+  for (const AuroraEvent* e = events; e->type != AURORA_NONE; ++e) {
+    // A window pause while the page is open stays the page's: audio stays paused until it closes.
+    if (e->type != AURORA_SDL_EVENT && e->type != AURORA_PAUSED && e->type != AURORA_UNPAUSED) {
+      g_settingsEvents.push_back(*e);
+    }
+  }
+  if (opened) {
+    g_settingsEvents.push_back(AuroraEvent{.type = AURORA_PAUSED});
+  }
+  if (closed && !window::is_paused()) {
+    g_settingsEvents.push_back(AuroraEvent{.type = AURORA_UNPAUSED});
+  }
+  g_settingsEvents.push_back(AuroraEvent{.type = AURORA_NONE});
+  return g_settingsEvents.data();
+}
 #endif
 
 AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexcept {
@@ -344,8 +413,15 @@ const AuroraEvent* update() noexcept {
 #endif
   gx::update();
   const AuroraEvent* events = window::poll_events();
+#if TWV_VITA_GFX_VGL
+  if (!g_settingsOpen) {
+    forward_front_touch(events);
+  }
+  return settings_events(events);
+#else
   forward_front_touch(events);
   return events;
+#endif
 }
 
 #if TWV_VITA_GFX_VGL
@@ -395,6 +471,9 @@ void finish_frame() noexcept {
 
 bool begin_frame() noexcept {
 #if TWV_VITA_GFX_VGL
+  if (g_settingsOpen) {
+    return false; // the settings page owns the display; the game loop skips its tick and draw
+  }
   if (g_overlap.enabled) {
     return g_overlap.begin_frame(window::is_presentable() && !window::is_paused());
   }

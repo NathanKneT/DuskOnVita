@@ -10,6 +10,7 @@
 #include "runtime/run_sequence.hpp"
 #include "runtime/fast_shadow_collect.hpp"
 #include "runtime/startup_check.hpp"
+#include "runtime/vita_settings.hpp"
 #include "ui/startup_screen.hpp"
 #include "runtime/fast_actors.hpp"
 #include "runtime/fast_painter.hpp"
@@ -65,6 +66,10 @@ extern "C" int twv_vita_frame_overlap_select(int enabled) __attribute__((weak));
 extern "C" int twv_vita_save_import_select(int mode);
 // runtime/system_params.cpp: the console's language and Enter button (SCE_SYSTEM_PARAM_*), -1 unread.
 extern "C" int twv_vita_system_params(int* language, int* enterButton, int* initResult);
+// The settings page (ui/settings_screen.cpp): the port settings in force; absent without graphics.
+namespace twv::vita {
+void settingsConfigure(const VitaSettings& inForce, const VitaSettings& stored, const char* discId) __attribute__((weak));
+}
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
 // MEM1/ARAM reserves are bounded independently in the Aurora adapter.
@@ -675,6 +680,28 @@ int main(int, char**) {
         }
         argsToken = nullptr; // later errors are about the combination, not one option
     }
+    // The player's port settings (runtime/vita_settings.hpp, written by the settings page): defaults
+    // below args.txt, which wins option by option. A sequence.txt run (bench and test lines) ignores
+    // the file, so a player's choice never changes a measurement.
+    twv::vita::VitaSettings stored;
+    if (fromSequence) {
+        twv::vita::telemetryText("vita_settings", "ignored (sequence run)");
+    } else {
+        int problems = 0;
+        const int read = twv::vita::read_vita_settings(twv::vita::VitaSettingsFile, twv::vita::VitaSettingsTemp,
+                                                       stored, &problems);
+        twv::vita::telemetryText("vita_settings", read > 0 ? (problems ? "read (values ignored)" : "read") :
+                                 read == 0 ? "none" : "unreadable or too large; ignored");
+        if (problems) twv::vita::telemetryEvent("vita_settings_ignored_values", problems);
+        if (read < 0) stored = {};
+    }
+    if (stored.performanceSet && !clockOptions.selected) {
+        // Not "explicit": clock_mode_explicit stays 0; clock_mode_source says where it came from.
+        clockOptions.mode = stored.batterySaver ? twv::vita::ClockMode::System : twv::vita::ClockMode::Legacy444;
+        twv::vita::telemetryText("clock_mode_source", "vita_settings.json");
+    } else {
+        twv::vita::telemetryText("clock_mode_source", clockOptions.selected ? "args" : "default");
+    }
     // Play profile, through the same parse-and-select path as typed options: it applies only when
     // no renderer or backend option was typed, so each selector still runs once. Only in builds
     // with every path it needs (the perf build); elsewhere the old all-off defaults stay.
@@ -700,11 +727,21 @@ int main(int, char**) {
             }
     // Render size 75 % (720x408, scaled up by the display) unless the command line chose one. Drawn
     // full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %
-    // (fitted from g4 RUN1/RUN2 on the console). --vita-gxm-scale=100 keeps the full size.
-    if (playProfile && !gpuOptions.scaleSelected && portOption("--vita-gxm-scale=75") != 1) {
-        argsError("play profile render scale rejected");
-        argsExit();
+    // (fitted from g4 RUN1/RUN2 on the console). --vita-gxm-scale=100 keeps the full size. The
+    // player's choice in vita_settings.json replaces the 75 % (never a typed size).
+    const char* scaleSource = gpuOptions.scaleSelected ? "args" : "default";
+    if (playProfile && !gpuOptions.scaleSelected) {
+        static char scale[32];
+        std::snprintf(scale, sizeof scale, "--vita-gxm-scale=%d", stored.renderScaleSet ? stored.renderScale : 75);
+        if (stored.renderScaleSet) scaleSource = "vita_settings.json";
+        if (portOption(scale) != 1) {
+            argsError("play profile render scale rejected");
+            argsExit();
+        }
+    } else if (stored.renderScaleSet && !gpuOptions.scaleSelected) {
+        scaleSource = "default (vita_settings.json applies with the play profile only)";
     }
+    twv::vita::telemetryText("render_scale_source", scaleSource);
     twv::vita::telemetryText("play_profile", implicitProfile ? "on" : playProfile ? "on (explicit)" :
                              profileChoice == 0 ? "off" : fromSequence ? "off (sequence run)" :
                              explicitRenderer ? "off (renderer or GPU options given)" :
@@ -878,6 +915,16 @@ int main(int, char**) {
     if (exitAfter.selected) {
         twv::vita::runControlExitAfter(exitAfter.seconds);
         twv::vita::telemetryEvent("run_exit_after_requested_s", exitAfter.seconds);
+    }
+    // The settings page shows what is in force and writes the player's changes back to the file.
+    if (twv::vita::settingsConfigure) {
+        twv::vita::VitaSettings inForce = stored;
+        const uint32_t f = gpuOptions.features;
+        inForce.renderScale = gpuOptions.backend != 1 ? 100 : (f & twv::vita::GpuOptions::FeatureScale75) ? 75 :
+                              (f & twv::vita::GpuOptions::FeatureScale67) ? 67 :
+                              (f & twv::vita::GpuOptions::FeatureScale50) ? 50 : 100;
+        inForce.batterySaver = clockOptions.mode == twv::vita::ClockMode::System;
+        twv::vita::settingsConfigure(inForce, stored, disc.game_id);
     }
     twv::vita::telemetryEvent("game_main_enter", 0);
     const int result = game_main(gameArgc, gameArgs);

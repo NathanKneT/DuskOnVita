@@ -1,0 +1,30 @@
+Vita settings page: "Recentre gyro". dusk::gyro::recentre() runs the gyro's own
+reset_filter_state() (the state it clears whenever aiming is not active): filtered rates,
+gravity baseline and pending aim deltas. Nothing else calls it; the gyro reads as before.
+Called by twilight-vita's platform/vita/dusk/settings_bridge.cpp while the game is paused.
+
+--- a/src/dusk/gyro.h
++++ b/src/dusk/gyro.h
+@@ -3,6 +3,9 @@
+ namespace dusk::gyro {
+ void read(float dt);
+ void getAimDeltas(float& out_yaw, float& out_pitch);
++// Vita settings page (twilight-vita): forget the filtered rates and the held-angle baseline, as
++// when aiming starts or stops; the next read takes the way the console is held as neutral.
++void recentre();
+ bool queryGyroAimContext();
+ 
+ void rollgoalTick(bool play_active, s16 camera_yaw);
+--- a/src/dusk/gyro.cpp
++++ b/src/dusk/gyro.cpp
+@@ -65,6 +65,10 @@
+ bool get_sensor_keep_alive() { return s_sensor_keep_alive; }
+ void set_sensor_keep_alive(bool value) { s_sensor_keep_alive = value; }
+ 
++void recentre() {
++    reset_filter_state();
++}
++
+ bool rollgoal_gyro_enabled() {
+     return getSettings().game.enableGyroRollgoal;
+ }

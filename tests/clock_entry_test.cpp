@@ -59,7 +59,12 @@ struct EntryState {
     int saveImport = -1; // twv_vita_save_import_select's argument, -1 when not called
     std::map<int, int> fastActors; // twv_vita_fast_actor_select's arguments by switch
     std::vector<int> fastPainter; // twv_vita_fast_painter_select's modes, by option
+    // settingsConfigure (ui/settings_screen.cpp): what the settings page is given.
+    bool configured = false;
+    twv::vita::VitaSettings inForce, stored;
+    std::string disc;
 } state;
+constexpr const char* SettingsFile = "ux0:data/twilight-vita/vita_settings.json";
 const char* axes[]{"arm", "bus", "gpu", "gpu_xbar"};
 constexpr std::array<int, 4> initial{321, -17, 111, INT_MIN};
 constexpr std::array<int, 4> observed{-71, 202, -73, 144};
@@ -190,6 +195,12 @@ void startupErrorExit(const MessageText& text, int code) {
         if (item.text && item.style == ui::Style::Path) state.text["screen_path"] = item.text;
     state.exits.push_back(code);
     throw StartupExit{code};
+}
+void settingsConfigure(const VitaSettings& inForce, const VitaSettings& stored, const char* discId) {
+    state.configured = true;
+    state.inForce = inForce;
+    state.stored = stored;
+    state.disc = discId ? discId : "";
 }
 }
 std::vector<std::string> folder; // what sceIoDread lists
@@ -466,11 +477,68 @@ int main() {
     assert(state.selections.empty() && !state.gpuCalled);
     std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
     std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    // vita_settings.json (the settings page): its render size replaces the profile's 75 %, never a
+    // typed size; the page is told what is in force and what the file held.
+    writeFile(SettingsFile, "{\"renderScale\": 50}");
+    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u + 256u);
+    assert(state.text.at("render_scale_source") == "vita_settings.json" && state.text.at("vita_settings") == "read");
+    assert(state.configured && state.inForce.renderScale == 50 && state.stored.renderScaleSet &&
+           state.stored.renderScale == 50 && state.disc == "GZ2P01");
+    assert(run("--vita-gxm-scale=100") == 7 && state.gpuFeatures == 15u && state.inForce.renderScale == 100);
+    assert(state.text.at("render_scale_source") == "args" && state.stored.renderScale == 50);
+    assert(run("--vita-gxm-scale=67") == 7 && state.gpuFeatures == 143u && state.inForce.renderScale == 67);
+    // A renderer choice turns the profile off; the file's size waits for the profile.
+    assert(run("--vita-gpu=vgl") == 7 && state.gpuBackend == 0 && state.inForce.renderScale == 100);
+    assert(state.text.at("render_scale_source") == "default (vita_settings.json applies with the play profile only)");
+    writeFile(SettingsFile, "{\"renderScale\": 100, \"performance\": \"battery\"}");
+    assert(run(nullptr) == 7 && state.gpuFeatures == 15u && state.inForce.renderScale == 100);
+    checkClocks(false, false);
+    assert(state.inForce.batterySaver && state.text.at("clock_mode_source") == "vita_settings.json");
+    // A sequence run (bench lines) ignores the file: the profile's 75 % and 444 MHz, as without it.
+    writeFile("ux0:data/twilight-vita/sequence.txt", "b1: --vita-profile=play --stage F_SP103,0,23,-1\n");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    writeFile(SettingsFile, "{\"renderScale\": 50, \"performance\": \"battery\", \"showFps\": true}");
+    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on (explicit)" && state.gpuFeatures == 79u);
+    checkClocks(true, false);
+    assert(state.text.at("vita_settings") == "ignored (sequence run)" && state.text.at("render_scale_source") == "default");
+    assert(!state.stored.any_set() && !state.inForce.showFps && state.inForce.renderScale == 75);
+    std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    std::filesystem::remove(SettingsFile);
     std::filesystem::current_path(previous);
     std::filesystem::remove_all(root);
-    std::puts("clock_entry_test: implicit play profile unless renderer/GPU choices or --vita-ticks (clocks, timers, diagnostics kept), explicit with diagnostics only, never for sequence runs; fixed ticks, frame cap before user args, quiet receipts passed");
+    std::puts("clock_entry_test: implicit play profile unless renderer/GPU choices or --vita-ticks (clocks, timers, diagnostics kept), explicit with diagnostics only, never for sequence runs; fixed ticks, frame cap before user args, quiet receipts; vita_settings.json below args.txt, ignored by sequence runs passed");
     return 0;
 #endif
+    // vita_settings.json (the settings page) below args.txt: its performance mode applies when
+    // --vita-clocks is not typed (not "explicit"); bad values are ignored; a sequence run ignores it.
+    writeFile(SettingsFile, "{\"performance\": \"battery\", \"renderScale\": 50, \"showFps\": true, \"openGesture\": \"front\"}");
+    assert(run(nullptr) == 7); checkClocks(false, false);
+    assert(state.text.at("vita_settings") == "read" && state.text.at("clock_mode_source") == "vita_settings.json");
+    assert(state.text.at("render_scale_source") == "default (vita_settings.json applies with the play profile only)");
+    assert(state.configured && state.inForce.batterySaver && state.inForce.showFps && state.inForce.renderScale == 100);
+    assert(state.inForce.gesture == twv::vita::OpenGesture::Front && state.stored.renderScaleSet && state.stored.renderScale == 50);
+    assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
+    assert(state.text.at("clock_mode_source") == "args" && !state.inForce.batterySaver && state.stored.batterySaver);
+    writeFile(SettingsFile, "{\"performance\": \"normal\"}");
+    assert(run("--vita-clocks=system") == 7); checkClocks(false, true);
+    assert(run(nullptr) == 7); checkClocks(true, false);
+    writeFile(SettingsFile, "{\"renderScale\": 33, \"performance\": \"turbo\", \"openGesture\": \"rear\"}");
+    assert(run(nullptr) == 7); checkClocks(true, false);
+    assert(state.text.at("vita_settings") == "read (values ignored)" && state.events.at("vita_settings_ignored_values") == 2);
+    assert(state.text.at("clock_mode_source") == "default" && state.stored.gestureSet && !state.stored.renderScaleSet);
+    writeFile(SettingsFile, std::string(5000, ' '));
+    assert(run(nullptr) == 7); checkClocks(true, false);
+    assert(state.text.at("vita_settings") == "unreadable or too large; ignored" && !state.stored.any_set());
+    writeFile(SettingsFile, "{\"performance\": \"battery\"}");
+    writeFile("ux0:data/twilight-vita/sequence.txt", "s1: --stage F_SP103,1,3,-1\n");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    assert(run(nullptr) == 7); checkClocks(true, false);
+    assert(state.text.at("vita_settings") == "ignored (sequence run)" && !state.inForce.batterySaver);
+    std::filesystem::remove("ux0:data/twilight-vita/sequence.txt");
+    std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
+    std::filesystem::remove(SettingsFile);
+    assert(run(nullptr) == 7 && state.text.at("vita_settings") == "none" && state.disc == "GZ2P01");
     assert(run(nullptr) == 7); checkClocks(true, false); assert(state.gameArgs.size() == 5);
     assert(state.exitAfter == 0 && !state.events.count("sequence_index") && !state.events.count("sequence_complete"));
     // No play profile in this build: the fast shadow collection is off unless chosen.

@@ -12,6 +12,9 @@
 #include <cstdio>
 
 namespace twv::vita {
+// ui/settings_screen.cpp (graphics builds): how to open the settings page, for the bottom line.
+const char* settingsOpenHint() __attribute__((weak));
+
 namespace {
 
 constexpr uint32_t ScreenBytes = ui::ScreenWidth * ui::ScreenHeight * 4;
@@ -76,6 +79,7 @@ ui::Progress compiling_view(uint32_t done, uint32_t total) {
     p.total = total;
     p.bar = true;
     p.note = "This takes about a minute once. Later launches skip it.";
+    p.hint = settingsOpenHint ? settingsOpenHint() : nullptr;
     return p;
 }
 
@@ -119,6 +123,7 @@ void startupProgressBegin(void* buffer, uint32_t total) {
     progress.begun = true;
     ui::Progress p;
     p.total = total;
+    p.hint = settingsOpenHint ? settingsOpenHint() : nullptr;
     timed_progress_draw(p, true);
     telemetryEvent("startup_progress_begin", total);
     telemetryEvent("startup_progress_display", show(buffer));
