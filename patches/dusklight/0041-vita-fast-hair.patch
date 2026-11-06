@@ -1,0 +1,205 @@
+Vita (--vita-fast-hair=off|on|verify): E_s1 (the shadow beasts) bend 22 hair strands of 15
+segments every tick (ke_set -> ke_move -> ke_control). Per segment the original builds a rotation
+on the matrix stack (cMtx_XrotS), multiplies it by another (cMtx_YrotM: C_MTXConcat) and maps a
+point through it (MtxPosition: C_MTXMultVec). ke_control_fast runs the same statements and, for
+those three calls, C_MTXConcat's expression for the product's third column on the entries the
+rotation builders store, then the point as m * z + 0 (what C_MTXMultVec returns for (0, 0, z): every
+other term adds a signed zero), in registers; the stack's top is left as the original's last
+segment leaves it. Same values bit for bit (the compiler folds only value-keeping operations such as x * 1).
+verify: ke_set runs fast first, then the original for the game on the same strands, and the
+strands, the 3D line points and sizes, cM_rnd2's state and the matrix stack are compared. Off (0)
+unless the Vita entry selects it.
+
+--- a/src/d/actor/d_a_e_s1.cpp
++++ b/src/d/actor/d_a_e_s1.cpp
+@@ -5,6 +5,9 @@
+ 
+ #include "d/dolzel_rel.h" // IWYU pragma: keep
+ #include "d/d_vita_actsub.h"
++#if TARGET_VITA
++#include <string.h>
++#endif
+ 
+ #include "d/actor/d_a_e_s1.h"
+ #include "SSystem/SComponent/c_math.h"
+@@ -1209,7 +1212,113 @@
+     }
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0041): --vita-fast-hair=off|on|verify (platform/vita/runtime/
++// fast_actors.hpp "hair"). Every tick each E_s1 bends 22 hair strands of 15 segments (ke_set). Per
++// segment the original builds cMtx_XrotS on the matrix stack, multiplies it by a cMtx_YrotS through
++// C_MTXConcat and maps (0, 0, z) through C_MTXMultVec. ke_control_fast runs the same statements and,
++// for those three calls, C_MTXConcat's expression for the product's column 2 (extern/aurora
++// lib/dolphin/mtx/mtx.c) on the entries the rotation builders store, then the point as m * z + 0,
++// which is what C_MTXMultVec returns for (0, 0, z) (the derivation is at the code), in registers. The
++// compiler may only fold what keeps every value (x * 1, constant products), and the stack's top is
++// left as the last segment left it. verify: ke_set runs fast first, its strands, line
++// points and sizes, random state and matrix stack are kept, the strands are put back, and the
++// original runs for the game; any difference is counted.
++extern "C" int twv_vita_fast_actor_mode(int which);
++extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
++extern "C" void twv_cM_rnd2_state(int* out);
++enum { TWV_FAST_HAIR = 6 };
++static int s_twvHairFast; // 1 while ke_set runs the fast segments
++
++static void ke_control_fast(e_s1_class* i_this, s1_ke_s* i_ke, f32 i_posZ) {
++    cXyz sp40;
++    int i;
++
++    cXyz* var_r31 = &i_ke->field_0x0[1];
++    cXyz* var_r30 = &i_ke->field_0xc0[1];
++
++    // sp4C = (0, 0, i_posZ), the point MtxPosition maps
++    const f32 srcZ = i_posZ;
++
++    cXyz sp34;
++    f32 sp28 = -12.0f + JREG_F(0);
++    s16 sp14 = cM_rndF2(65536.0f);
++
++    f32 temp_f26 = 3.0f + JREG_F(8);
++    f32 sp2C;
++    f32 var_f29;
++    f32 temp_f25 = JREG_F(5) + (3.0f + i_this->mAcch.GetGroundH());
++    f32 temp_f27 = 0.8f + JREG_F(17);
++    s16 sp18 = 0;
++    s16 sp16 = 0;
++
++    for (i = 1; i < 16; i++, var_r31++, var_r30++) {
++        f32 sp24 = temp_f26 * cM_ssin((s16)(sp14 + (i * 7000)));
++        f32 sp20 = temp_f26 * cM_ssin((s16)(sp14 + 10000 + (i * 6000)));
++        f32 temp_f28 = (16 - i) * 0.1f;
++
++        sp34.x = var_r30->x + (sp24 + (i_ke->field_0x180.x * temp_f28));
++        sp34.y = var_r30->y + (i_ke->field_0x180.y * temp_f28);
++        sp34.z = var_r30->z + (sp20 + (i_ke->field_0x180.z * temp_f28));
++
++        sp2C = sp34.x + (var_r31->x - var_r31[-1].x);
++
++        f32 temp_f31;
++        f32 temp_f30 = sp34.z + (var_r31->z - var_r31[-1].z);
++
++        var_f29 = sp28 + (var_r31->y + sp34.y);
++        if (var_f29 < temp_f25) {
++            var_f29 = temp_f25;
++        }
++
++        temp_f31 = var_f29 - var_r31[-1].y;
++        sp18 = (s16)-cM_atan2s(temp_f31, temp_f30);
++        sp16 = (s16)cM_atan2s(sp2C, JMAFastSqrt((temp_f31 * temp_f31) + (temp_f30 * temp_f30)));
++
++        // ma = cMtx_XrotS(sp18) and mb = cMtx_YrotS(sp16) as m_Do_mtx.cpp stores them; m =
++        // C_MTXConcat(ma, mb); sp40 = C_MTXMultVec(m, (0, 0, srcZ)), whose row r is
++        //   m[r][3] + ((m[r][2] * srcZ) + ((m[r][0] * 0) + (m[r][1] * 0))).
++        // Every term of m[r][3] has a zero factor (column 3 of both rotations is 0), so m[r][3] is
++        // +0 (0 + (+-0) sums round to +0); (m[r][0] * 0) + (m[r][1] * 0) is a signed zero Z. With
++        // all values finite, P + Z is P unless P is a zero, and +0 + (P + Z) is then +0: the row is
++        // P + 0.0f, P = m[r][2] * srcZ. m[r][2] below is C_MTXConcat's expression for column 2.
++        const f32 ma[3][3] = {{1.0f, 0.0f, 0.0f}, {0.0f, JMASCos(sp18), -JMASSin(sp18)},
++                              {0.0f, JMASSin(sp18), JMASCos(sp18)}};
++        const f32 cy = JMASCos(sp16);
++        const f32 sy = JMASSin(sp16);
++        const f32 mb02 = sy, mb12 = 0.0f, mb22 = cy; // mb's column 2
++        f32 out[3];
++        for (int r = 0; r < 3; r++) {
++            const f32 m2 = 0 + ma[r][2] * mb22 + ((ma[r][0] * mb02) + (ma[r][1] * mb12));
++            out[r] = m2 * srcZ + 0.0f;
++        }
++        sp40.x = out[0];
++        sp40.y = out[1];
++        sp40.z = out[2];
++        *var_r30 = *var_r31;
++
++        var_r31->x = var_r31[-1].x + sp40.x;
++        var_r31->y = var_r31[-1].y + sp40.y;
++        var_r31->z = var_r31[-1].z + sp40.z;
++
++        var_r30->x = temp_f27 * (var_r31->x - var_r30->x);
++        var_r30->y = temp_f27 * (var_r31->y - var_r30->y);
++        var_r30->z = temp_f27 * (var_r31->z - var_r30->z);
++    }
++
++    // The matrix stack's top as the original's last segment left it.
++    cMtx_XrotS(*calc_mtx, sp18);
++    cMtx_YrotM(*calc_mtx, sp16);
++}
++#endif
++
+ static void ke_control(e_s1_class* i_this, s1_ke_s* i_ke, int i_no, f32 i_posZ) {
++#if TARGET_VITA
++    if (s_twvHairFast) {
++        ke_control_fast(i_this, i_ke, i_posZ);
++        return;
++    }
++#endif
+     cXyz sp4C;
+     cXyz sp40;
+     int i;
+@@ -1594,6 +1703,54 @@
+     }
+ }
+ 
++#if TARGET_VITA
++// ke_set with --vita-fast-hair: off and on as the switch says; verify runs both (see above).
++static void twv_ke_set(e_s1_class* i_this) {
++    const int mode = twv_vita_fast_actor_mode(TWV_FAST_HAIR);
++    if (mode != 2) {
++        s_twvHairFast = mode == 1;
++        ke_set(i_this);
++        s_twvHairFast = 0;
++        return;
++    }
++    enum { STRANDS = 22, POINTS = 16 };
++    static s1_ke_s saved[STRANDS];
++    static s1_ke_s fastKe[STRANDS];
++    static cXyz fastPos[STRANDS][POINTS];
++    static f32 fastSize[STRANDS][POINTS];
++    int fastRnd[3];
++    int rnd[3];
++    Mtx fastAbove;
++    Mtx fastTop;
++    memcpy(saved, i_this->mKe, sizeof saved);
++    s_twvHairFast = 1;
++    ke_set(i_this);
++    s_twvHairFast = 0;
++    memcpy(fastKe, i_this->mKe, sizeof fastKe);
++    for (int i = 0; i < STRANDS; i++) {
++        memcpy(fastPos[i], i_this->mLineMat.getPos(i), sizeof fastPos[i]);
++        memcpy(fastSize[i], i_this->mLineMat.getSize(i), sizeof fastSize[i]);
++    }
++    twv_cM_rnd2_state(fastRnd);
++    MTXCopy(calc_mtx[1], fastAbove);
++    MTXCopy(*calc_mtx, fastTop);
++
++    memcpy(i_this->mKe, saved, sizeof saved);
++    ke_set(i_this); // the original, for the game
++
++    bool differ = memcmp(fastKe, i_this->mKe, sizeof fastKe) != 0;
++    for (int i = 0; i < STRANDS; i++) {
++        differ = differ || memcmp(fastPos[i], i_this->mLineMat.getPos(i), sizeof fastPos[i]) != 0 ||
++                 memcmp(fastSize[i], i_this->mLineMat.getSize(i), sizeof fastSize[i]) != 0;
++    }
++    twv_cM_rnd2_state(rnd);
++    differ = differ || memcmp(fastRnd, rnd, sizeof rnd) != 0 ||
++             memcmp(fastAbove, calc_mtx[1], sizeof fastAbove) != 0 ||
++             memcmp(fastTop, *calc_mtx, sizeof fastTop) != 0;
++    twv_vita_fast_actor_count(TWV_FAST_HAIR, 1, differ);
++}
++#endif
++
+ static void demo_camera(e_s1_class* i_this) {
+     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+@@ -1935,7 +2092,11 @@
+     anm_se_set(i_this);
+     body_eff_set(i_this);
+     unsigned long long twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_E_S1_HAIR);
++#if TARGET_VITA
++    twv_ke_set(i_this);
++#else
+     ke_set(i_this);
++#endif
+     TWV_ACTSUB_END(TWV_ACTSUB_E_S1_HAIR, twvSub);
+ 
+     MTXCopy(model->getAnmMtx(4), *calc_mtx);

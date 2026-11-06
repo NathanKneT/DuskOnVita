@@ -90,13 +90,17 @@ enum Sub : unsigned {
     SubJ3dCalc, SubJointTree, SubWeightEnv, SubAcch, SubGround, SubLine, SubSph, SubWall, SubRoof,
     SubSearchAll, SubSearchActor, SubMorfPlay, SubCreature, SubCcSet, SubMsgFlow, SubFlowBind,
     SubLinkPre, SubLinkAnime, SubLinkProc, SubLinkBg, SubLinkGround, SubLinkMatrix, SubLinkTail,
-    SubMeterDraw, SubMeterMoves, SubMeterMap, SubMeterSub, SubCameraRun, SubCameraView, SubCount
+    SubMeterDraw, SubMeterMoves, SubMeterMap, SubMeterSub, SubCameraRun, SubCameraView,
+    // Round 2 (6 Nov): each morf's model calc (the J3DModel::calc wrap above never fires: it is a
+    // virtual call), E_s1's hair strands (patches/dusklight/0038), and 3D line geometry built in draw.
+    SubMorfCalc, SubESHair, SubLineUpdate, SubCount
 };
 constexpr const char* SubNames[SubCount] = {
     "j3d_calc", "joint_tree", "weight_env", "acch", "ground", "line", "sph", "wall", "roof",
     "search_all", "search_actor", "morf_play", "z2_creature", "cc_set", "msg_flow", "flow_bind",
     "link_pre", "link_anime", "link_proc", "link_bg", "link_ground", "link_matrix", "link_tail",
-    "meter_draw", "meter_moves", "meter_map", "meter_sub", "camera_run", "camera_view"};
+    "meter_draw", "meter_moves", "meter_map", "meter_sub", "camera_run", "camera_view",
+    "morf_calc", "e_s1_hair", "line_update"};
 
 // One receipt line of a type's execute detail: "p=<profile>;<sub>:<us>/<calls>,..." for the parts
 // from *next on with calls, until the line is full. Returns the length written (0: nothing left);

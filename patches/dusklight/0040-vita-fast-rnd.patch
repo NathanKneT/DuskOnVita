@@ -1,0 +1,97 @@
+Vita (--vita-fast-rnd=off|on|verify): cM_rnd and cM_rnd2 (the game's two random generators) end
+with fabsf(fmodf(v, 1.0)), a libm call on the Vita. fmodf is exact: for |v| < 1 it returns v, for
+1 <= |v| < 2^23 it returns v - trunc(v), which one float subtraction gives exactly (the difference
+is representable), and fabsf drops the sign fmodf keeps; the generator's sums are below 3. Larger
+values, infinities and NaN keep the call. Same values bit for bit; verify computes both and counts
+any difference. Off (0) unless the Vita entry selects it. Also the second generator's state for
+0041's verify.
+
+--- a/src/SSystem/SComponent/c_math.cpp
++++ b/src/SSystem/SComponent/c_math.cpp
+@@ -7,6 +7,9 @@
+ #include "SSystem/SComponent/c_m3d.h"
+ #include <cmath>
+ #include <global.h>
++#if TARGET_VITA
++#include <string.h>
++#endif
+ #include "dusk/logging.h"
+ 
+ s16 cM_rad2s(f32 rad) {
+@@ -170,6 +173,39 @@
+     return ret;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0040): --vita-fast-rnd=off|on|verify (platform/vita/runtime/fast_actors.hpp
++// "rnd"). cM_rnd and cM_rnd2 end with fabsf(fmodf(v, 1.0)), a libm call. fmodf is exact: for |v| < 1
++// it returns v, and for 1 <= |v| < 2^23 it returns v - trunc(v), which float subtraction gives exactly
++// (the difference is representable); fabsf drops the sign fmodf keeps. Larger values, infinities and
++// NaN keep the call. verify: both, compared bit for bit, the original returned.
++extern "C" {
++int twv_fast_rnd_mode = 0; // set by fast_actors.cpp
++void twv_vita_fast_actor_count(int which, int fast, int mismatch) __attribute__((weak));
++}
++enum { TWV_FAST_RND = 7 };
++
++static inline f32 twv_rnd_frac_fast(f32 v, f32 a) {
++    return a < 1.0f ? a : fabsf(v - (f32)(s32)v);
++}
++
++static f32 twv_rnd_frac(f32 v) {
++    const f32 a = fabsf(v);
++    if (twv_fast_rnd_mode == 1 && a < 8388608.0f) {
++        return twv_rnd_frac_fast(v, a);
++    }
++    const f32 ret = fabsf(fmodf(v, 1.0));
++    if (twv_fast_rnd_mode == 2 && twv_vita_fast_actor_count) {
++        const f32 fast = a < 8388608.0f ? twv_rnd_frac_fast(v, a) : ret;
++        u32 x, y;
++        memcpy(&x, &fast, sizeof x);
++        memcpy(&y, &ret, sizeof y);
++        twv_vita_fast_actor_count(TWV_FAST_RND, 1, x != y);
++    }
++    return ret;
++}
++#endif
++
+ static s32 r0;
+ 
+ static s32 r1;
+@@ -192,7 +228,11 @@
+     r2 = (r2 * 170) % 30323;
+ 
+     f32 var_f31 = r0 / 30269.0f + r1 / 30307.0f + r2 / 30323.0f;
++#if TARGET_VITA
++    return twv_rnd_frac(var_f31);
++#else
+     return fabsf(fmodf(var_f31, 1.0));
++#endif
+ }
+ 
+ /**
+@@ -231,7 +271,11 @@
+     r22 = (r22 * 170) % 30323;
+ 
+     f32 var_f31 = r02 / 30269.0f + r12 / 30307.0f + r22 / 30323.0f;
++#if TARGET_VITA
++    return twv_rnd_frac(var_f31);
++#else
+     return fabsf(fmodf(var_f31, 1.0));
++#endif
+ }
+ 
+ f32 cM_rndF2(f32 max) {
+@@ -241,3 +285,12 @@
+ f32 cM_rndFX2(f32 max) {
+     return max * (cM_rnd2() - 0.5f) * 2.0f;
+ }
++
++#if TARGET_VITA
++// Vita (patches/dusklight/0041's verify): the second generator's state.
++extern "C" void twv_cM_rnd2_state(int* out) {
++    out[0] = r02;
++    out[1] = r12;
++    out[2] = r22;
++}
++#endif

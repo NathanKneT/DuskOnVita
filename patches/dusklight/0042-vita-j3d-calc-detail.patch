@@ -1,0 +1,44 @@
+Vita: measurement only (the main-thread actor profile's execute detail, as patches/dusklight/0030).
+J3DModel::calc opens execute detail part 0 (j3d_calc): model calc per actor type, including models
+an actor calculates directly (the horse, Link) rather than through mDoExt_McaMorf. calc is virtual,
+so the port's link wrap of it never fired. Outside sampled sub frames one flag test. No game
+behaviour changes: same calls, same order, same results.
+
+--- a/libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp
++++ b/libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp
+@@ -36,8 +36,27 @@
+ #define TWV_J3D_PART(p) TwvJ3dPart twvJ3dPart_(p)
+ // patches/dusklight/0036: the J3D probe build repeats the weight envelopes in mode 4 (idempotent).
+ extern "C" unsigned char twv_j3d_probe_mode;
++// patches/dusklight/0042: measurement only. J3DModel::calc as the actor profile's execute detail
++// part 0 (j3d_calc, actor_profile_stats.hpp), charged to the executing process's profile on sampled
++// sub frames: calc is virtual, so the port's link wrap of it never sees the game's calls.
++extern "C" unsigned char twv_actsub_on;
++extern "C" unsigned long long twv_actsub_begin(unsigned sub);
++extern "C" void twv_actsub_end(unsigned sub, unsigned long long start);
++namespace {
++struct TwvSubCalc {
++    TwvSubCalc() : start(twv_actsub_on ? twv_actsub_begin(0) : 0) {}
++    ~TwvSubCalc() {
++        if (start != 0) {
++            twv_actsub_end(0, start);
++        }
++    }
++    unsigned long long start;
++};
++}  // namespace
++#define TWV_SUB_J3D_CALC() TwvSubCalc twvSubCalc_
+ #else
+ #define TWV_J3D_PART(p)
++#define TWV_SUB_J3D_CALC()
+ #endif
+ 
+ #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
+@@ -489,6 +508,7 @@
+ 
+ void J3DModel::calc() {
+     TWV_J3D_PART(0);
++    TWV_SUB_J3D_CALC();
+     j3dSys.setModel(this);
+ 
+     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {

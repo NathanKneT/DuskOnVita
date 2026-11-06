@@ -268,6 +268,9 @@ void frame_end() {
 
 // Sub frames: the part's nesting depth (a part inside itself counts once).
 unsigned gSubDepth[SubCount];
+// Sub frames, draw phase: the type of the process drawing now (parts timed in its draw are charged
+// to it, as in execute), -1 outside a process's draw.
+int gDrawSubSlot = -1;
 }  // namespace
 
 // patches/dusklight/0030 scopes and the wraps below, while twv_actsub_on: begin returns the clock
@@ -281,7 +284,7 @@ extern "C" unsigned long long twv_actsub_begin(unsigned sub) {
 extern "C" void twv_actsub_end(unsigned sub, unsigned long long start) {
     const uint64_t t = now_us();
     if (sub >= SubCount || !gSubDepth[sub]) return;
-    const unsigned slot = gExec.open ? gExec.slot : TypeSlots - 1;
+    const unsigned slot = gExec.open ? gExec.slot : gDrawSubSlot >= 0 ? unsigned(gDrawSubSlot) : TypeSlots - 1;
     ++gWin.subCalls[slot][sub];
     if (--gSubDepth[sub] == 0) gWin.subUs[slot][sub] += uint32_t(t - start);
 }
@@ -389,6 +392,16 @@ extern "C" int __wrap__Z13fpcEx_ExecuteP18base_process_class(base_process_class*
 // self time per profile, culling and camera distance for actors.
 extern "C" int __real__Z13fpcDw_ExecuteP18base_process_class(base_process_class*);
 extern "C" int __wrap__Z13fpcDw_ExecuteP18base_process_class(base_process_class* proc) {
+    if (gMode == ModeSub && gInDraw) {
+        // Sub frames: the parts timed inside this draw (line geometry, model calc) go to its type.
+        const int previous = gDrawSubSlot;
+        gDrawSubSlot = int(type_slot(proc->profname));
+        twv_actsub_on = 1;
+        const int ret = __real__Z13fpcDw_ExecuteP18base_process_class(proc);
+        gDrawSubSlot = previous;
+        twv_actsub_on = previous >= 0 ? 1 : 0;
+        return ret;
+    }
     if (gMode != ModeActors || !gInDraw || gDepth >= MaxDepth)
         return __real__Z13fpcDw_ExecuteP18base_process_class(proc);
     DrawFrame& f = gStack[gDepth++];
@@ -489,6 +502,14 @@ TWV_SUB_WRAP_RET(int, _ZN14mDoExt_McaMorf4playEP3Vecja, SubMorfPlay,
                  (void* self, void* pos, unsigned mode, signed char rev), (self, pos, mode, rev))
 TWV_SUB_WRAP_RET(int, _ZN15mDoExt_McaMorf24playEja, SubMorfPlay, (void* self, unsigned mode, signed char rev),
                  (self, mode, rev))
+TWV_SUB_WRAP_VOID(_ZN14mDoExt_McaMorf9modelCalcEv, SubMorfCalc, (void* self), (self))
+TWV_SUB_WRAP_VOID(_ZN16mDoExt_McaMorfSO9modelCalcEv, SubMorfCalc, (void* self), (self))
+TWV_SUB_WRAP_VOID(_ZN15mDoExt_McaMorf29modelCalcEv, SubMorfCalc, (void* self), (self))
+TWV_SUB_WRAP_VOID(_ZN19mDoExt_3DlineMat0_c6updateEifR7GXColortP12dKy_tevstr_c, SubLineUpdate,
+                  (void* self, int lines, float width, void* color, unsigned short segs, void* tevstr),
+                  (self, lines, width, color, segs, tevstr))
+TWV_SUB_WRAP_VOID(_ZN19mDoExt_3DlineMat0_c6updateEiR7GXColorP12dKy_tevstr_c, SubLineUpdate,
+                  (void* self, int lines, void* color, void* tevstr), (self, lines, color, tevstr))
 TWV_SUB_WRAP_VOID(_ZN10Z2Creature9frameworkEja, SubCreature, (void* self, unsigned mode, signed char rev),
                   (self, mode, rev))
 TWV_SUB_WRAP_VOID(_ZN4cCcS3SetEP8cCcD_Obj, SubCcSet, (void* self, void* obj), (self, obj))

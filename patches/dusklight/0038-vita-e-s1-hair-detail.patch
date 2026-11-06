@@ -1,0 +1,35 @@
+Vita: measurement only (the main-thread actor profile's execute detail, as patches/dusklight/0030).
+E_s1's hair strands (ke_set: 22 strands of 15 segments, every tick) open a segment that the port
+times on sampled sub frames and charges to the E_s1 profile. Outside sampled frames one flag test.
+No game behaviour changes: same calls, same order, same results.
+
+--- a/include/d/d_vita_actsub.h
++++ b/include/d/d_vita_actsub.h
+@@ -35,6 +35,7 @@
+     TWV_ACTSUB_METER_SUB = 26,
+     TWV_ACTSUB_CAMERA_RUN = 27,
+     TWV_ACTSUB_CAMERA_VIEW = 28,
++    TWV_ACTSUB_E_S1_HAIR = 30, // 29 is the port's morf_calc wrap
+ };
+ 
+ #endif /* D_VITA_ACTSUB_H */
+--- a/src/d/actor/d_a_e_s1.cpp
++++ b/src/d/actor/d_a_e_s1.cpp
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "d/dolzel_rel.h" // IWYU pragma: keep
++#include "d/d_vita_actsub.h"
+ 
+ #include "d/actor/d_a_e_s1.h"
+ #include "SSystem/SComponent/c_math.h"
+@@ -1933,7 +1934,9 @@
+ 
+     anm_se_set(i_this);
+     body_eff_set(i_this);
++    unsigned long long twvSub = TWV_ACTSUB_BEGIN(TWV_ACTSUB_E_S1_HAIR);
+     ke_set(i_this);
++    TWV_ACTSUB_END(TWV_ACTSUB_E_S1_HAIR, twvSub);
+ 
+     MTXCopy(model->getAnmMtx(4), *calc_mtx);
+     spE0.set(20.0f + KREG_F(0), KREG_F(1), KREG_F(2));

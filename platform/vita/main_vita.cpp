@@ -111,6 +111,9 @@ constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
     twv::vita::FastActorOn,  // bg-list
     twv::vita::FastActorOn,  // flow-bind
     twv::vita::FastActorOn,  // mtx (aurora 0022, dusklight 0037): console m1 verify 10.6 M products, 0 differences
+    twv::vita::FastActorOff, // search-index (dusklight 0039): round 2, off until the console confirms
+    twv::vita::FastActorOff, // hair (dusklight 0041): round 2, off until the console confirms
+    twv::vita::FastActorOff, // rnd (dusklight 0040): round 2, off until the console confirms
 };
 
 // "<prefix><a>" -> choice 0, "<prefix><b>" -> choice 1 (returns 1); another value or a second

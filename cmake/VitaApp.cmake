@@ -178,6 +178,10 @@ target_link_options(twv_game INTERFACE
     -Wl,--wrap=_ZN4dBgS11WallCorrectEP9dBgS_Acch -Wl,--wrap=_ZN4dBgS15WallCorrectSortEP9dBgS_Acch
     -Wl,--wrap=_ZN4dBgS7RoofChkEP12dBgS_RoofChk -Wl,--wrap=_Z16fpcLyIt_AllJudgePFPvS_S_ES_
     -Wl,--wrap=_Z13fopAcIt_JudgePFPvS_S_ES_ -Wl,--wrap=_ZN16mDoExt_McaMorfSO4playEja
+    -Wl,--wrap=_ZN14mDoExt_McaMorf9modelCalcEv -Wl,--wrap=_ZN16mDoExt_McaMorfSO9modelCalcEv
+    -Wl,--wrap=_ZN15mDoExt_McaMorf29modelCalcEv
+    -Wl,--wrap=_ZN19mDoExt_3DlineMat0_c6updateEifR7GXColortP12dKy_tevstr_c
+    -Wl,--wrap=_ZN19mDoExt_3DlineMat0_c6updateEiR7GXColorP12dKy_tevstr_c
     -Wl,--wrap=_ZN14mDoExt_McaMorf4playEP3Vecja -Wl,--wrap=_ZN15mDoExt_McaMorf24playEja
     -Wl,--wrap=_ZN10Z2Creature9frameworkEja -Wl,--wrap=_ZN4cCcS3SetEP8cCcD_Obj
     -Wl,--wrap=_ZN10dMsgFlow_c4initEP10fopAc_ac_ciiPS1_ -Wl,--wrap=_ZN4dusk4flow13bind_resourceEPKvt)

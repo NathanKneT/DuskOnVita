@@ -6,6 +6,8 @@
 
 // patches/aurora/0022 (lib/dolphin/mtx/mtx.c): the mtx switch's mode, read on every product.
 extern "C" int twv_fast_mtx_mode __attribute__((weak));
+// patches/dusklight/0040 (c_math.cpp): the rnd switch's mode, read on every random number.
+extern "C" int twv_fast_rnd_mode __attribute__((weak));
 
 namespace {
 int sMode[twv::vita::FastActorSwitchCount] = {};
@@ -45,6 +47,7 @@ extern "C" int twv_vita_fast_actor_select(int which, int mode) {
     if (which < 0 || which >= twv::vita::FastActorSwitchCount) return 0;
     if (mode < twv::vita::FastActorOff || mode > twv::vita::FastActorVerify) return 0;
     sMode[which] = mode;
+    if (which == twv::vita::FastRnd && &twv_fast_rnd_mode) twv_fast_rnd_mode = mode;
     if (which == twv::vita::FastMtx) {
         if (&twv_fast_mtx_mode) twv_fast_mtx_mode = mode;
 #if defined(__arm__)

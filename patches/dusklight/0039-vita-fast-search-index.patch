@@ -1,0 +1,479 @@
+Vita (--vita-fast-search-index=off|on|verify, with --vita-fast-search on): searches by process ID
+or name (fpcSch_JudgeByID, fpcSch_JudgeForPName through fpcLyIt_AllJudge and fopAcIt_Judge:
+fopAcM_SearchByID, fopAcM_SearchByName, fpcEx_SearchByID, fpcM_SearchByName) answer from an index of
+0032's kept walk, built again whenever the walk is: those judges return the first process with that
+ID or name and change nothing, so the index gives the same process. The fishing pond's fish search
+with judges that test the process name before anything else and return NULL, with no side effect,
+for every other name (s_hitfish_sub, s_lure_sub, s_esa_sub, s_bait_sub, s_other_search_sub,
+s_other_bait_sub): fpcLyIt_AllJudgeNamed hands those judges that name's processes only, in walk
+order, and once a judge changed a list goes on as the original loop from that process. verify: the
+search as before for the game, and the index's answer (named searches: the index's list of that
+name's processes against every kept process) compared with it. Off (0) unless the Vita entry selects
+it; the counts go to platform/vita/runtime/fast_actors.cpp (calls: every search while on; fast: the
+ones the index answered).
+
+--- a/include/f_pc/f_pc_layer_iter.h
++++ b/include/f_pc/f_pc_layer_iter.h
+@@ -18,5 +18,10 @@
+ int fpcLyIt_All(fpcLyIt_OnlyHereFunc i_func, void* i_data);
+ void* fpcLyIt_Judge(layer_class* i_layer, fpcLyIt_JudgeFunc i_func, void* i_data);
+ void* fpcLyIt_AllJudge(fpcLyIt_JudgeFunc i_func, void* i_data);
++#if TARGET_VITA
++// Vita (patches/dusklight/0039): fpcLyIt_AllJudge for a judge that returns NULL, with no side
++// effect, for every process whose name is not i_name. Same result and side effects.
++void* fpcLyIt_AllJudgeNamed(s16 i_name, fpcLyIt_JudgeFunc i_func, void* i_data);
++#endif
+ 
+ #endif
+--- a/src/f_pc/f_pc_layer_iter.cpp
++++ b/src/f_pc/f_pc_layer_iter.cpp
+@@ -64,13 +64,16 @@
+ #include "SSystem/SComponent/c_list_iter.h"
+ #include "SSystem/SComponent/c_node.h"
+ #include "SSystem/SComponent/c_tag.h"
++#include "f_pc/f_pc_base.h"
++#include "f_pc/f_pc_searcher.h"
++#include <algorithm>
+ #include <string.h>
+ extern "C" int twv_vita_fast_actor_mode(int which);
+ extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
+ extern "C" unsigned int twv_cls_generation;
+ 
+ namespace {
+-enum { TWV_FAST_SEARCH = 1 };
++enum { TWV_FAST_SEARCH = 1, TWV_FAST_SEARCH_INDEX = 5 };
+ 
+ struct WalkKeep {
+     enum { MAX_TAGS = 2048, MAX_LISTS = 256, MAX_LAYERS = 32 };
+@@ -87,6 +90,7 @@
+ WalkKeep s_walkFresh;
+ unsigned int s_walkKeepGeneration;
+ bool s_walkKeepValid = false;
++unsigned int s_walkKeepSerial; // one more on every walk_collect into s_walkKeep (0039's index)
+ 
+ // The original walk's order without judges: every layer from the root, each of its lists (as
+ // cTrIt_Judge, from the tree's list array), each list's nodes from the head (cLsIt_Judge with
+@@ -140,6 +144,7 @@
+         const unsigned int generation = twv_cls_generation;
+         s_walkKeepValid = walk_collect(&s_walkKeep);
+         s_walkKeepGeneration = generation;
++        s_walkKeepSerial++;
+         *walked = true;
+     }
+     return s_walkKeepValid ? &s_walkKeep : NULL;
+@@ -159,6 +164,34 @@
+     return NULL;
+ }
+ 
++// A judge changed a list: on as the original loop from there. next is the node the loop had already
++// read after the judged one (NULL at its list's end), li that list's number in layer layerA, whose
++// lists start at listsA (lists of them). Nothing here reads the kept arrays, which a judge's own
++// search may have taken again.
++static void* walk_resume(node_class* next, node_list_class* listsA, int lists, int li, layer_class* layerA,
++                         layer_iter* iter) {
++    void* ret = walk_resume_nodes(next, iter);
++    if (ret != NULL) {
++        return ret;
++    }
++    node_list_class* list = listsA + li + 1;
++    for (int i = lists - li - 1; i-- > 0;) {
++        ret = cLsIt_Judge(list++, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
++        if (ret != NULL) {
++            return ret;
++        }
++    }
++    for (layer_class* layer = (layer_class*)layerA->node.mpNextNode; layer != NULL;
++         layer = (layer_class*)layer->node.mpNextNode)
++    {
++        ret = cTrIt_Judge(&layer->node_tree, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
++        if (ret != NULL) {
++            return ret;
++        }
++    }
++    return NULL;
++}
++
+ // Every entry is read before the judge runs: a judge's own search may take the kept walk again
+ // (only once a list changed, and then this walk leaves the array at once).
+ static void* walk_fast(const WalkKeep* keep, layer_iter* iter) {
+@@ -182,32 +215,133 @@
+                 }
+                 if (twv_cls_generation != generation) {
+                     // The judge changed a list: on as the original loop from here.
+-                    ret = walk_resume_nodes(next, iter);
+-                    if (ret != NULL) {
+-                        return ret;
+-                    }
+-                    node_list_class* list = listsA + li + 1;
+-                    for (int i = lists - li - 1; i-- > 0;) {
+-                        ret = cLsIt_Judge(list++, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
+-                        if (ret != NULL) {
+-                            return ret;
+-                        }
+-                    }
+-                    for (layer_class* layer = (layer_class*)layerA->node.mpNextNode; layer != NULL;
+-                         layer = (layer_class*)layer->node.mpNextNode)
+-                    {
+-                        ret = cTrIt_Judge(&layer->node_tree, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, iter);
+-                        if (ret != NULL) {
+-                            return ret;
+-                        }
+-                    }
+-                    return NULL;
++                    return walk_resume(next, listsA, lists, li, layerA, iter);
+                 }
+             }
+         }
+     }
+     return NULL;
+ }
++
++// Vita (patches/dusklight/0039): --vita-fast-search-index=off|on|verify, with the kept walk above.
++// fpcSch_JudgeByID and fpcSch_JudgeForPName return the first process of the walk with that ID or
++// name and change nothing, so an index of the kept walk (by name in walk order, and by ID) gives
++// the same answer without calling the judge for every process. fpcLyIt_AllJudgeNamed is for a judge
++// that returns NULL, with no side effect, for every process of another name (its call sites say
++// why): the judge runs on that name's processes only, in walk order, and once a judge changed a
++// list the search goes on as the original loop from that process. verify: the search as before for
++// the game, and the index's answer (named: its list of processes) compared with it.
++struct WalkIndex {
++    enum { ID_SLOTS = 4096 }; // a power of two, at least twice WalkKeep::MAX_TAGS
++    unsigned int byName[WalkKeep::MAX_TAGS]; // (u16 name << 16) | tag, ascending
++    fpc_ProcID ids[ID_SLOTS];
++    unsigned short idTag[ID_SLOTS]; // tag + 1, 0 empty
++    unsigned int serial;            // the s_walkKeepSerial it describes
++    bool built;
++};
++WalkIndex s_walkIndex;
++
++static unsigned int id_slot(fpc_ProcID id) {
++    return (id * 2654435761u) >> (32 - 12); // 12 bits: ID_SLOTS
++}
++
++static const WalkIndex* walk_index(const WalkKeep* keep) {
++    WalkIndex& x = s_walkIndex;
++    if (x.built && x.serial == s_walkKeepSerial) {
++        return &x;
++    }
++    memset(x.idTag, 0, sizeof x.idTag);
++    for (int tag = 0; tag < keep->tagCount; tag++) {
++        const base_process_class* proc = (const base_process_class*)keep->data[tag];
++        x.byName[tag] = ((unsigned int)(unsigned short)proc->name << 16) | (unsigned int)tag;
++        unsigned int slot = id_slot(proc->id);
++        while (x.idTag[slot] != 0 && x.ids[slot] != proc->id) {
++            slot = (slot + 1) & (WalkIndex::ID_SLOTS - 1);
++        }
++        if (x.idTag[slot] == 0) { // the first process with this ID in walk order
++            x.ids[slot] = proc->id;
++            x.idTag[slot] = (unsigned short)(tag + 1);
++        }
++    }
++    std::sort(x.byName, x.byName + keep->tagCount);
++    x.serial = s_walkKeepSerial;
++    x.built = true;
++    return &x;
++}
++
++// The first entry of name's processes in byName (end when none).
++static const unsigned int* name_first(const WalkIndex* x, int count, s16 name) {
++    const unsigned int key = (unsigned int)(unsigned short)name << 16;
++    const unsigned int* p = std::lower_bound(x->byName, x->byName + count, key);
++    return p != x->byName + count && (*p >> 16) == (key >> 16) ? p : x->byName + count;
++}
++
++// What fpcSch_JudgeByID / fpcSch_JudgeForPName over the kept walk returns.
++static void* index_find(const WalkKeep* keep, fpcLyIt_JudgeFunc func, void* data) {
++    const WalkIndex* x = walk_index(keep);
++    if (func == fpcSch_JudgeByID) {
++        const fpc_ProcID id = *(fpc_ProcID*)data;
++        for (unsigned int slot = id_slot(id); x->idTag[slot] != 0; slot = (slot + 1) & (WalkIndex::ID_SLOTS - 1)) {
++            if (x->ids[slot] == id) {
++                return keep->data[x->idTag[slot] - 1];
++            }
++        }
++        return NULL;
++    }
++    const unsigned int* p = name_first(x, keep->tagCount, *(s16*)data);
++    return p != x->byName + keep->tagCount ? keep->data[*p & 0xFFFF] : NULL;
++}
++
++static bool index_judge(fpcLyIt_JudgeFunc func) {
++    return func == fpcSch_JudgeByID || func == fpcSch_JudgeForPName;
++}
++
++// name's processes of the kept walk, in walk order, to the judge.
++static void* walk_named(const WalkKeep* keep, s16 name, layer_iter* iter) {
++    const WalkIndex* x = walk_index(keep);
++    const int count = keep->tagCount;
++    const unsigned int* end = x->byName + count;
++    const unsigned int generation = twv_cls_generation;
++    fpcLyIt_JudgeFunc func = (fpcLyIt_JudgeFunc)iter->func;
++    for (const unsigned int* p = name_first(x, count, name); p != end && (*p >> 16) == (unsigned short)name; ++p) {
++        const int tag = (int)(*p & 0xFFFF);
++        // Where the original loop would be at this process, read before the judge runs.
++        const int listNo = (int)(std::upper_bound(keep->listEnd, keep->listEnd + keep->listCount, tag) - keep->listEnd);
++        int a = 0, first = 0;
++        while (first + keep->layerListCount[a] <= listNo) {
++            first += keep->layerListCount[a++];
++        }
++        node_class* const next = tag + 1 < keep->listEnd[listNo] ? &keep->tags[tag + 1]->mpNode : NULL;
++        node_list_class* const listsA = keep->layerLists[a];
++        const int lists = keep->layerListCount[a];
++        layer_class* const layerA = keep->layers[a];
++        void* ret = func(keep->data[tag], iter->data);
++        if (ret != NULL) {
++            return ret;
++        }
++        if (twv_cls_generation != generation) {
++            return walk_resume(next, listsA, lists, listNo - first, layerA, iter);
++        }
++    }
++    return NULL;
++}
++
++// verify (named): the index lists exactly the kept walk's processes of that name, in walk order.
++static bool named_same(const WalkKeep* keep, s16 name) {
++    const WalkIndex* x = walk_index(keep);
++    const unsigned int* p = name_first(x, keep->tagCount, name);
++    const unsigned int* end = x->byName + keep->tagCount;
++    for (int tag = 0; tag < keep->tagCount; tag++) {
++        if (((const base_process_class*)keep->data[tag])->name != name) {
++            continue;
++        }
++        if (p == end || (*p >> 16) != (unsigned short)name || (int)(*p & 0xFFFF) != tag) {
++            return false;
++        }
++        ++p;
++    }
++    return p == end || (*p >> 16) != (unsigned short)name;
++}
+ }  // namespace
+ #endif
+ 
+@@ -226,6 +360,20 @@
+         const WalkKeep* keep = walk_kept(&walked);
+         if (keep != NULL) {
+             twv_vita_fast_actor_count(TWV_FAST_SEARCH, walked ? 2 : 1, -1);
++            const int indexMode = twv_vita_fast_actor_mode(TWV_FAST_SEARCH_INDEX);
++            if (indexMode != 0) {
++                if (!index_judge(i_func)) {
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 0, -1);
++                } else if (indexMode == 1) {
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, -1);
++                    return index_find(keep, i_func, i_data);
++                } else {
++                    void* const found = index_find(keep, i_func, i_data);
++                    ret = walk_fast(keep, &iter);
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, found != ret);
++                    return ret;
++                }
++            }
+             return walk_fast(keep, &iter);
+         }
+         twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
+@@ -251,3 +399,27 @@
+ 
+     return NULL;
+ }
++
++#if TARGET_VITA
++void* fpcLyIt_AllJudgeNamed(s16 i_name, fpcLyIt_JudgeFunc i_func, void* i_data) {
++    const int indexMode = twv_vita_fast_actor_mode(TWV_FAST_SEARCH_INDEX);
++    if (indexMode != 0 && twv_vita_fast_actor_mode(TWV_FAST_SEARCH) == 1) {
++        bool walked;
++        const WalkKeep* keep = walk_kept(&walked);
++        if (keep != NULL) {
++            twv_vita_fast_actor_count(TWV_FAST_SEARCH, walked ? 2 : 1, -1);
++            layer_iter iter;
++            iter.func = (void*)i_func;
++            iter.data = i_data;
++            if (indexMode == 1) {
++                twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, -1);
++                return walk_named(keep, i_name, &iter);
++            }
++            const bool same = named_same(keep, i_name);
++            twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, !same);
++            return walk_fast(keep, &iter);
++        }
++    }
++    return fpcLyIt_AllJudge(i_func, i_data);
++}
++#endif
+--- a/src/f_op/f_op_actor_iter.cpp
++++ b/src/f_op/f_op_actor_iter.cpp
+@@ -28,13 +28,16 @@
+ // with a fresh walk.
+ #include "SSystem/SComponent/c_node.h"
+ #include "SSystem/SComponent/c_tag.h"
++#include "f_pc/f_pc_base.h"
++#include "f_pc/f_pc_searcher.h"
++#include <algorithm>
+ #include <string.h>
+ extern "C" int twv_vita_fast_actor_mode(int which);
+ extern "C" void twv_vita_fast_actor_count(int which, int fast, int mismatch);
+ extern "C" unsigned int twv_cls_generation;
+ 
+ namespace {
+-enum { TWV_FAST_SEARCH = 1 };
++enum { TWV_FAST_SEARCH = 1, TWV_FAST_SEARCH_INDEX = 5 };
+ 
+ struct ActorQueueKeep {
+     enum { MAX_TAGS = 1024 };
+@@ -47,6 +50,7 @@
+ ActorQueueKeep s_actorFresh;
+ unsigned int s_actorKeepGeneration;
+ bool s_actorKeepValid = false;
++unsigned int s_actorKeepSerial; // one more on every actor_collect into s_actorKeep (0039's index)
+ 
+ // cLsIt_Judge's order without judges: nothing when mSize is 0, else the head and its links.
+ static bool actor_collect(ActorQueueKeep* keep) {
+@@ -70,6 +74,7 @@
+         const unsigned int generation = twv_cls_generation;
+         s_actorKeepValid = actor_collect(&s_actorKeep);
+         s_actorKeepGeneration = generation;
++        s_actorKeepSerial++;
+         *walked = true;
+     }
+     return s_actorKeepValid ? &s_actorKeep : NULL;
+@@ -103,6 +108,57 @@
+     }
+     return NULL;
+ }
++
++// Vita (patches/dusklight/0039): --vita-fast-search-index, the queue's ID and name searches
++// (fopAcM_SearchByID, fopAcM_SearchByName) from an index of the kept queue, as in
++// f_pc_layer_iter.cpp: those judges return the first actor with that ID or name and change nothing.
++struct ActorIndex {
++    enum { ID_SLOTS = 2048 }; // a power of two, at least twice ActorQueueKeep::MAX_TAGS
++    unsigned int byName[ActorQueueKeep::MAX_TAGS]; // (u16 name << 16) | position, ascending
++    fpc_ProcID ids[ID_SLOTS];
++    unsigned short idPos[ID_SLOTS]; // position + 1, 0 empty
++    unsigned int serial;
++    bool built;
++};
++ActorIndex s_actorIndex;
++
++static unsigned int actor_id_slot(fpc_ProcID id) {
++    return (id * 2654435761u) >> (32 - 11); // 11 bits: ID_SLOTS
++}
++
++static void* actor_index_find(const ActorQueueKeep* keep, fopAcIt_JudgeFunc func, void* data) {
++    ActorIndex& x = s_actorIndex;
++    if (!x.built || x.serial != s_actorKeepSerial) {
++        memset(x.idPos, 0, sizeof x.idPos);
++        for (int i = 0; i < keep->count; i++) {
++            const base_process_class* proc = (const base_process_class*)keep->data[i];
++            x.byName[i] = ((unsigned int)(unsigned short)proc->name << 16) | (unsigned int)i;
++            unsigned int slot = actor_id_slot(proc->id);
++            while (x.idPos[slot] != 0 && x.ids[slot] != proc->id) {
++                slot = (slot + 1) & (ActorIndex::ID_SLOTS - 1);
++            }
++            if (x.idPos[slot] == 0) { // the first actor with this ID in queue order
++                x.ids[slot] = proc->id;
++                x.idPos[slot] = (unsigned short)(i + 1);
++            }
++        }
++        std::sort(x.byName, x.byName + keep->count);
++        x.serial = s_actorKeepSerial;
++        x.built = true;
++    }
++    if ((void*)func == (void*)fpcSch_JudgeByID) {
++        const fpc_ProcID id = *(fpc_ProcID*)data;
++        for (unsigned int slot = actor_id_slot(id); x.idPos[slot] != 0; slot = (slot + 1) & (ActorIndex::ID_SLOTS - 1)) {
++            if (x.ids[slot] == id) {
++                return keep->data[x.idPos[slot] - 1];
++            }
++        }
++        return NULL;
++    }
++    const unsigned int key = (unsigned int)(unsigned short)*(s16*)data << 16;
++    const unsigned int* p = std::lower_bound(x.byName, x.byName + keep->count, key);
++    return p != x.byName + keep->count && (*p >> 16) == (key >> 16) ? keep->data[*p & 0xFFFF] : NULL;
++}
+ }  // namespace
+ #endif
+ 
+@@ -121,6 +177,20 @@
+         const ActorQueueKeep* keep = actor_kept(&walked);
+         if (keep != NULL) {
+             twv_vita_fast_actor_count(TWV_FAST_SEARCH, walked ? 2 : 1, -1);
++            const int indexMode = twv_vita_fast_actor_mode(TWV_FAST_SEARCH_INDEX);
++            if (indexMode != 0) {
++                if ((void*)i_judgeFunc != (void*)fpcSch_JudgeByID && (void*)i_judgeFunc != (void*)fpcSch_JudgeForPName) {
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 0, -1);
++                } else if (indexMode == 1) {
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, -1);
++                    return actor_index_find(keep, i_judgeFunc, i_data);
++                } else {
++                    void* const found = actor_index_find(keep, i_judgeFunc, i_data);
++                    void* const ret = actor_fast(keep, i_judgeFunc, i_data);
++                    twv_vita_fast_actor_count(TWV_FAST_SEARCH_INDEX, 1, found != ret);
++                    return ret;
++                }
++            }
+             return actor_fast(keep, i_judgeFunc, i_data);
+         }
+         twv_vita_fast_actor_count(TWV_FAST_SEARCH, 0, -1);
+--- a/src/d/actor/d_a_mg_fish.cpp
++++ b/src/d/actor/d_a_mg_fish.cpp
+@@ -117,6 +117,15 @@
+     return 30.0f;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0039, --vita-fast-search-index): each judge below tests its process's name
++// before anything else and returns NULL, with no side effect, for every other name, so the search
++// may hand it that name's processes only (same result, same side effects).
++#define TWV_SEARCH_NAMED(name, judge, data) fpcLyIt_AllJudgeNamed((name), (judge), (data))
++#else
++#define TWV_SEARCH_NAMED(name, judge, data) fpcLyIt_AllJudge((judge), (data))
++#endif
++
+ static void* s_hitfish_sub(void* a, void* b) {
+     if (fopAc_IsActor(a)) {
+         mg_fish_class* fish = (mg_fish_class*)a;
+@@ -132,7 +141,7 @@
+         return 1;
+     }
+ 
+-    fopAc_ac_c* actor = (fopAc_ac_c*)fpcEx_Search(s_hitfish_sub, i_this);
++    fopAc_ac_c* actor = (fopAc_ac_c*)TWV_SEARCH_NAMED(fpcNm_MG_FISH_e, s_hitfish_sub, i_this);
+     if (actor != NULL) {
+         if ((actor->current.pos - i_this->actor.current.pos).abs() < speed) {
+             return 3;
+@@ -235,11 +244,11 @@
+     };
+ 
+     if (param_2 == 0) {
+-        fopAc_ac_c* rod_actor = (fopAc_ac_c*)fpcM_Search(s_lure_sub, i_this);
++        fopAc_ac_c* rod_actor = (fopAc_ac_c*)TWV_SEARCH_NAMED(fpcNm_MG_ROD_e, s_lure_sub, i_this);
+         if (rod_actor != NULL) {
+             dmg_rod_class* rod = (dmg_rod_class*)rod_actor;
+             s_fish_ct = 0;
+-            fpcM_Search(s_other_search_sub, i_this);
++            TWV_SEARCH_NAMED(fpcNm_MG_FISH_e, s_other_search_sub, i_this);
+             if (s_fish_ct <= 1) {
+                 f32 fVar1 = i_this->field_0x5ec;
+                 if (rod->lure_type == MG_LURE_SP) {
+@@ -271,7 +280,7 @@
+             }
+         }
+     } else if (param_2 == 1) {
+-        fopAc_ac_c* rod_actor = (fopAc_ac_c*)fpcM_Search(s_esa_sub, i_this);
++        fopAc_ac_c* rod_actor = (fopAc_ac_c*)TWV_SEARCH_NAMED(fpcNm_MG_ROD_e, s_esa_sub, i_this);
+         if (rod_actor != NULL) {
+             dmg_rod_class* rod = (dmg_rod_class*)rod_actor;
+             if (i_this->mGedouKind == GEDOU_KIND_KS_2 && rod->hook_kind != 1) {
+@@ -353,10 +362,10 @@
+ }
+ 
+ static s32 search_bait(mg_fish_class* i_this) {
+-    void* searchRes = fpcM_Search(s_bait_sub, i_this);
++    void* searchRes = TWV_SEARCH_NAMED(fpcNm_FR_e, s_bait_sub, i_this);
+     if (searchRes != NULL) {
+         i_this->mBaitId = fopAcM_GetID(searchRes);
+-        if (fpcM_Search(s_other_bait_sub, i_this) == NULL) {
++        if (TWV_SEARCH_NAMED(fpcNm_MG_FISH_e, s_other_bait_sub, i_this) == NULL) {
+             f32 fVar1 = i_this->field_0x5ec + KREG_F(8);
+             cXyz acStack_38 = ((fopAc_ac_c*)searchRes)->current.pos - i_this->actor.current.pos;
+             f32 fVar5 = acStack_38.abs();
