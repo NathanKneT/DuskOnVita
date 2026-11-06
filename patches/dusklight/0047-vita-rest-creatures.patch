@@ -1,0 +1,74 @@
+Vita (--vita-rest-creatures=off|on, platform/vita/runtime/visual_skips.hpp): Ordon's background
+creatures rest while nobody can see or reach them. The pond's fish (only while no fishing rod is
+out), pumpkins and chickens that were culled on their last draw and are farther than 2000 units
+from Link take the game's own no-execute path in fopAc_Execute (suspendProc and the NOEXEC
+condition, the path an actor with the NOEXEC status takes while culled). They wake when they come
+into view, Link comes near or a rod comes out, and go on from where they stopped. No fish is
+removed: the Day 2 cat fish and the fish journal's species stay. Not exact: a resting actor draws
+no random numbers, so the shared random sequence differs from the original's; the checks are that
+every other actor's logic and flags and every quest and event flag stay the same over the bench
+walks.
+
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -339,6 +339,47 @@
+ }
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0047): --vita-rest-creatures (platform/vita/runtime/visual_skips.hpp), a
++// speed-up that changes no quest or event: a few harmless background types rest while they are out
++// of view (culled on their last draw) and farther than TWV_REST_DIST from Link, and the pond's fish
++// also only while no fishing rod is out. A resting actor takes the game's own no-execute path below
++// (suspendProc and the NOEXEC condition, as an actor with the NOEXEC status does while culled); it
++// wakes when it comes into view, Link comes near or the rod comes out, and goes on from where it
++// stopped. Its random numbers are not drawn meanwhile, so the shared random sequence differs from
++// the original's (other actors' random choices follow a different sequence).
++extern "C" int twv_rest_creatures_mode;
++static const f32 TWV_REST_DIST = 2000.0f;
++
++static bool twv_rest(fopAc_ac_c* actor) {
++    if (twv_rest_creatures_mode == 0) {
++        return false;
++    }
++    const s16 name = fopAcM_GetName(actor);
++    if (name != fpcNm_MG_FISH_e && name != fpcNm_OBJ_PUMPKIN_e && name != fpcNm_NI_e) {
++        return false;
++    }
++    if (!fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e)) {
++        return false;
++    }
++    if (name == fpcNm_MG_FISH_e && !twv_offscreen_type(actor)) { // a rod is out
++        return false;
++    }
++    fopAc_ac_c* player = dComIfGp_getPlayer(0);
++    if (player == NULL) {
++        return false;
++    }
++    const f32 dx = actor->current.pos.x - player->current.pos.x;
++    const f32 dy = actor->current.pos.y - player->current.pos.y;
++    const f32 dz = actor->current.pos.z - player->current.pos.z;
++    if (dx * dx + dy * dy + dz * dz <= TWV_REST_DIST * TWV_REST_DIST) {
++        return false;
++    }
++    twv_vita_visual_skip_count(4);
++    return true;
++}
++#endif
++
+ static int fopAc_Draw(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+     int ret = 1;
+@@ -461,7 +502,11 @@
+         if (!fopAcM_CheckStatus(actor, fopAcStts_UNK_0x20000000_e) &&
+             (move == 2 ||
+                 (move != 0 && !fopAcM_CheckStatus(actor, fopAc_ac_c::getStopStatus()) &&
+-                (!fopAcM_CheckStatus(actor, fopAcStts_NOEXEC_e) || !fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e)))))
++                (!fopAcM_CheckStatus(actor, fopAcStts_NOEXEC_e) || !fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e))
++#if TARGET_VITA
++                && !twv_rest(actor)
++#endif
++                )))
+         {
+             fopAcM_OffCondition(actor, fopAcCnd_NOEXEC_e);
+             actor->old = actor->current;

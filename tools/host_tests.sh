@@ -60,7 +60,7 @@ for mode,reason in [('--coordinates-only','sample.divide==referenceDivide'),
     assert 'AddressSanitizer:' not in result.stderr and 'runtime error:' not in result.stderr,result.stderr
     print('Expected V59 shader assertion:',mode)
 PY
-for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy fast_shadow_collect fast_actors fast_rnd fast_painter settings_page; do
+for test in render_bundle_control compact_st resident_geometry memory_policy submit_batch texture_upload texture_conversion_cache system_usage small_packet_cache staging_policy write_class_cache clock_policy fast_shadow_collect fast_actors fast_rnd visual_skips fast_painter settings_page; do
   ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$repo/platform/vita" "$repo/tests/${test}_test.cpp" -o "$out/${test}_test"
   "$out/${test}_test"

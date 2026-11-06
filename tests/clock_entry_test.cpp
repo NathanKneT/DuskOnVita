@@ -258,6 +258,14 @@ extern "C" int twv_vita_fast_actor_select(int which, int mode) {
     assert(!state.fastActors.count(which)); state.fastActors[which] = mode;
     return which >= 0 && which < twv::vita::FastActorSwitchCount && mode >= 0 && mode <= 2;
 }
+// Visual-only speed-ups (runtime/visual_skips.hpp): one call per switch, then the state digest.
+extern "C" int twv_vita_visual_skip_select(int which, int on) {
+    return which >= 0 && which < twv::vita::VisualSkipCount && (on == 0 || on == 1);
+}
+extern "C" void twv_vita_state_digest_select(int) {}
+extern "C" int twv_vita_crowd_select(int level) {
+    return level >= 0 && level < twv::vita::CrowdLevelCount;
+}
 // The painter speed-ups (runtime/fast_painter.hpp) are not renderer choices either: one call per
 // option, in order.
 extern "C" int twv_vita_fast_painter_select(unsigned option, int mode) {

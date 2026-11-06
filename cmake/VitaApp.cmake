@@ -161,6 +161,10 @@ endif()
 target_sources(twv_game PRIVATE platform/vita/runtime/actor_profile.cpp)
 set_property(SOURCE platform/vita/runtime/actor_profile.cpp APPEND PROPERTY
     INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita/runtime")
+# Visual-only speed-ups and the game-state digest (runtime/visual_skips.cpp reads game structures).
+target_sources(twv_game PRIVATE platform/vita/runtime/visual_skips.cpp)
+set_property(SOURCE platform/vita/runtime/visual_skips.cpp APPEND PROPERTY
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/platform/vita")
 # J3D probe build (measurement only, patches/dusklight/0036): repeats one joint-calc step per profile
 # window on sampled frames, so the console splits the calc's cost. Never in a play or release build.
 option(TWV_VITA_J3D_PROBE "Repeat one J3D joint-calc step per profile window (measurement build)" OFF)

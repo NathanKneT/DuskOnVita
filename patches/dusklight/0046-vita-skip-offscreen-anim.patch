@@ -1,0 +1,188 @@
+Vita (--vita-skip-offscreen-anim=off|on, platform/vita/runtime/visual_skips.hpp): a visual-only
+speed-up (the picture may change, the game may not). An actor of a few ambient types (the pond's
+fish while no fishing rod is out, birds, frogs) that was culled on its last draw skips its morfs'
+model calc (mDoExt_McaMorf, McaMorfSO, McaMorf2 modelCalc) while its execute runs: their logic
+reads no joint then (the fish's mouth joint feeds only the rod and splashes). The morf's frame and
+state are untouched, so the calc runs again from the morf just before the actor's next draw method,
+with the pose that tick would have had. The check is the game-state digest (--vita-state-digest):
+the same game, tick for tick, with the skip on and off.
+
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -248,6 +248,97 @@
+ }
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0046): --vita-skip-offscreen-anim (platform/vita/runtime/visual_skips.hpp),
++// a visual-only speed-up. An actor of a few ambient types that was culled on its last draw (the
++// "not drawn" condition) skips its morfs' model calc while it executes: the pond's fish while no
++// fishing rod is out (their logic reads the mouth joint only for the rod and splashes), birds and
++// frogs (no joint read, no collision from joints). The morf's own frame and state are untouched, so
++// the calc, run again from the morf just before the actor's next draw method, gives the pose that
++// tick would have had. The check is the game-state digest (--vita-state-digest).
++#include "f_op/f_op_actor_mng.h"
++#include "f_pc/f_pc_name.h"
++extern "C" int twv_skip_offscreen_anim_mode;
++extern "C" unsigned twv_vita_tick_serial;
++static fopAc_ac_c* s_twvExecActor = NULL; // the actor whose execute method runs
++static bool s_twvReplaying = false;
++struct TwvSkippedCalc {
++    fopAc_ac_c* actor;
++    void* morf;
++    void (*replay)(void*);
++    unsigned tick; // tick serial + 1 of the skip; 0 = free
++};
++static TwvSkippedCalc s_twvSkipped[64];
++static unsigned s_twvRodTick = 0; // tick serial + 1 of the last rod search
++static bool s_twvRodOut = false;
++
++static bool twv_offscreen_name(s16 name) {
++    return name == fpcNm_MG_FISH_e || name == fpcNm_BD_e || name == fpcNm_FR_e;
++}
++
++static bool twv_offscreen_type(fopAc_ac_c* actor) {
++    const s16 name = fopAcM_GetName(actor);
++    if (name == fpcNm_MG_FISH_e) {
++        if (s_twvRodTick != twv_vita_tick_serial + 1) {
++            s_twvRodTick = twv_vita_tick_serial + 1;
++            s_twvRodOut = fopAcM_SearchByName(fpcNm_MG_ROD_e) != NULL;
++        }
++        return !s_twvRodOut;
++    }
++    return twv_offscreen_name(name);
++}
++
++// m_Do_ext.cpp, at each morf's modelCalc: 1 when this calc is skipped (and kept for its replay).
++extern "C" int twv_offscreen_calc_skip(void* morf, void (*replay)(void*)) {
++    fopAc_ac_c* actor = s_twvExecActor;
++    if (twv_skip_offscreen_anim_mode == 0 || actor == NULL || s_twvReplaying ||
++        !fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e) || !twv_offscreen_type(actor))
++    {
++        return 0;
++    }
++    const unsigned tick = twv_vita_tick_serial + 1;
++    TwvSkippedCalc* slot = NULL;
++    for (int i = 0; i < 64; i++) {
++        TwvSkippedCalc& s = s_twvSkipped[i];
++        if (s.tick == tick && s.actor == actor && s.morf == morf) {
++            slot = &s;
++            break;
++        }
++        if (slot == NULL && s.tick != tick) {
++            slot = &s;
++        }
++    }
++    if (slot == NULL) {
++        twv_vita_visual_skip_count(3);
++        return 0;
++    }
++    slot->actor = actor;
++    slot->morf = morf;
++    slot->replay = replay;
++    slot->tick = tick;
++    twv_vita_visual_skip_count(1);
++    return 1;
++}
++
++// Before an actor's draw method: its calcs skipped in this tick's execute, in their order.
++static void twv_offscreen_replay(fopAc_ac_c* actor) {
++    if (twv_skip_offscreen_anim_mode == 0 || !twv_offscreen_name(fopAcM_GetName(actor))) {
++        return;
++    }
++    const unsigned tick = twv_vita_tick_serial + 1;
++    for (int i = 0; i < 64; i++) {
++        TwvSkippedCalc& s = s_twvSkipped[i];
++        if (s.tick == tick && s.actor == actor) {
++            s.tick = 0;
++            s_twvReplaying = true;
++            s.replay(s.morf);
++            s_twvReplaying = false;
++            twv_vita_visual_skip_count(2);
++        }
++    }
++}
++#endif
++
+ static int fopAc_Draw(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+     int ret = 1;
+@@ -293,9 +384,13 @@
+ #if TARGET_VITA
+             if (twv_draw_skip(actor)) {
+                 ret = 1;
+-            } else
+-#endif
++            } else {
++                twv_offscreen_replay(actor);
++                ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
++            }
++#else
+             ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
++#endif
+ 
+             #if DEBUG
+             }
+@@ -376,7 +471,14 @@
+             print_error_check_c error_check(actor, print_error_check_c::sEXECUTE);
+             #endif
+ 
++#if TARGET_VITA
++            fopAc_ac_c* const twvPrevExec = s_twvExecActor;
++            s_twvExecActor = actor;
++#endif
+             ret = fpcMtd_Execute((process_method_class DUSK_CONST*)actor->sub_method, actor);
++#if TARGET_VITA
++            s_twvExecActor = twvPrevExec;
++#endif
+ 
+             #if DEBUG
+             }
+--- a/src/m_Do/m_Do_ext.cpp
++++ b/src/m_Do/m_Do_ext.cpp
+@@ -1543,7 +1543,29 @@
+     }
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0046, --vita-skip-offscreen-anim): f_op_actor.cpp decides whether this
++// calc is skipped for a hidden ambient actor; the replay runs the same modelCalc before its draw.
++extern "C" int twv_offscreen_calc_skip(void* morf, void (*replay)(void*));
++static void twv_replay_mca(void* p) {
++    static_cast<mDoExt_McaMorf*>(p)->modelCalc();
++}
++static void twv_replay_mcaso(void* p) {
++    static_cast<mDoExt_McaMorfSO*>(p)->modelCalc();
++}
++static void twv_replay_mca2(void* p) {
++    static_cast<mDoExt_McaMorf2*>(p)->modelCalc();
++}
++#define TWV_OFFSCREEN_CALC(replay) \
++    if (twv_offscreen_calc_skip(this, (replay))) { \
++        return; \
++    }
++#else
++#define TWV_OFFSCREEN_CALC(replay)
++#endif
++
+ void mDoExt_McaMorf::modelCalc() {
++    TWV_OFFSCREEN_CALC(twv_replay_mca)
+     if (mpModel != NULL) {
+         if (mpAnm != NULL) {
+             mpAnm->setFrame(mFrameCtrl.getFrame());
+@@ -1847,6 +1869,7 @@
+ }
+ 
+ void mDoExt_McaMorfSO::modelCalc() {
++    TWV_OFFSCREEN_CALC(twv_replay_mcaso)
+     if (mpModel != NULL) {
+         if (mpAnm != NULL) {
+             mpAnm->setFrame(mFrameCtrl.getFrame());
+@@ -2228,6 +2251,7 @@
+ }
+ 
+ void mDoExt_McaMorf2::modelCalc() {
++    TWV_OFFSCREEN_CALC(twv_replay_mca2)
+     if (mpModel != NULL) {
+         if (mpAnm != NULL) {
+             mpAnm->setFrame(mFrameCtrl.getFrame());

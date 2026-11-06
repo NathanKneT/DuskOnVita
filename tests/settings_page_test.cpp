@@ -109,7 +109,32 @@ void navigation() {
     q.available[idx(st::Id::Performance)] = false;
     q.selected = idx(st::Id::RenderScale);
     q.handle(st::KeyDown);
-    assert(q.selected == idx(st::Id::ShowFps));
+    assert(q.selected == idx(st::Id::SpeedUps));
+    // Speed-ups: Performance turns its four entries on (crowd at half), one change makes it Custom,
+    // Original turns them off again; reset leaves the derived preset alone.
+    {
+        st::Page v;
+        assert(v.index[idx(st::Id::SpeedUps)] == 0 && v.index[idx(st::Id::Crowd)] == 0);
+        v.selected = idx(st::Id::SpeedUps);
+        st::Effects f = v.handle(st::KeyRight);
+        assert(f.count == 5 && v.index[idx(st::Id::SkipUnseen)] == 1 && v.index[idx(st::Id::StillAnimals)] == 1 &&
+               v.index[idx(st::Id::RestingAnimals)] == 1 && v.index[idx(st::Id::Crowd)] == 1);
+        assert(v.index[idx(st::Id::SpeedUps)] == 1);
+        v.selected = idx(st::Id::Crowd);
+        v.handle(st::KeyRight);
+        assert(v.index[idx(st::Id::Crowd)] == 2 && v.index[idx(st::Id::SpeedUps)] == st::SpeedCustom);
+        v.selected = idx(st::Id::SpeedUps);
+        f = v.handle(st::KeyRight); // Custom is never chosen: wraps to Original
+        assert(v.index[idx(st::Id::SpeedUps)] == 0 && v.index[idx(st::Id::SkipUnseen)] == 0 &&
+               v.index[idx(st::Id::Crowd)] == 0);
+        v.index[idx(st::Id::StillAnimals)] = 1;
+        v.sync_speed();
+        assert(v.index[idx(st::Id::SpeedUps)] == st::SpeedCustom);
+        st::Effects r;
+        v.reset_all(r);
+        for (int k = 0; k < r.count; ++k) assert(r.list[k].id != st::Id::SpeedUps);
+        assert(v.index[idx(st::Id::SpeedUps)] == 0);
+    }
     int rows[st::VisibleRows];
     const int n = q.visible(rows);
     for (int r = 0; r < n; ++r) assert(rows[r] != idx(st::Id::Performance));
@@ -405,6 +430,21 @@ void storage() {
                                " \"openGesture\": \"rear\", \"future\": {\"renderScale\": 50}}", &problems);
     assert(problems == 3 && !back.renderScaleSet && back.renderScale == 75 && !back.performanceSet &&
            !back.showFpsSet && back.gestureSet && back.gesture == OpenGesture::Rear);
+    // Speed-ups: chosen keys only, both ways, and bad values counted.
+    {
+        VitaSettings sp;
+        sp.skipUnseen = true; sp.skipUnseenSet = true;
+        sp.crowd = 2; sp.crowdSet = true;
+        char spText[256];
+        assert(format_vita_settings(sp, spText, sizeof spText) > 0);
+        assert(std::strstr(spText, "\"skipUnseenFrames\": true") && std::strstr(spText, "\"crowd\": \"low\"") &&
+               !std::strstr(spText, "stillAnimals"));
+        VitaSettings spBack = parse_vita_settings(spText, &problems);
+        assert(problems == 0 && spBack.skipUnseen && spBack.skipUnseenSet && spBack.crowd == 2 && spBack.crowdSet &&
+               !spBack.stillAnimalsSet && !spBack.restingAnimals);
+        spBack = parse_vita_settings("{\"restingAnimals\": 2, \"crowd\": \"all\", \"stillAnimals\": true}", &problems);
+        assert(problems == 2 && spBack.stillAnimals && !spBack.restingAnimalsSet && !spBack.crowdSet);
+    }
     back = parse_vita_settings("not json", &problems);
     assert(problems == 1 && !back.any_set());
     back = parse_vita_settings("", &problems);

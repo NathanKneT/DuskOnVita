@@ -1,0 +1,20 @@
+Vita (--vita-state-digest, platform/vita/runtime/visual_skips.cpp, test only): the first random
+generator's state for the game-state digest, beside 0040's second one. Read only; no game
+behaviour changes.
+
+--- a/src/SSystem/SComponent/c_math.cpp
++++ b/src/SSystem/SComponent/c_math.cpp
+@@ -287,6 +287,13 @@
+ }
+ 
+ #if TARGET_VITA
++// Vita (patches/dusklight/0044): the first generator's state, for the game-state digest.
++extern "C" void twv_cM_rnd_state(int* out) {
++    out[0] = r0;
++    out[1] = r1;
++    out[2] = r2;
++}
++
+ // Vita (patches/dusklight/0041's verify): the second generator's state.
+ extern "C" void twv_cM_rnd2_state(int* out) {
+     out[0] = r02;

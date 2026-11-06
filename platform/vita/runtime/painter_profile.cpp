@@ -43,6 +43,7 @@ struct Window {
     uint64_t reads = 0;
     KeyTable<256> jpa;
     KeyTable<128> d2;
+    KeyTable<64> hud; // patches/dusklight/0043: HUD parts and panes, keyed by name or pane
 };
 Window gWin;
 uint64_t gFrameNo = 0, gWindowNo = 0, gPaintStart = 0;
@@ -99,6 +100,12 @@ void publish() {
         class_text(text, sizeof text, e.name, e);
         telemetryText("paintprof_2d", text);
     }
+    used = w.hud.top(top, Top2D);
+    for (std::size_t i = 0; i < used; ++i) {
+        const Entry& e = w.hud.slots[top[i]];
+        class_text(text, sizeof text, e.name, e);
+        telemetryText("paintprof_hud", text);
+    }
     telemetryEvent("paintprof_reads", (long long)w.reads);
     telemetryEvent("paintprof_period", Period);
     twv::vita::telemetryFlush();
@@ -109,6 +116,7 @@ void publish() {
     std::memset(w.sectionCalls, 0, sizeof w.sectionCalls);
     w.jpa.clear();
     w.d2.clear();
+    w.hud.clear();
 }
 
 // The outermost wrapped call is charged to its section; nested wrapped calls stay in their caller's.
@@ -125,6 +133,50 @@ struct Scope {
     uint64_t start;
 };
 }  // namespace
+
+// patches/dusklight/0043 (d_meter2_draw.cpp, J2DPane.cpp): the HUD's parts and the panes under its
+// meter screen, on sampled painter frames only (begin returns 0 otherwise).
+extern "C" {
+const void* twv_hud_root = nullptr;
+}
+extern "C" unsigned long long twv_paintprof_hud_begin(void) {
+    if (!gOn) return 0;
+    const uint64_t t = now_us();
+    return t ? t : 1;
+}
+extern "C" void twv_paintprof_hud_end(const char* name, unsigned long long start) {
+    if (!start || !gOn) return;
+    Entry& e = gWin.hud.at(reinterpret_cast<uintptr_t>(name));
+    if (!e.name) e.name = name;
+    e.us += now_us() - start;
+    ++e.calls;
+    gWin.reads += 2;
+}
+// A pane's name: "d<depth>:" and its tag's characters, kept in a pool for the run (a HUD has a few
+// dozen panes at these depths; past the pool's end they share one name).
+extern "C" void twv_paintprof_hud_pane(const void* pane, uint64_t tag, int depth, unsigned long long start) {
+    if (!start || !gOn) return;
+    Entry& e = gWin.hud.at(reinterpret_cast<uintptr_t>(pane));
+    if (!e.name) {
+        static char pool[96][16];
+        static unsigned used = 0;
+        if (used < 96) {
+            char* n = pool[used++];
+            int k = std::snprintf(n, 16, "d%d:", depth);
+            for (int shift = 56; shift >= 0 && k < 15; shift -= 8) {
+                const char c = char((tag >> shift) & 0xFF);
+                if (c) n[k++] = (c >= 32 && c < 127) ? c : '?';
+            }
+            n[k] = 0;
+            e.name = n;
+        } else {
+            e.name = "d?:more";
+        }
+    }
+    e.us += now_us() - start;
+    ++e.calls;
+    gWin.reads += 2;
+}
 
 // actor_profile.cpp (the painter phase of profile_hooks.cpp): the painter begins and ends.
 extern "C" void twv_paintprof_begin(unsigned long long start) {

@@ -19,6 +19,8 @@ void item_func_SWORD(){++itemCalls;}
 void item_func_WOOD_SHIELD(){++itemCalls;}
 void item_func_WEAR_KOKIRI(){++itemCalls;}
 void dComIfGs_setTime(float t){selectedTime=t;}
+// runtime/visual_skips.cpp: the fixture calls it first on every tick (not part of this test).
+extern "C" void twv_vita_visual_skip_tick(void) {}
 extern "C" int twv_vita_benchmark_enable(const char*);
 extern "C" void twv_vita_benchmark_blank_save();
 extern "C" void twv_vita_benchmark_pad(PADStatus*);

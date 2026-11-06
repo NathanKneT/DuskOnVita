@@ -30,6 +30,7 @@ constexpr std::size_t VitaSettingsLimit = 4096;
 
 enum class OpenGesture : uint8_t { Rear, Front, Both };
 constexpr const char* OpenGestureNames[] = {"rear", "front", "both"};
+constexpr const char* CrowdNames[] = {"full", "half", "low"};
 
 struct VitaSettings {
     int renderScale = 75;      // 50, 67, 75 or 100
@@ -37,10 +38,18 @@ struct VitaSettings {
     bool showFps = false;
     // Both by default: the rear hold, or three fingers on the screen if the rear pad gets in the way.
     OpenGesture gesture = OpenGesture::Both;
+    // Speed-ups (runtime/visual_skips.hpp), off by default: skip the unseen tick's draw, still
+    // off-screen animals, resting animals far away, Castle Town's crowd (0 full, 1 half, 2 low).
+    bool skipUnseen = false, stillAnimals = false, restingAnimals = false;
+    int crowd = 0;
     // Chosen by the player (written to the file); the others follow the built-in defaults.
     bool renderScaleSet = false, performanceSet = false, showFpsSet = false, gestureSet = false;
+    bool skipUnseenSet = false, stillAnimalsSet = false, restingAnimalsSet = false, crowdSet = false;
 
-    bool any_set() const { return renderScaleSet || performanceSet || showFpsSet || gestureSet; }
+    bool any_set() const {
+        return renderScaleSet || performanceSet || showFpsSet || gestureSet || skipUnseenSet || stillAnimalsSet ||
+               restingAnimalsSet || crowdSet;
+    }
 };
 
 inline bool valid_render_scale(long v) { return v == 50 || v == 67 || v == 75 || v == 100; }
@@ -137,6 +146,26 @@ inline VitaSettings parse_vita_settings(const char* text, int* problems = nullpt
             if (g >= 0) { s.gesture = OpenGesture(g); s.gestureSet = true; }
             else ++bad;
         }
+        if (const char* v = json_value(p, "skipUnseenFrames")) {
+            if (json_bool(v, b)) { s.skipUnseen = b; s.skipUnseenSet = true; }
+            else ++bad;
+        }
+        if (const char* v = json_value(p, "stillAnimals")) {
+            if (json_bool(v, b)) { s.stillAnimals = b; s.stillAnimalsSet = true; }
+            else ++bad;
+        }
+        if (const char* v = json_value(p, "restingAnimals")) {
+            if (json_bool(v, b)) { s.restingAnimals = b; s.restingAnimalsSet = true; }
+            else ++bad;
+        }
+        if (const char* v = json_value(p, "crowd")) {
+            bool ok = json_word(v, word, sizeof word);
+            int c = -1;
+            for (int i = 0; ok && i < 3; ++i)
+                if (std::strcmp(word, CrowdNames[i]) == 0) c = i;
+            if (c >= 0) { s.crowd = c; s.crowdSet = true; }
+            else ++bad;
+        }
     }
     if (problems) *problems = bad;
     return s;
@@ -174,6 +203,15 @@ inline std::size_t format_vita_settings(const VitaSettings& s, char* out, std::s
         key("openGesture");
         put("\"");
         put(OpenGestureNames[int(s.gesture)]);
+        put("\"");
+    }
+    if (s.skipUnseenSet) { key("skipUnseenFrames"); put(s.skipUnseen ? "true" : "false"); }
+    if (s.stillAnimalsSet) { key("stillAnimals"); put(s.stillAnimals ? "true" : "false"); }
+    if (s.restingAnimalsSet) { key("restingAnimals"); put(s.restingAnimals ? "true" : "false"); }
+    if (s.crowdSet) {
+        key("crowd");
+        put("\"");
+        put(CrowdNames[s.crowd]);
         put("\"");
     }
     put(first ? "{}\n" : "\n}\n");

@@ -1,0 +1,121 @@
+Vita (--vita-skip-hidden-draw=off|on, platform/vita/runtime/visual_skips.hpp): a visual-only
+speed-up (the picture may change, the game may not). With fixed game ticks (0015) a loop may run
+two ticks before it paints, and the paint shows only the last one: each draw phase resets the draw
+lists. On, in the draw phase of a tick that another tick follows (and no menu capture stops the
+loop after it), fopAc_Draw does not call an actor's draw method; the event check, the culling test,
+the "not drawn" condition and the NODRAW status still update, as execute reads them. Types whose
+draw does game work stay on the full path (twv_draw_keep). The check is the game-state digest
+(--vita-state-digest): the same game, tick for tick, with the skip on and off.
+game_clock: the running tick's index in its loop, and whether another tick follows it.
+
+--- a/src/dusk/game_clock.h
++++ b/src/dusk/game_clock.h
+@@ -47,6 +47,11 @@
+ // Nanoseconds the last advance() waited for a tick due just after it (0 if none); the frame
+ // limiter adds them to that frame so the loop stays in step with the ticks.
+ long long vita_tick_wait_ns();
++// patches/dusklight/0045: index of the running game tick in this loop (0 = first; -1 outside a
++// tick), and whether another tick of the same loop follows it before the frame is painted (fixed
++// ticks without interpolation only).
++int vita_tick_index();
++bool vita_tick_has_successor();
+ #endif
+ 
+ }  // namespace dusk::game_clock
+--- a/src/dusk/game_clock.cpp
++++ b/src/dusk/game_clock.cpp
+@@ -50,6 +50,9 @@
+ // Vita frame overlap (patches/dusklight/0019): time a tick spent finishing the last frame's GX
+ // work (the platform's settle), which is not the tick's own cost.
+ native_clock::duration s_vitaTickPause{};
++// Vita (patches/dusklight/0045): index of the running tick in this loop's ticks (-1 before the
++// first), so the game can tell a tick that another tick follows before the frame is painted.
++int s_vitaTickIndex = -1;
+ #endif
+ 
+ float ui_dt() {
+@@ -100,6 +103,15 @@
+ long long vita_tick_wait_ns() {
+     return s_vitaTickWaitNs;
+ }
++
++int vita_tick_index() {
++    return s_simTickActive ? s_vitaTickIndex : -1;
++}
++
++bool vita_tick_has_successor() {
++    return s_vitaMaxTicks > 0 && g_frameTiming.separatePresentation && !g_frameTiming.interpolating &&
++           s_simTickActive && s_vitaTickIndex >= 0 && s_vitaTickIndex + 1 < g_frameTiming.numSimTicks;
++}
+ #endif
+ 
+ const FrameTiming& advance() {
+@@ -107,6 +119,7 @@
+     const auto gameNow = game_clock::now();
+ #if TARGET_VITA
+     s_vitaTickWaitNs = 0;
++    s_vitaTickIndex = -1;
+ #endif
+     const auto nativeFrameGap = nativeNow - s_previousNativeSample;
+     const auto gameFrameGap = gameNow - s_latestGameSample;
+@@ -224,6 +237,7 @@
+ #if TARGET_VITA
+     s_vitaTickStart = native_clock::now();
+     s_vitaTickPause = {};
++    ++s_vitaTickIndex;
+ #endif
+ }
+ 
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -216,6 +216,38 @@
+ 
+ DUSK_GAME_DATA u32 fopAc_ac_c::stopStatus;
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0045): --vita-skip-hidden-draw (platform/vita/runtime/visual_skips.hpp),
++// a visual-only speed-up. With fixed game ticks a loop may run two ticks before it paints, and the
++// paint shows only the last one (each draw phase resets the draw lists). On, in the draw phase of a
++// tick that another tick follows (and no menu capture stops the loop after it), an actor's draw
++// method does not run. Everything else here still runs: the event check, the culling test, the
++// "not drawn" condition and the one-tick NODRAW status, which execute reads. Types whose draw does
++// game work keep it (twv_draw_keep); the game-state digest (--vita-state-digest) finds them.
++#include "d/d_menu_window.h"
++#include "dusk/game_clock.h"
++#include "f_pc/f_pc_name.h"
++extern "C" int twv_skip_hidden_draw_mode;
++extern "C" void twv_vita_visual_skip_count(int what);
++
++// Draw methods that advance something per call or keep state the game reads, so they run on every
++// tick: grass (dGrass_packet_c::update advances some kinds' sway phase per draw and settles each
++// new blade's ground height and culling bits, which cutting reads).
++static bool twv_draw_keep(s16 name) {
++    return name == fpcNm_GRASS_e;
++}
++
++static bool twv_draw_skip(fopAc_ac_c* actor) {
++    if (twv_skip_hidden_draw_mode == 0 || !dusk::game_clock::vita_tick_has_successor() ||
++        dMw_isCapturePending() || twv_draw_keep(fopAcM_GetName(actor)))
++    {
++        return false;
++    }
++    twv_vita_visual_skip_count(0);
++    return true;
++}
++#endif
++
+ static int fopAc_Draw(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+     int ret = 1;
+@@ -258,6 +290,11 @@
+             print_error_check_c error_check(actor, print_error_check_c::sDRAW);
+             #endif
+ 
++#if TARGET_VITA
++            if (twv_draw_skip(actor)) {
++                ret = 1;
++            } else
++#endif
+             ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
+ 
+             #if DEBUG

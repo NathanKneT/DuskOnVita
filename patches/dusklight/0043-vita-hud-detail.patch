@@ -1,0 +1,152 @@
+Vita: measurement only (the painter profile, platform/vita/runtime/painter_profile.cpp). The HUD
+(dMeter2Draw_c::draw, about 3.4 ms per frame on the console in every place) in parts on sampled
+painter frames: setup, the meter screen, the lantern screens, item numbers, lantern meters, button
+sparkles, Light Drops, Midna's icon; and under the meter screen each pane one and two levels down,
+with its subtree (by pane tag). Outside sampled frames each part pays one call that returns 0. No
+game behaviour changes: same calls, same order, same results.
+
+--- a/src/d/d_meter2_draw.cpp
++++ b/src/d/d_meter2_draw.cpp
+@@ -713,6 +713,26 @@
+ #endif
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0043): measurement only. The HUD's draw in parts on the painter profile's
++// sampled frames (platform/vita/runtime/painter_profile.cpp, "paintprof_hud"); otherwise each part
++// pays one call that returns 0. No game behaviour changes: same calls, same order, same results.
++extern "C" unsigned long long twv_paintprof_hud_begin(void);
++extern "C" void twv_paintprof_hud_end(const char* name, unsigned long long start);
++extern "C" const void* twv_hud_root;
++#define TWV_HUD_BEGIN() unsigned long long twvHud_ = twv_paintprof_hud_begin()
++#define TWV_HUD_NEXT(name) \
++    do { \
++        twv_paintprof_hud_end((name), twvHud_); \
++        twvHud_ = twv_paintprof_hud_begin(); \
++    } while (0)
++#define TWV_HUD_END(name) twv_paintprof_hud_end((name), twvHud_)
++#else
++#define TWV_HUD_BEGIN()
++#define TWV_HUD_NEXT(name)
++#define TWV_HUD_END(name)
++#endif
++
+ void dMeter2Draw_c::draw() {
+ #if TARGET_PC
+     if (dusk::game_clock::is_presentation_frame()) {
+@@ -723,6 +743,7 @@
+     }
+ #endif
+ 
++    TWV_HUD_BEGIN();
+     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();
+     graf_ctx->setup2D();
+ 
+@@ -735,9 +756,18 @@
+     }
+ #endif
+ 
++    TWV_HUD_NEXT("hud:setup");
++#if TARGET_VITA
++    twv_hud_root = mpScreen;
++#endif
+     mpScreen->draw(0.0f, 0.0f, graf_ctx);
++#if TARGET_VITA
++    twv_hud_root = NULL;
++#endif
++    TWV_HUD_NEXT("hud:screen");
+     drawKanteraScreen(1);
+     drawKanteraScreen(2);
++    TWV_HUD_NEXT("hud:kantera_screens");
+ 
+     IF_DUSK_BLOCK(!touchControlsEnabled)
+     for (int i = 0; i < 2; i++) {
+@@ -758,9 +788,11 @@
+         }
+     }
+ 
++    TWV_HUD_NEXT("hud:item_numbers");
+     for (int i = 0; i < 2; i++) {
+         mpKanteraMeter[i]->drawSelf();
+     }
++    TWV_HUD_NEXT("hud:kantera_meters");
+ 
+     if (!dComIfGp_isPauseFlag() && mpButtonParent->getAlphaRate() != 0.0f) {
+         if (field_0x608 > 0.0f) {
+@@ -788,6 +820,7 @@
+     }
+     IF_DUSK_BLOCK_END
+ 
++    TWV_HUD_NEXT("hud:button_pikari");
+     if (mpLightDropParent->getAlphaRate() != 0.0f) {
+         f32 var_f28 = g_drawHIO.mLightDrop.mPikariScaleNormal;
+         f32 var_f29 = g_drawHIO.mLightDrop.mDropPikariAnimSpeed;
+@@ -862,6 +895,7 @@
+         }
+     }
+ 
++    TWV_HUD_NEXT("hud:light_drops");
+ #if TARGET_PC
+     if (!touchControlsEnabled && field_0x738 > 0.0f) {
+ #else
+@@ -872,6 +906,7 @@
+                    g_drawHIO.mMidnaIconPikariBackOuter, g_drawHIO.mMidnaIconPikariBackInner,
+                    g_drawHIO.mMidnaIconPikariAnimSpeed, 3);
+     }
++    TWV_HUD_END("hud:midna_pikari");
+ }
+ 
+ void dMeter2Draw_c::initLife() {
+--- a/libs/JSystem/src/J2DGraph/J2DPane.cpp
++++ b/libs/JSystem/src/J2DGraph/J2DPane.cpp
+@@ -246,7 +246,22 @@
+     return result;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0043): measurement only. Under the HUD's meter screen (twv_hud_root, set by
++// d_meter2_draw.cpp) each pane two levels down is timed with its subtree on the painter profile's
++// sampled frames; elsewhere one comparison per child. Same calls, same order, same results.
++extern "C" const void* twv_hud_root;
++extern "C" unsigned long long twv_paintprof_hud_begin(void);
++extern "C" void twv_paintprof_hud_pane(const void* pane, u64 tag, int depth, unsigned long long start);
++static int s_twvHudDepth = -1; // depth of the pane drawing its children under the meter screen
++#endif
++
+ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGraf, bool param_4) {
++#if TARGET_VITA
++    if (this == twv_hud_root) {
++        s_twvHudDepth = 0;
++    }
++#endif
+     param_4 = param_4 && mVisible;
+     if (p_grafCtx->getGrafType() != 1) {
+         isOrthoGraf = false;
+@@ -341,9 +356,27 @@
+         }
+ 
+         for (JSUTreeIterator<J2DPane> iter = mPaneTree.getFirstChild(); iter != mPaneTree.getEndChild(); ++iter) {
++#if TARGET_VITA
++            const int twvDepth = s_twvHudDepth;
++            const unsigned long long twvStart = twvDepth == 0 || twvDepth == 1 ? twv_paintprof_hud_begin() : 0;
++            if (twvDepth >= 0) {
++                s_twvHudDepth = twvDepth + 1;
++            }
+             iter->draw(0, 0, p_grafCtx, isOrthoGraf, param_4);
++            s_twvHudDepth = twvDepth;
++            if (twvStart != 0) {
++                twv_paintprof_hud_pane(iter.getObject(), iter->mInfoTag, twvDepth + 1, twvStart);
++            }
++#else
++            iter->draw(0, 0, p_grafCtx, isOrthoGraf, param_4);
++#endif
+         }
+     }
++#if TARGET_VITA
++    if (this == twv_hud_root) {
++        s_twvHudDepth = -1;
++    }
++#endif
+ }
+ 
+ void J2DPane::place(JGeometry::TBox2<f32> const& box) {

@@ -218,7 +218,7 @@ def painter_profile(boot, t0, t1):
     JPA resources and 2D draw classes are each window's top 16 (a key outside a window's top 16 is
     missing from that window; the totals cover every key). Returns None without windows."""
     total = {k: 0 for k in PAINTPROF_COUNTS}
-    parts, jpa, d2 = {}, {}, {}
+    parts, jpa, d2, hud = {}, {}, {}, {}
     jpa_total, d2_total = {'us': 0, 'c': 0, 'p': 0}, {'us': 0, 'c': 0}
     windows, current = 0, False
     for _, r in boot['records']:
@@ -234,7 +234,7 @@ def painter_profile(boot, t0, t1):
             continue
         if key in total and isinstance(r.get('value'), (int, float)):
             total[key] += r['value']
-        elif 'text' in r and key in ('part', 'jpa', '2d', 'jpa_total', '2d_total'):
+        elif 'text' in r and key in ('part', 'jpa', '2d', 'jpa_total', '2d_total', 'hud'):
             f = _fields(r['text'])
             if key == 'part':
                 p = parts.setdefault(f['n'], {'us': 0, 'c': 0})
@@ -242,6 +242,8 @@ def painter_profile(boot, t0, t1):
                 p = jpa.setdefault(int(f['id']), {'us': 0, 'c': 0, 'p': 0})
             elif key == '2d':
                 p = d2.setdefault(f['n'], {'us': 0, 'c': 0})
+            elif key == 'hud':
+                p = hud.setdefault(f['n'], {'us': 0, 'c': 0})
             else:
                 p = jpa_total if key == 'jpa_total' else d2_total
             for k in p:
@@ -283,6 +285,10 @@ def painter_profile(boot, t0, t1):
         'd2_ms': per(d2_total['us']), 'd2_draws': count(d2_total['c']),
         'd2': [{'class': k, 'ms': per(v['us']), 'draws': count(v['c'])}
                for k, v in sorted(d2.items(), key=lambda kv: -kv[1]['us'])],
+        # patches/dusklight/0043: the HUD's parts (hud:...) and the panes under its meter screen
+        # (d1: / d2: and the pane tag, with their subtrees; nested in the parts above).
+        'hud': [{'part': k, 'ms': per(v['us']), 'calls': count(v['c'])}
+                for k, v in sorted(hud.items(), key=lambda kv: -kv[1]['us'])],
         'reads_per_frame': count(total['reads']),
     }
 
@@ -308,6 +314,9 @@ def painter_markdown(rows, top=10):
                                                     for j in p['jpa'][:top]))
         out.append(f"- 2D entries: {fmt(p['d2_ms'])} ms, {fmt(p['d2_draws'])} draws; top: " + ', '.join(
             f"{d['class']} {fmt(d['ms'])} ({fmt(d['draws'])})" for d in p['d2'][:top]))
+        if p.get('hud'):
+            out.append('- HUD parts: ' + ', '.join(f"{h['part']} {fmt(h['ms'])} ({fmt(h['calls'])})"
+                                                  for h in p['hud'][:16]))
         out.append(f"- FIFO hand-over to the GX worker (inside the sections): {fmt(p['publish_ms'])} ms, "
                    f"{fmt(p['publish_calls'])} calls; display lists by reference {fmt(p['static_dl_ms'])} ms "
                    f"({fmt(p['static_dl_calls'])}), copied {fmt(p['dl_ms'])} ms ({fmt(p['dl_calls'])})")

@@ -6,6 +6,7 @@
 #include "gfx_vgl/frame_capture.hpp"
 #include "runtime/player_settings.hpp"
 #include "runtime/telemetry.hpp"
+#include "runtime/visual_skips.hpp"
 #include "ui/settings_draw.hpp"
 #include "ui/settings_gesture.hpp"
 #include "ui/settings_page.hpp"
@@ -178,6 +179,10 @@ void load_values() {
     p.index[int(st::Id::Performance)] = (s.stored.performanceSet ? s.stored.batterySaver : s.inForce.batterySaver) ? 1 : 0;
     p.index[int(st::Id::ShowFps)] = s.inForce.showFps ? 1 : 0;
     p.index[int(st::Id::OpenGesture)] = int(s.inForce.gesture);
+    p.index[int(st::Id::SkipUnseen)] = s.inForce.skipUnseen ? 1 : 0;
+    p.index[int(st::Id::StillAnimals)] = s.inForce.stillAnimals ? 1 : 0;
+    p.index[int(st::Id::RestingAnimals)] = s.inForce.restingAnimals ? 1 : 0;
+    p.index[int(st::Id::Crowd)] = s.inForce.crowd;
     p.available[int(st::Id::ShowFps)] = twv_gxm_fps_overlay && twv_gxm_fps_overlay(s.inForce.showFps);
     uint32_t mask = 1;
     int first = 0;
@@ -201,6 +206,7 @@ void load_values() {
     p.available[int(st::Id::GyroRecentre)] = p.available[int(st::Id::GyroAim)];
     p.available[int(st::Id::Preset)] = p.available[int(st::Id::RenderScale)] && p.available[int(st::Id::Performance)];
     p.sync_preset();
+    p.sync_speed();
 }
 
 void apply(const st::Effect& e) {
@@ -238,6 +244,27 @@ void apply(const st::Effect& e) {
             s.stored.gesture = s.inForce.gesture = OpenGesture(e.index);
             s.stored.gestureSet = chosen;
             apply_gesture(s.inForce.gesture);
+            break;
+        // Speed-ups (runtime/visual_skips.hpp): in force at once.
+        case st::Id::SkipUnseen:
+            s.stored.skipUnseen = s.inForce.skipUnseen = e.index == 1;
+            s.stored.skipUnseenSet = chosen;
+            twv_vita_visual_skip_select(SkipHiddenDraw, e.index);
+            break;
+        case st::Id::StillAnimals:
+            s.stored.stillAnimals = s.inForce.stillAnimals = e.index == 1;
+            s.stored.stillAnimalsSet = chosen;
+            twv_vita_visual_skip_select(SkipOffscreenAnim, e.index);
+            break;
+        case st::Id::RestingAnimals:
+            s.stored.restingAnimals = s.inForce.restingAnimals = e.index == 1;
+            s.stored.restingAnimalsSet = chosen;
+            twv_vita_visual_skip_select(RestCreatures, e.index);
+            break;
+        case st::Id::Crowd:
+            s.stored.crowd = s.inForce.crowd = e.index;
+            s.stored.crowdSet = chosen;
+            twv_vita_crowd_select(e.index);
             break;
         default: break;
         }

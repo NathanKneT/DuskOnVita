@@ -13,6 +13,7 @@
 #include "runtime/vita_settings.hpp"
 #include "ui/startup_screen.hpp"
 #include "runtime/fast_actors.hpp"
+#include "runtime/visual_skips.hpp"
 #include "runtime/fast_painter.hpp"
 #include "runtime/player_settings.hpp"
 #include "disc/disc_report.h"
@@ -541,6 +542,14 @@ int main(int, char**) {
     int importChoice = -1;
     int fastActorChoices[twv::vita::FastActorSwitchCount];
     for (int& choice : fastActorChoices) choice = -1;
+    // --vita-skip-hidden-draw / --vita-skip-offscreen-anim=off|on, --vita-state-digest=off|on
+    // (runtime/visual_skips.hpp); settingsVisualSkip holds the settings page's choices (off until set).
+    int visualSkipChoices[twv::vita::VisualSkipCount];
+    for (int& choice : visualSkipChoices) choice = -1;
+    int settingsVisualSkip[twv::vita::VisualSkipCount] = {};
+    int stateDigestChoice = -1;
+    // --vita-crowd=full|half|low (runtime/visual_skips.hpp); settingsCrowd: the settings page's level.
+    int crowdChoice = -1, settingsCrowd = twv::vita::CrowdFull;
     // --vita-fast-<name>=off|on|verify (runtime/fast_painter.hpp): painter speed-ups, not renderer
     //   choices either. Default: FastPainterPlay with the profile, off otherwise.
     int fastPainterChoices[twv::vita::FastPainterOptionCount];
@@ -554,6 +563,21 @@ int main(int, char**) {
             if (const int choice = twv::vita::fastActorOption(token, fastActorChoices)) {
                 if (choice < 0) {
                     argsError("--vita-fast-<name> needs off, on or verify, once per name");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = twv::vita::visualSkipOption(token, visualSkipChoices, stateDigestChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-skip-hidden-draw, --vita-skip-offscreen-anim, --vita-rest-creatures and "
+                              "--vita-state-digest need off or on, once each");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = twv::vita::crowdOption(token, crowdChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-crowd needs full, half or low, once");
                     argsExit();
                 }
                 continue;
@@ -863,6 +887,30 @@ int main(int, char**) {
                       twv::vita::FastActorModeNames[mode], fastActorChoices[which] >= 0 ? "" : " (default)");
         twv::vita::telemetryText("fast_actor", text);
     }
+    // Visual-only speed-ups (runtime/visual_skips.hpp): the command line, else the settings page's
+    // choice (vita_settings.json), else off.
+    settingsVisualSkip[twv::vita::SkipHiddenDraw] = stored.skipUnseen;
+    settingsVisualSkip[twv::vita::SkipOffscreenAnim] = stored.stillAnimals;
+    settingsVisualSkip[twv::vita::RestCreatures] = stored.restingAnimals;
+    settingsCrowd = stored.crowd;
+    for (int which = 0; which < twv::vita::VisualSkipCount; ++which) {
+        const int on = visualSkipChoices[which] >= 0 ? visualSkipChoices[which] : settingsVisualSkip[which];
+        twv_vita_visual_skip_select(which, on);
+        char text[64];
+        std::snprintf(text, sizeof text, "%s=%s%s", twv::vita::VisualSkipNames[which], on ? "on" : "off",
+                      visualSkipChoices[which] >= 0 ? "" : " (settings)");
+        twv::vita::telemetryText("visual_skip", text);
+    }
+    {
+        const int level = crowdChoice >= 0 ? crowdChoice : settingsCrowd;
+        twv_vita_crowd_select(level);
+        char text[48];
+        std::snprintf(text, sizeof text, "crowd=%s%s", twv::vita::CrowdLevelNames[level],
+                      crowdChoice >= 0 ? "" : " (settings)");
+        twv::vita::telemetryText("visual_skip", text);
+    }
+    twv_vita_state_digest_select(stateDigestChoice == 1);
+    if (stateDigestChoice == 1) twv::vita::telemetryText("state_digest", "on");
     for (unsigned option = 0; option < twv::vita::FastPainterOptionCount; ++option) {
         const int choice = fastPainterChoices[option];
         const int mode = choice >= 0 ? choice : playProfile ? twv::vita::FastPainterPlay[option] : int(twv::vita::FastOff);

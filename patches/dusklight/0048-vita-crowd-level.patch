@@ -1,0 +1,46 @@
+Vita (--vita-crowd=full|half|low, platform/vita/runtime/visual_skips.hpp): how many passers a
+crowd manager (daPasserMng_c, Castle Town's generated crowd) keeps walking: the stage's number,
+half of it, or a quarter (rounded up), at the first spread along the path and when it sends more.
+Placed and quest NPCs are not passers and do not change. Not exact: fewer passers draw fewer random
+numbers, so the shared random sequence differs from the original's.
+
+--- a/src/d/actor/d_a_passer_mng.cpp
++++ b/src/d/actor/d_a_passer_mng.cpp
+@@ -10,6 +10,17 @@
+ #include "d/d_path.h"
+ #include "d/d_stage.h"
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0048): --vita-crowd, 0 full, 1 half, 2 low (a quarter), rounded up.
++extern "C" int twv_crowd_level;
++static int twv_crowd_max(int max) {
++    return twv_crowd_level == 1 ? (max + 1) / 2 : twv_crowd_level == 2 ? (max + 3) / 4 : max;
++}
++#define TWV_CROWD_MAX(n) twv_crowd_max(n)
++#else
++#define TWV_CROWD_MAX(n) (n)
++#endif
++
+ static int daPasserMng_Execute(daPasserMng_c* i_this) {
+     return i_this->execute();
+ }
+@@ -19,7 +30,7 @@
+     if ((field_0x596 != 0 || (time >= startTime && time < endTime)) &&
+         dayOfWeek == getDayOfWeek() && mTime <= time)
+     {
+-        if (getChildNum() < getMaxNum()) {
++        if (getChildNum() < TWV_CROWD_MAX(getMaxNum())) {
+             csXyz cStack_20(field_0x596 != 0 ? 0xff : endTime, current.angle.y, 0);
+             childProcIds[currentChildIndex] =
+                 fopAcM_createChild(npcId, fopAcM_GetID(this), getPasserParam(), &current.pos,
+@@ -557,8 +568,8 @@
+     field_0x597 = 0;
+     if (field_0x596 != 0 || (startTime < time && endTime > time)) {
+         int max;
+-        if (getMaxNum() < mPath->m_num - 2) {
+-            max = getMaxNum();
++        if (TWV_CROWD_MAX(getMaxNum()) < mPath->m_num - 2) {
++            max = TWV_CROWD_MAX(getMaxNum());
+         } else {
+             max = mPath->m_num - 2;
+         }

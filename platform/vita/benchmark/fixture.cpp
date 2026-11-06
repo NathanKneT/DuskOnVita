@@ -2,6 +2,7 @@
 // Only the declared blank-save equipment/time and original PAD inputs change.
 #include "fight_timeline.hpp"
 #include "runtime/telemetry.hpp"
+#include "runtime/visual_skips.hpp"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
@@ -70,6 +71,7 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
 // Called after each original game_clock::commit_sim_tick, including every
 // catch-up tick. Presentation-only frames never advance the input timeline.
 extern "C" void twv_vita_benchmark_tick() {
+    twv_vita_visual_skip_tick(); // runtime/visual_skips.cpp: the tick serial, its receipts and the state digest
     if(phase==Phase::Off || phase==Phase::Done || phase==Phase::Failed)return;
     if(phase==Phase::Waiting) {
         if(++waitTicks>3600){fail("fixture readiness timed out");return;}

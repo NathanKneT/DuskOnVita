@@ -13,7 +13,7 @@
 namespace twv::ui::settings {
 
 enum class Id : uint8_t {
-    Preset, RenderScale, Performance, ShowFps, ButtonPrompts, ConfirmButton, Language, GyroAim, GyroSensitivity,
+    Preset, RenderScale, Performance, SpeedUps, SkipUnseen, StillAnimals, RestingAnimals, Crowd, ShowFps, ButtonPrompts, ConfirmButton, Language, GyroAim, GyroSensitivity,
     GyroInvertYaw, GyroInvertPitch, GyroRecentre, CameraInvertX, CameraInvertY, OpenGesture, ResetDefaults,
     Close, Count
 };
@@ -42,11 +42,19 @@ constexpr int LanguageValues[] = {0, 1, 2, 3, 4, 6}; // Dusklight GameLanguage (
 struct PresetChoice { int renderScale, performance; };
 constexpr PresetChoice Presets[] = {{3, 0}, {2, 0}, {0, 1}}; // Quality 100 %, Balanced 75 %, Battery 50 % + saver
 constexpr int PresetCount = 3, PresetCustom = 3;
+// Speed-ups set the four entries after them together (runtime/visual_skips.hpp): Original keeps
+// the game as it was made; Performance turns on every speed-up, the crowd at half. "Custom"
+// (SpeedCustom) is shown when the four match neither; it is never chosen by a key.
+struct SpeedChoice { int skipUnseen, stillAnimals, restingAnimals, crowd; };
+constexpr SpeedChoice SpeedPresets[] = {{0, 0, 0, 0}, {1, 1, 1, 1}};
+constexpr int SpeedPresetCount = 2, SpeedCustom = 2;
 
 namespace text {
 constexpr const char* Preset[] = {"Quality", "Balanced", "Battery", "Custom"};
 constexpr const char* RenderScale[] = {"50 %", "67 %", "75 %", "100 %"};
 constexpr const char* Performance[] = {"Normal 444 MHz", "Battery saver"};
+constexpr const char* SpeedUps[] = {"Original", "Performance", "Custom"};
+constexpr const char* Crowd[] = {"Full", "Half", "Low"};
 constexpr const char* OffOn[] = {"Off", "On"};
 constexpr const char* Prompts[] = {"PlayStation", "GameCube"};
 constexpr const char* Confirm[] = {"System", "Cross", "Circle"};
@@ -66,6 +74,21 @@ constexpr Entry Entries[EntryCount] = {
      "Normal: 444 MHz, the highest clock the Vita lets a game use (no plugin, no overclock). "
      "Battery saver: the console's own clocks (333 MHz CPU); slower game, longer battery.",
      Applies::Restart, text::Performance, 2, 0},
+    {Id::SpeedUps, Kind::Choice, "Speed-ups",
+     "Original: the game as it was made. Performance: the four entries below on (crowd at half); "
+     "quests, items and saves are not affected.", Applies::Now, text::SpeedUps, 3, 0},
+    {Id::SkipUnseen, Kind::Choice, "Skip unseen frames",
+     "Below 30 FPS the game runs two steps per frame and shows only the second: the first is not drawn. "
+     "The game plays the same.", Applies::Now, text::OffOn, 2, 0},
+    {Id::StillAnimals, Kind::Choice, "Still animals off screen",
+     "Fish, birds and frogs out of view stop moving their bodies until you see them again. "
+     "The game plays the same.", Applies::Now, text::OffOn, 2, 0},
+    {Id::RestingAnimals, Kind::Choice, "Resting animals far away",
+     "Fish, pumpkins and chickens far from Link and out of view pause until he comes near. "
+     "Random events then roll differently.", Applies::Now, text::OffOn, 2, 0},
+    {Id::Crowd, Kind::Choice, "Castle Town crowd",
+     "How many passers walk the streets; fewer is faster. Random events then roll differently.",
+     Applies::NextArea, text::Crowd, 3, 0},
     {Id::ShowFps, Kind::Choice, "Show FPS", "Frames per second in the top-left corner.", Applies::Now,
      text::OffOn, 2, 0},
     {Id::ButtonPrompts, Kind::Choice, "Button prompts",
@@ -100,7 +123,7 @@ constexpr Entry Entries[EntryCount] = {
     {Id::Close, Kind::Action, "Close and resume", "Back to the game. Changes are saved now.", Applies::Now,
      nullptr, 0, 0},
 };
-static_assert(EntryCount == 17);
+static_assert(EntryCount == 22);
 static_assert(Presets[1].renderScale == 2 && Presets[1].performance == 0, "Balanced is the default size and clock");
 constexpr const Entry& entry(Id id) { return Entries[int(id)]; }
 
@@ -155,6 +178,19 @@ public:
             allowedChoices[i] = Entries[i].count ? (1u << Entries[i].count) - 1u : 0u;
         }
         allowedChoices[int(Id::Preset)] = (1u << PresetCount) - 1u; // Custom is shown, never chosen
+        allowedChoices[int(Id::SpeedUps)] = (1u << SpeedPresetCount) - 1u;
+    }
+
+    // The speed-up preset that matches its four entries, or Custom (derived, no change emitted).
+    void sync_speed() {
+        int match = SpeedCustom;
+        for (int k = 0; k < SpeedPresetCount; ++k)
+            if (index[int(Id::SkipUnseen)] == SpeedPresets[k].skipUnseen &&
+                index[int(Id::StillAnimals)] == SpeedPresets[k].stillAnimals &&
+                index[int(Id::RestingAnimals)] == SpeedPresets[k].restingAnimals &&
+                index[int(Id::Crowd)] == SpeedPresets[k].crowd)
+                match = k;
+        index[int(Id::SpeedUps)] = match;
     }
 
     // The preset that matches Render size and Performance, or Custom (no change emitted: derived).
@@ -273,7 +309,8 @@ public:
     // Every entry back to its default (the Reset action); emits a change for each that moved.
     void reset_all(Effects& out) {
         for (int i = 0; i < EntryCount; ++i)
-            if (Entries[i].kind == Kind::Choice && Entries[i].id != Id::Preset && available[i] && index[i] != defaults[i])
+            if (Entries[i].kind == Kind::Choice && Entries[i].id != Id::Preset && Entries[i].id != Id::SpeedUps &&
+                available[i] && index[i] != defaults[i])
                 change(Entries[i].id, defaults[i], out);
     }
 
@@ -305,6 +342,13 @@ private:
             change(Id::Performance, Presets[choice].performance, out);
         }
         if (id == Id::RenderScale || id == Id::Performance) sync_preset();
+        if (id == Id::SpeedUps) {
+            change(Id::SkipUnseen, SpeedPresets[choice].skipUnseen, out);
+            change(Id::StillAnimals, SpeedPresets[choice].stillAnimals, out);
+            change(Id::RestingAnimals, SpeedPresets[choice].restingAnimals, out);
+            change(Id::Crowd, SpeedPresets[choice].crowd, out);
+        }
+        if (id == Id::SkipUnseen || id == Id::StillAnimals || id == Id::RestingAnimals || id == Id::Crowd) sync_speed();
     }
     void activate(Id id, Effects& out) {
         switch (id) {
