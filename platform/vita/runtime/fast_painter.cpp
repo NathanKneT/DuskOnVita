@@ -10,13 +10,36 @@ extern "C" int twv_gx_fast_wake_stats(uint32_t* counts, unsigned n) noexcept __a
 // map lookups, verified calls, mismatches).
 extern "C" int twv_gx_fast_static_dl_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
 
+// patches/aurora/0023 (regs.cpp): the gen-mode switch's mode and counts (writes short-circuited,
+// verify candidates, decode mismatches, pipeline rebuilds checked, rebuilds that gave another pipeline).
+extern "C" int twv_gx_fast_gen_mode_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
+
+// gfx_vgl/backend.cpp: 1 while the backend drops every draw into an offscreen framebuffer.
+extern "C" int twv_vita_offscreen_draws_dropped(void) __attribute__((weak));
+
 namespace {
+uint32_t sUnseenMaps = 0; // maps left out (on) or that would have been (verify)
 int sModes[twv::vita::FastPainterOptionCount] = {};
 constexpr unsigned ReceiptFrames = 300;
 unsigned sFrames = 0;
-uint32_t sLostReported = 0, sMismatchReported = 0;
+uint32_t sLostReported = 0, sMismatchReported = 0, sGenModeReported = 0;
 
 void receipts() {
+    if (sModes[twv::vita::FastUnseenMap] != twv::vita::FastOff) {
+        twv::vita::telemetryEvent("fast_unseen_map_mode", sModes[twv::vita::FastUnseenMap]);
+        twv::vita::telemetryEvent("fast_unseen_map_maps", sUnseenMaps);
+    }
+    if (twv_gx_fast_gen_mode_stats) {
+        uint32_t g[5] = {};
+        const int mode = twv_gx_fast_gen_mode_stats(g, 5);
+        twv::vita::telemetryEvent("fast_gen_mode_mode", mode);
+        twv::vita::telemetryEvent("fast_gen_mode_short", g[0]);
+        twv::vita::telemetryEvent("fast_gen_mode_candidates", g[1]);
+        twv::vita::telemetryEvent("fast_gen_mode_decode_mismatches", g[2]);
+        twv::vita::telemetryEvent("fast_gen_mode_rebuilds_checked", g[3]);
+        twv::vita::telemetryEvent("fast_gen_mode_pipeline_mismatches", g[4]);
+        sGenModeReported = g[2] + g[4];
+    }
     if (twv_gx_fast_static_dl_stats) {
         uint32_t s[4] = {};
         const int mode = twv_gx_fast_static_dl_stats(s, 4);
@@ -53,6 +76,14 @@ extern "C" int twv_vita_fast_painter_mode(unsigned option) {
 
 extern "C" int twv_gx_fast_wake_mode(void) noexcept {return sModes[twv::vita::FastGxWake];}
 extern "C" int twv_gx_fast_static_dl_mode(void) noexcept {return sModes[twv::vita::FastStaticDl];}
+extern "C" int twv_gx_fast_gen_mode(void) noexcept {return sModes[twv::vita::FastGenMode];}
+extern "C" int twv_vita_unseen_map_skip(void) {
+    const int mode = sModes[twv::vita::FastUnseenMap];
+    if (mode == twv::vita::FastOff || !twv_vita_offscreen_draws_dropped || !twv_vita_offscreen_draws_dropped())
+        return 0;
+    ++sUnseenMaps;
+    return mode == twv::vita::FastOn;
+}
 
 extern "C" void twv_vita_fast_painter_frame(void) {
     bool now = ++sFrames % ReceiptFrames == 0;
@@ -66,6 +97,11 @@ extern "C" void twv_vita_fast_painter_frame(void) {
         uint32_t s[4] = {};
         twv_gx_fast_static_dl_stats(s, 4);
         now = s[3] != sMismatchReported;
+    }
+    if (!now && twv_gx_fast_gen_mode_stats && sModes[twv::vita::FastGenMode] == twv::vita::FastVerify) {
+        uint32_t g[5] = {};
+        twv_gx_fast_gen_mode_stats(g, 5);
+        now = g[2] + g[4] != sGenModeReported;
     }
     if (now) receipts();
 }

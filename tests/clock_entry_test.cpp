@@ -39,6 +39,9 @@ int sceIoDclose(SceUID);
 #undef main
 
 namespace {
+// The GXM additions the play profile turns on unless typed: pipeline memo (1024) and direct
+// default-uniform writes (32768).
+constexpr std::uint32_t PlayGxmAdditions = 1024u + 32768u;
 struct EntryState {
     std::vector<std::string> calls, nativeCalls, gameArgs;
     std::map<std::string, long long> events;
@@ -342,7 +345,7 @@ int main() {
     fixedTicks = -1;
     assert(run(nullptr) == 7); checkClocks(true, false);
     // Features: primitives, compact colours, resident (15) and the 75 % render size (64).
-    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u);
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u + PlayGxmAdditions);
     assert(state.selections == (std::map<std::string, int>{{"stream", 1}, {"shadow", 1}, {"small", 1},
         {"uncached", 1}, {"gx", 1}, {"lazy_plan", 1}, {"static", 1}, {"gx_thread", 1}, {"pipeline_fast", 1}}));
     assert(state.bundleFeatures == TWV_BUNDLE_CORE && state.memoryProfile == 2 && state.quiet);
@@ -353,6 +356,12 @@ int main() {
     assert(state.fastShadow == FastShadowCollectPlay &&
            state.text.at("fast_shadow_collect_default") == twv::vita::FastShadowCollectNames[FastShadowCollectPlay]);
     assert(state.fastPainter == std::vector<int>(std::begin(twv::vita::FastPainterPlay), std::end(twv::vita::FastPainterPlay)));
+    // A typed choice of a GXM addition wins over the profile's: off stays off, verify adds its bit.
+    assert(run("--vita-gxm-pipeline-memo=off") == 7 && state.text.at("play_profile") == "on" &&
+           state.gpuFeatures == 79u + 32768u);
+    assert(run("--vita-gxm-uniform-direct=verify") == 7 && state.text.at("play_profile") == "on" &&
+           state.gpuFeatures == 79u + 1024u + 32768u + 65536u);
+    assert(run("--vita-gxm-uniform-direct=off --vita-gxm-pipeline-memo=on") == 7 && state.gpuFeatures == 79u + 1024u);
     // --vita-fast-<name> is not a renderer choice: the implicit profile stays on.
     fixedTicks = -1;
     assert(run("--vita-fast-gx-wake=verify") == 7 && state.text.at("play_profile") == "on");
@@ -394,15 +403,15 @@ int main() {
     // Clocks, exit timers, receipts and diagnostics left in args.txt keep the implicit profile.
     fixedTicks = -1;
     assert(run("--vita-clocks=legacy444") == 7); checkClocks(true, true);
-    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u);
+    assert(state.text.at("play_profile") == "on" && state.gpuBackend == 1 && state.gpuFeatures == 79u + PlayGxmAdditions);
     assert(state.selections.at("gx_thread") == 1 && state.quiet && fixedTicks == 2);
     assert(std::vector<std::string>(state.gameArgs.begin() + 5, state.gameArgs.end()) ==
         (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
     // A typed render size keeps the profile and wins over its 75 %: 100 % adds no feature, 67 % adds 128.
     fixedTicks = -1;
-    assert(run("--vita-gxm-scale=100") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u);
+    assert(run("--vita-gxm-scale=100") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u + PlayGxmAdditions);
     fixedTicks = -1;
-    assert(run("--vita-gxm-scale=67") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 143u);
+    assert(run("--vita-gxm-scale=67") == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 143u + PlayGxmAdditions);
     fixedTicks = -1;
     assert(run("--vita-exit-after=60 --vita-shader-capture=on --vita-receipts=full --stage R_SP01,4,2,0") == 7);
     assert(state.text.at("play_profile") == "on" && state.selections.at("capture") == 1);
@@ -456,7 +465,7 @@ int main() {
     fixedTicks = -1;
     assert(run("--vita-frame-overlap=on --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "on");
     assert(state.overlap == 1 && state.text.at("frame_overlap_requested") == "on" && fixedTicks == 2);
-    assert(state.selections.at("gx_thread") == 1 && state.gpuFeatures == 79u && state.quiet);
+    assert(state.selections.at("gx_thread") == 1 && state.gpuFeatures == 79u + PlayGxmAdditions && state.quiet);
     {
         const auto thread = std::find(state.calls.begin(), state.calls.end(), "gx_thread");
         const auto overlap = std::find(state.calls.begin(), state.calls.end(), "frame_overlap");
@@ -488,25 +497,25 @@ int main() {
     // vita_settings.json (the settings page): its render size replaces the profile's 75 %, never a
     // typed size; the page is told what is in force and what the file held.
     writeFile(SettingsFile, "{\"renderScale\": 50}");
-    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u + 256u);
+    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on" && state.gpuFeatures == 15u + 256u + PlayGxmAdditions);
     assert(state.text.at("render_scale_source") == "vita_settings.json" && state.text.at("vita_settings") == "read");
     assert(state.configured && state.inForce.renderScale == 50 && state.stored.renderScaleSet &&
            state.stored.renderScale == 50 && state.disc == "GZ2P01");
-    assert(run("--vita-gxm-scale=100") == 7 && state.gpuFeatures == 15u && state.inForce.renderScale == 100);
+    assert(run("--vita-gxm-scale=100") == 7 && state.gpuFeatures == 15u + PlayGxmAdditions && state.inForce.renderScale == 100);
     assert(state.text.at("render_scale_source") == "args" && state.stored.renderScale == 50);
-    assert(run("--vita-gxm-scale=67") == 7 && state.gpuFeatures == 143u && state.inForce.renderScale == 67);
+    assert(run("--vita-gxm-scale=67") == 7 && state.gpuFeatures == 143u + PlayGxmAdditions && state.inForce.renderScale == 67);
     // A renderer choice turns the profile off; the file's size waits for the profile.
     assert(run("--vita-gpu=vgl") == 7 && state.gpuBackend == 0 && state.inForce.renderScale == 100);
     assert(state.text.at("render_scale_source") == "default (vita_settings.json applies with the play profile only)");
     writeFile(SettingsFile, "{\"renderScale\": 100, \"performance\": \"battery\"}");
-    assert(run(nullptr) == 7 && state.gpuFeatures == 15u && state.inForce.renderScale == 100);
+    assert(run(nullptr) == 7 && state.gpuFeatures == 15u + PlayGxmAdditions && state.inForce.renderScale == 100);
     checkClocks(false, false);
     assert(state.inForce.batterySaver && state.text.at("clock_mode_source") == "vita_settings.json");
     // A sequence run (bench lines) ignores the file: the profile's 75 % and 444 MHz, as without it.
     writeFile("ux0:data/twilight-vita/sequence.txt", "b1: --vita-profile=play --stage F_SP103,0,23,-1\n");
     std::filesystem::remove("ux0:data/twilight-vita/sequence_state.txt");
     writeFile(SettingsFile, "{\"renderScale\": 50, \"performance\": \"battery\", \"showFps\": true}");
-    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on (explicit)" && state.gpuFeatures == 79u);
+    assert(run(nullptr) == 7 && state.text.at("play_profile") == "on (explicit)" && state.gpuFeatures == 79u + PlayGxmAdditions);
     checkClocks(true, false);
     assert(state.text.at("vita_settings") == "ignored (sequence run)" && state.text.at("render_scale_source") == "default");
     assert(!state.stored.any_set() && !state.inForce.showFps && state.inForce.renderScale == 75);

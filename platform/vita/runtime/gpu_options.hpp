@@ -31,6 +31,11 @@
 //                                           also rebuilds every reused buffer and compares the bytes
 //   --vita-gxm-fragment-split=on|off|verify the same for the fragment stage: TEV registers, konst
 //                                           colours and fog in fragment uniform buffer 1
+// nr/perf-leads (GXM only, default off; an addition like the above):
+//   --vita-gxm-uniform-direct=on|off|verify each draw's default uniforms written straight into the
+//                                           reserved buffers at their offsets, only the vectors the
+//                                           draw sets (no SDK call per uniform, no whole-buffer copy);
+//                                           verify writes as before and compares every direct write
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -46,13 +51,14 @@ struct GpuOptions {
     int captureMatch=0;
     bool primitivesSelected=false,compactSelected=false,residentSelected=false,timingSelected=false;
     bool splitSelected=false,scaleSelected=false,uniformReuseSelected=false,pipelineMemoSelected=false;
-    bool uniformSplitSelected=false,fragmentSplitSelected=false;
+    bool uniformSplitSelected=false,fragmentSplitSelected=false,uniformDirectSelected=false;
     uint32_t features=0; // TwvGpuFeature* bits (gfx_vgl/gpu_api.h)
     uint32_t splitScenes=0; // --vita-gxm-gpu-split
     static constexpr uint32_t FeaturePrimitives=1u,FeatureCompact=2u,FeatureCompactColors=4u,FeatureResident=8u,
         FeatureTiming=16u,FeatureSplit=32u,FeatureScale75=64u,FeatureScale67=128u,FeatureScale50=256u, // diagnostics
         FeatureUniformReuse=512u,FeaturePipelineMemo=1024u,FeatureUniformSplit=2048u,FeatureUniformSplitVerify=4096u,
-        FeatureFragmentSplit=8192u,FeatureFragmentSplitVerify=16384u;
+        FeatureFragmentSplit=8192u,FeatureFragmentSplitVerify=16384u,FeatureUniformDirect=32768u,
+        FeatureUniformDirectVerify=65536u;
     // 0 not a GPU option, -1 invalid or repeated, 1 accepted.
     int consume(const char* token) noexcept {
         if(!token)return -1;
@@ -60,6 +66,8 @@ struct GpuOptions {
             return split(v,uniformSplitSelected,FeatureUniformSplit,FeatureUniformSplitVerify);
         if(const char* v=value(token,"--vita-gxm-fragment-split"))
             return split(v,fragmentSplitSelected,FeatureFragmentSplit,FeatureFragmentSplitVerify);
+        if(const char* v=value(token,"--vita-gxm-uniform-direct"))
+            return split(v,uniformDirectSelected,FeatureUniformDirect,FeatureUniformDirectVerify);
         if(const char* v=value(token,"--vita-gxm-uniform-reuse"))return toggle(v,uniformReuseSelected,FeatureUniformReuse);
         if(const char* v=value(token,"--vita-gxm-pipeline-memo"))return toggle(v,pipelineMemoSelected,FeaturePipelineMemo);
         if(const char* v=value(token,"--vita-gxm-gpu-timing"))return toggle(v,timingSelected,FeatureTiming);
@@ -127,7 +135,7 @@ struct GpuOptions {
         return backendSelected || digestSelected || captureSelected || matchSelected ||
                primitivesSelected || compactSelected || residentSelected || timingSelected || splitSelected ||
                scaleSelected || uniformReuseSelected || pipelineMemoSelected || uniformSplitSelected ||
-               fragmentSplitSelected;
+               fragmentSplitSelected || uniformDirectSelected;
     }
     // A backend or drawing-feature choice (main_vita.cpp's play profile then stays off). The
     // digest, captures and GPU diagnostics do not count.

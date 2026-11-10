@@ -1,0 +1,35 @@
+Vita: --vita-fast-unseen-map=off|on (platform/vita/runtime/fast_painter.hpp). The minimap and the
+map screen are drawn into their own framebuffer and copied to a texture (dRenderingMap_c::
+renderingMap). The Vita backend has no offscreen framebuffer yet: it drops every draw sent to one,
+and the copy, so the map never shows, but the game thread still wrote every polygon and line and
+the GX worker still decoded them (54 to 351 dropped draws per frame on the console). While the
+backend drops them, on leaves the path out; the framebuffer set-up, the back quad, the copy and
+the 2D set-up after it are sent as before. Off (the default): nothing changes.
+
+--- a/src/d/d_map_path.cpp
++++ b/src/d/d_map_path.cpp
+@@ -414,8 +414,24 @@ void dRenderingMap_c::makeResTIMG(ResTIMG* p_image, u16 width, u16 height, u8* p
+     p_image->imageOffset = p_data - (u8*)p_image;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0052): --vita-fast-unseen-map=off|on (platform/vita/runtime/
++// fast_painter.hpp). The map is drawn into its own framebuffer and copied to a texture. The Vita
++// backend has no such framebuffer yet: it drops every draw sent to it, and the copy, so the map
++// never shows. While that is so, on leaves out the path's polygons, lines, doors and cursor (54 to
++// 351 dropped draws per frame on the console, most of them in Hyrule Field). The framebuffer
++// set-up, the back quad, the copy and the 2D set-up after it are sent as before.
++extern "C" int twv_vita_unseen_map_skip(void) __attribute__((weak));
++#endif
++
+ void dRenderingMap_c::renderingMap() {
+     preRenderingMap();
++#if TARGET_VITA
++    if (twv_vita_unseen_map_skip && twv_vita_unseen_map_skip()) {
++        postRenderingMap();
++        return;
++    }
++#endif
+     if (isDrawPath()) {
+         preDrawPath();
+         beforeDrawPath();

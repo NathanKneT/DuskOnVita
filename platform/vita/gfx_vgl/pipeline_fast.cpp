@@ -115,6 +115,9 @@ const PipelineConfig* sSynced=nullptr; // the config the last populate wrote, in
 PipelineConfig sCheck{};
 twv::vgl::CompactPipelineIndex sIndex;
 twv::vgl::LastKeyMemo sMemo; // --vita-gxm-pipeline-memo
+// --vita-fast-pipeline-info: the config object and result of the last lookup (twv_vita_pipeline_ref_resolved).
+const void* sResolvedConfig=nullptr;
+uint64_t sResolvedId=0;
 struct {uint32_t populates,lookups,hits,misses,timedPopulates,timedLookups,populateUs,lookupUs,
         memoHits,memoChecks;} sPending{};
 
@@ -235,5 +238,14 @@ extern "C" aurora::gfx::PipelineRef __wrap__ZN6aurora3gfx12pipeline_refINS_2gx14
     ++sPending.timedLookups;
   }
   flush_counts();
+  sResolvedConfig=&config;sResolvedId=id;
   return id;
+}
+
+// --vita-fast-pipeline-info (backend.cpp twv_vita_pipeline_info_copy, called right after the lookup
+// with the same config object): every path above returns the pipeline that was found or created for
+// this config by comparing it (the original lookup, or the compact key, which is equal exactly when
+// the configs are).
+extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept {
+  return sResolvedConfig==config && sResolvedId==pipeline;
 }

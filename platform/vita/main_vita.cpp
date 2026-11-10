@@ -112,10 +112,20 @@ constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
     twv::vita::FastActorOn,  // bg-list
     twv::vita::FastActorOn,  // flow-bind
     twv::vita::FastActorOn,  // mtx (aurora 0022, dusklight 0037): console m1 verify 10.6 M products, 0 differences
-    twv::vita::FastActorOff, // search-index (dusklight 0039): round 2, off until the console confirms
-    twv::vita::FastActorOff, // hair (dusklight 0041): round 2, off until the console confirms
-    twv::vita::FastActorOff, // rnd (dusklight 0040): round 2, off until the console confirms
+    // Round 2 and the envelope products, on since the console session of 10 Nov
+    // (docs/benchmarks.csv): execute per tick 16.9 -> 14.7 ms in Ordon centre, 11.4 -> 9.5 ms in Kakariko, with
+    // the four on together. Vita3K verify in the six places: no difference in any of them.
+    twv::vita::FastActorOn,  // search-index (dusklight 0039)
+    twv::vita::FastActorOn,  // hair (dusklight 0041)
+    twv::vita::FastActorOn,  // rnd (dusklight 0040)
+    twv::vita::FastActorOn,  // envelopes (dusklight 0053)
 };
+// GXM additions the play profile turns on unless the command line chooses (console, 10 Nov):
+// the pipeline memo (with gen-mode and pipeline-info the worker's pipeline step fell from 10.7 to
+// 5.1 ms in Ordon centre, 13.6 to 3.7 in Hyrule Field) and direct default-uniform writes (backend
+// step 24.0 -> 23.1 ms; every program passed the layout check on the console's GXM).
+constexpr const char* PlayPipelineMemo = "--vita-gxm-pipeline-memo=on";
+constexpr const char* PlayUniformDirect = "--vita-gxm-uniform-direct=on";
 
 // "<prefix><a>" -> choice 0, "<prefix><b>" -> choice 1 (returns 1); another value or a second
 // time -> -1; any other token -> 0.
@@ -750,6 +760,16 @@ int main(int, char**) {
             if (portOption(token) != 1) {
                 argsError("play profile option rejected");
                 argsSource = nullptr; // the build's own option, not the file's
+                argsToken = token;
+                argsExit();
+            }
+    // The profile's GXM additions, each unless the command line chose it (on, off or verify).
+    if (playProfile)
+        for (const char* token : {gpuOptions.pipelineMemoSelected ? nullptr : PlayPipelineMemo,
+                                  gpuOptions.uniformDirectSelected ? nullptr : PlayUniformDirect})
+            if (token && portOption(token) != 1) {
+                argsError("play profile option rejected");
+                argsSource = nullptr;
                 argsToken = token;
                 argsExit();
             }

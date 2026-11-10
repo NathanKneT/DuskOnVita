@@ -9,17 +9,35 @@
 //   static-dl (patches/aurora/0021): a display list by reference takes its id from a cache of the
 //     map's answers (same pointer, size and map generation) instead of a lock and a map lookup.
 //     verify: the map is asked too and its id written; different ids counted.
+// GX worker speed-ups with the same draws, in the same list because they are selected the same way:
+//   gen-mode (patches/aurora/0023): a genMode / numChans / numTexGens write that leaves the decoded
+//     state as it is no longer marks the pipeline changed (J3D sends the three with every material,
+//     and each invalidated the others' shadow registers). verify: handled as before; pipeline
+//     rebuilds that only such writes asked for are counted, and those that gave another pipeline.
+//   pipeline-info (gfx_vgl/backend.cpp twv_vita_pipeline_info_copy): the pipeline a lookup has just
+//     returned for a config is not compared with that config a second time. verify: compared as
+//     before, the comparisons that on would skip counted.
+// Painter work the backend throws away:
+//   unseen-map (patches/dusklight/0052): while the backend drops every draw into an offscreen
+//     framebuffer (it has none yet), the minimap's and the map screen's polygons and lines are not
+//     sent. verify counts the maps it would leave out and sends them.
 #include <cstdint>
 #include <cstring>
 
 namespace twv::vita {
 enum : int { FastOff = 0, FastOn = 1, FastVerify = 2 };
 constexpr const char* FastModeNames[] = {"off", "on", "verify"};
-enum FastPainterOption : unsigned { FastGxWake, FastStaticDl, FastPainterOptionCount };
-constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake", "static-dl"};
-// Play-profile defaults: off until verify has covered the six bench-v2 places (so far Ordon centre
-// only: no lost wakeup, no different id; docs/PERFORMANCE.md).
-constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOff, FastOff};
+enum FastPainterOption : unsigned {
+    FastGxWake, FastStaticDl, FastGenMode, FastPipelineInfo, FastUnseenMap, FastPainterOptionCount
+};
+constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake", "static-dl", "gen-mode",
+                                                                        "pipeline-info", "unseen-map"};
+// Play-profile defaults: all on since the console session of 10 Nov (docs/benchmarks.csv). Vita3K
+// verify in the six bench-v2 places found no lost wakeup, no different list id, no different
+// pipeline and no differing draw digest; on the console the GX worker fell by 6.6 ms in Ordon
+// centre, 8.0 in Kakariko and 13.6 in Hyrule Field with the five on together (and the pipeline
+// memo). unseen-map only acts while the backend drops offscreen draws.
+constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn};
 
 // "--vita-fast-<name>=off|on|verify" for a name above: 1 (choices[option] set), -1 for another
 // value or a second time, 0 for any other token.
@@ -50,6 +68,10 @@ int twv_vita_fast_painter_mode(unsigned option);
 int twv_gx_fast_wake_mode(void) noexcept;
 // patches/aurora/0021: read at the first display list call by reference.
 int twv_gx_fast_static_dl_mode(void) noexcept;
+// patches/aurora/0023: read at the GX worker's first genMode / numChans / numTexGens write.
+int twv_gx_fast_gen_mode(void) noexcept;
+// patches/dusklight/0052: 1 when the map's path is to be left out of this painter.
+int twv_vita_unseen_map_skip(void);
 // After every painter (actor_profile.cpp): receipts once in ReceiptFrames painted frames.
 void twv_vita_fast_painter_frame(void);
 }

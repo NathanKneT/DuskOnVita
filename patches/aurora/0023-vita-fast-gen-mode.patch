@@ -1,0 +1,242 @@
+Vita: --vita-fast-gen-mode=off|on|verify (platform/vita/runtime/fast_painter.hpp). BP genMode (0x00)
+and XF numChans (0x09) / numTexGens (0x3F) set the same state fields, so each handler invalidates
+the other shadow register. J3D sends all three with every material: a material sent again was
+handled again every time, the pipeline was marked changed, and the draw rebuilt its config, looked
+it up and rebuilt the uniforms to find the pipeline it already had.
+On: a write that leaves the decoded state as it is only makes its shadow register valid again. It
+sets no dirty flag and invalidates nothing. That is a genMode write of the value its shadow holds
+when every field it decodes equals the state, and a numChans / numTexGens write of the state value.
+A valid shadow always decodes to the state fields (only these three handlers write them), so the
+writes skipped afterwards as unchanged would have written the values the state holds.
+Verify: such a write is handled as before, with its pipeline flag kept apart (DirtyRevalidated).
+The draw rebuilds the pipeline as before and counts the rebuilds only such writes asked for, and
+those that gave a different pipeline. Off (the default): one test per handled write of the three.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -554,6 +554,18 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+ 
+   const u8 lineMode = line_mode_for_prim(prim);
+   const auto targetLayoutKey = gfx::get_render_target_layout().key;
++#if defined(__vita__)
++  // patches/aurora/0023 (--vita-fast-gen-mode=verify; regs.cpp): the pipeline is rebuilt as before.
++  // When nothing but revalidating writes asked for it, the rebuild must give the same pipeline.
++  bool revalidatedOnly = false;
++  gfx::PipelineRef revalidatedRef{};
++  if ((state.dirty & DirtyRevalidated) != 0) {
++    revalidatedOnly = cache.hasPipeline && (state.dirty & DirtyPipeline) == 0 && cache.fmt == fmt &&
++                      cache.lineMode == lineMode && cache.targetLayoutKey == targetLayoutKey;
++    revalidatedRef = cache.pipelineRef;
++    state.dirty = (state.dirty & ~DirtyRevalidated) | DirtyPipeline;
++  }
++#endif
+   const bool pipelineValid = cache.hasPipeline && (state.dirty & DirtyPipeline) == 0 && cache.fmt == fmt &&
+                              cache.lineMode == lineMode && cache.targetLayoutKey == targetLayoutKey;
+   if (!pipelineValid) {
+@@ -585,6 +597,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+     cache.fmt = fmt;
+     cache.lineMode = lineMode;
+     cache.hasPipeline = true;
++#if defined(__vita__)
++    if (revalidatedOnly) {
++      fifo::gen_mode_rebuild_checked(cache.pipelineRef == revalidatedRef);
++    }
++#endif
+     state.dirty = (state.dirty & ~DirtyPipeline) | DirtyUniform;
+     if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
+         prevSampledIndTextures != cache.shaderInfo.sampledIndTextures) {
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -75,6 +75,11 @@ enum DirtyFlag : u8 {
+   DirtyUniform = 1 << 2,
+   DirtyImmediates = 1 << 3,
+   DirtyAll = DirtyPipeline | DirtyTextures | DirtyUniform | DirtyImmediates,
++#if defined(__vita__)
++  // Vita (patches/aurora/0023, --vita-fast-gen-mode=verify only): the pipeline flag of a genMode /
++  // numTexGens write that left the decoded state as it was, kept apart until the draw (regs.cpp).
++  DirtyRevalidated = 1 << 7,
++#endif
+ };
+ 
+ struct DrawImmediateData {
+--- a/lib/gx/regs.cpp
++++ b/lib/gx/regs.cpp
+@@ -9,6 +9,11 @@
+ #include <bit>
+ #include <cmath>
+ 
++#if defined(__vita__)
++// patches/aurora/0023 (--vita-fast-gen-mode): the start-up choice, read once on the FIFO's thread.
++extern "C" int twv_gx_fast_gen_mode(void) noexcept __attribute__((weak));
++#endif
++
+ namespace aurora::gx::fifo {
+ namespace {
+ constexpr Module Log{"aurora::gx::fifo"};
+@@ -1173,8 +1178,85 @@ bool store_xf_f32(f32& dst, u32 bits) noexcept {
+   return true;
+ }
+ 
++#if defined(__vita__)
++// Vita (patches/aurora/0023): --vita-fast-gen-mode=off|on|verify (platform/vita/runtime/
++// fast_painter.hpp). BP genMode (0x00) and XF numChans (0x09) / numTexGens (0x3F) set the same state
++// fields, so each handler invalidates the other's shadow register. J3D sends all three with every
++// material, so a material sent again was handled again every time and marked the pipeline changed.
++// On: a write that leaves the decoded state as it is only makes its shadow register valid again;
++// it sets no dirty flag and invalidates nothing. That is the case for a genMode write of the value
++// its shadow already holds when every field it decodes equals the state, and for a numChans /
++// numTexGens write of the state's value. The other register's shadow stays true: a valid shadow
++// always decodes to the state's fields, and only these three handlers write them.
++// Verify: such a write is handled as before, but its pipeline flag is kept apart
++// (DirtyRevalidated); the draw rebuilds the pipeline as before and counts the rebuilds only such
++// writes asked for, and those that gave a different pipeline (command_processor.cpp push_gx_draw).
++int sGenModeFast = -1; // 0 off, 1 on, 2 verify
++u32 sGenModeCounts[5]; // writes short-circuited, verify candidates, state mismatches, rebuilds checked, different pipelines
++
++inline int gen_mode_fast() noexcept {
++  if (sGenModeFast < 0) {
++    sGenModeFast = twv_gx_fast_gen_mode ? twv_gx_fast_gen_mode() : 0;
++  }
++  return sGenModeFast;
++}
++
++// What bp_gen_mode decodes from `value`, against the state.
++inline bool gen_mode_is_state(u32 value) noexcept {
++  const auto& state = g_gxState;
++  const u32 hwCull = reg_get(value, 2, 14);
++  const GXCullMode cull = hwCull == GX_CULL_FRONT  ? GX_CULL_BACK :
++                          hwCull == GX_CULL_BACK   ? GX_CULL_FRONT :
++                                                     static_cast<GXCullMode>(hwCull);
++  return state.numTexGens == static_cast<decltype(state.numTexGens)>(reg_get(value, 4, 0)) &&
++         state.numChans == static_cast<decltype(state.numChans)>(reg_get(value, 3, 4)) &&
++         state.numTevStages == static_cast<decltype(state.numTevStages)>(reg_get(value, 4, 10) + 1) &&
++         state.cullMode == cull &&
++         state.numIndStages == static_cast<decltype(state.numIndStages)>(reg_get(value, 3, 16));
++}
++
++// An XF register write that is not skipped as unchanged: true when --vita-fast-gen-mode=on
++// short-circuits it (numChans / numTexGens equal to the state's value). With verify it returns
++// false and says in `revalidated` whether on would have short-circuited it.
++inline bool xf_gen_mode_short(u32 reg, u32 val, bool& revalidated) noexcept {
++  revalidated = false;
++  if ((reg != 0x09 && reg != 0x3F) || gen_mode_fast() == 0) {
++    return false;
++  }
++  const auto& state = g_gxState;
++  const bool same = reg == 0x09 ? state.numChans == static_cast<decltype(state.numChans)>(val) :
++                                  state.numTexGens == static_cast<decltype(state.numTexGens)>(val);
++  if (!same) {
++    return false;
++  }
++  if (sGenModeFast == 1) {
++    ++sGenModeCounts[0];
++    return true;
++  }
++  ++sGenModeCounts[1];
++  revalidated = true;
++  return false;
++}
++#endif
++
+ } // namespace
+ 
++#if defined(__vita__)
++// patches/aurora/0023: receipts (platform/vita/runtime/fast_painter.cpp) and the draw's check.
++extern "C" int twv_gx_fast_gen_mode_stats(uint32_t* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 5; ++i) {
++    counts[i] = sGenModeCounts[i];
++  }
++  return sGenModeFast < 0 ? 0 : sGenModeFast;
++}
++void gen_mode_rebuild_checked(bool samePipeline) noexcept {
++  ++sGenModeCounts[3];
++  if (!samePipeline) {
++    ++sGenModeCounts[4];
++  }
++}
++#endif
++
+ // Dispatch
+ 
+ void handle_bp(u32 value) noexcept {
+@@ -1194,12 +1276,33 @@ void handle_bp(u32 value) noexcept {
+   if (g_gxState.bpRegValid.test(regId) && cache[regId] == value && !reg.alwaysHandle) {
+     return;
+   }
++#if defined(__vita__)
++  // patches/aurora/0023: genMode sent again with the value its shadow holds (the shadow was only
++  // invalidated by numChans / numTexGens), every field it decodes already in the state.
++  if (regId == 0x00 && cache[0x00] == value && gen_mode_fast() != 0 && gen_mode_is_state(value)) {
++    if (sGenModeFast == 1) {
++      g_gxState.bpRegValid.set(0x00);
++      ++sGenModeCounts[0];
++      return;
++    }
++    ++sGenModeCounts[1];
++    g_gxState.bpRegValid.set(0x00);
++    g_gxState.dirty |= DirtyRevalidated;
++    reg.decode(0x00, value);
++    return;
++  }
++#endif
+   g_gxState.bpRegValid.set(regId);
+   cache[regId] = value;
+   g_gxState.dirty |= reg.dirty;
+   if (reg.decode != nullptr) {
+     reg.decode(static_cast<u8>(regId), value);
+   }
++#if defined(__vita__)
++  if (regId == 0x00 && sGenModeFast == 2 && !gen_mode_is_state(value)) {
++    ++sGenModeCounts[2]; // gen_mode_is_state must decode what bp_gen_mode does
++  }
++#endif
+ }
+ 
+ void handle_cp(u8 addr, u32 value) noexcept {
+@@ -1433,7 +1536,15 @@ static void handle_xf_fast(u16 addr, std::span<const u8> data) noexcept {
+     state.xfRegValid[reg] = true;
+     state.xfRegCache[reg] = val;
+     const RegHandler& info = kXfRegs[reg];
++#if defined(__vita__)
++    bool revalidated;
++    if (xf_gen_mode_short(reg, val, revalidated)) {
++      continue; // patches/aurora/0023: the state holds this value already
++    }
++    state.dirty |= revalidated && info.dirty == DirtyPipeline ? u8(DirtyRevalidated) : info.dirty;
++#else
+     state.dirty |= info.dirty;
++#endif
+     if (info.decode != nullptr) {
+       info.decode(static_cast<u8>(reg), val);
+     }
+@@ -1497,7 +1608,15 @@ void handle_xf(u16 addr, std::span<const u8> data) noexcept {
+       continue;
+     }
+     const RegHandler& info = kXfRegs[reg];
++#if defined(__vita__)
++    bool revalidated;
++    if (xf_gen_mode_short(reg, val, revalidated)) {
++      continue; // patches/aurora/0023: the state holds this value already
++    }
++    g_gxState.dirty |= revalidated && info.dirty == DirtyPipeline ? u8(DirtyRevalidated) : info.dirty;
++#else
+     g_gxState.dirty |= info.dirty;
++#endif
+     if (info.decode != nullptr) {
+       info.decode(static_cast<u8>(reg), val);
+     }
+--- a/lib/gx/regs.hpp
++++ b/lib/gx/regs.hpp
+@@ -30,6 +30,12 @@ void handle_xf(u16 addr, std::span<const u8> data) noexcept;
+ 
+ bool copy_xf_data(u32 addr, const u8* data, u32 len, std::endian e) noexcept;
+ 
++#if defined(__vita__)
++// patches/aurora/0023 (--vita-fast-gen-mode=verify): a pipeline rebuild that only revalidating
++// genMode / numTexGens writes asked for, and whether it gave the pipeline the draw cache held.
++void gen_mode_rebuild_checked(bool samePipeline) noexcept;
++#endif
++
+ #if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
+ ALWAYS_INLINE bool gx_fast_decode_enabled() noexcept {
+   return twv_vita_gx_fast_enabled() != 0;

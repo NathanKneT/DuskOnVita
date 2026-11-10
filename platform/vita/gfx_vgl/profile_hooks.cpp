@@ -276,7 +276,11 @@ extern "C" void __wrap__Z15cAPIGph_Painterv() {
 extern "C" void twv_paintprof_sleep(uint64_t us) __attribute__((weak));
 extern "C" void __real_SDL_DelayPrecise(uint64_t);
 extern "C" void __wrap_SDL_DelayPrecise(uint64_t ns) {
-    if(!sInPainter) {__real_SDL_DelayPrecise(ns);return;}
+    if(!sInPainter) { // the main loop's limiter, or the game clock waiting for a tick due soon
+        twv::vgl::ProfileScope timer(TWV_PROFILE_LOOP_SLEEP);
+        __real_SDL_DelayPrecise(ns);
+        return;
+    }
     const uint64_t start=twv_vgl_time_us();
     __real_SDL_DelayPrecise(ns);
     const uint64_t us=twv_vgl_time_us()-start;

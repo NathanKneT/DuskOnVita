@@ -398,6 +398,10 @@ struct Program {
     std::vector<VertexVariant> vertexVariants;
     std::vector<FragmentVariant> fragmentVariants;
     int discard=-1;uint32_t fragmentBytes=0; // GPU split receipts: alpha test, GXP size (on first use)
+    // --vita-gxm-uniform-direct: byte offset of each default-buffer uniform in its stage's buffer and
+    // the floats it holds (uniforms, then vertexUniforms), checked against sceGxmSetUniformDataF when
+    // the program was described; direct is false when any of them did not check.
+    std::array<int32_t,15> directAt{};std::array<uint32_t,15> directFloats{};bool direct=false;
     // G3 uniform split: vertex uniform buffer 1 (empty when the program has none), the lighting
     // values its bytes were built from, and this frame's copy of it in the ring.
     std::vector<uint8_t> buffer1;
@@ -438,6 +442,31 @@ size_t uniform_buffer1_bytes(const SceGxmProgram* program) {
             size_t(sceGxmProgramParameterGetArraySize(param))*sceGxmProgramParameterGetComponentCount(param));
     }
     return found?std::max<size_t>(1024,(words*4+15)&~size_t(15)):0;
+}
+// --vita-gxm-uniform-direct: a draw reserves its default uniform buffers first and writes each
+// uniform's vectors straight into them at the offsets checked in describe_program, only the vectors
+// the draw sets. No sceGxmSetUniformDataF call per uniform, no copy of the whole buffer from the
+// program's own copy; what the draw does not set is left as the reservation came (the shader reads
+// only the matrices, lights and texgen rows the draw sets). Verify: written as before, and each
+// uniform's bytes in the program's copy compared with the vectors direct would have written.
+bool uniformDirect=false,uniformDirectVerify=false;
+uint64_t directDraws=0,directBytes=0,directFallbackPrograms=0,directFallbackDraws=0,directChecks=0,directMismatches=0;
+// --vita-gxm-uniform-direct. True when sceGxmSetUniformDataF stores this uniform's floats unchanged
+// at its resource index (32-bit words) in a default buffer of `bytes` bytes and touches nothing else,
+// for the whole uniform and for a leading part of it: a draw may then write those floats itself.
+bool direct_layout(const UniformRef& u,size_t bytes,int32_t& at,uint32_t& floats) {
+    floats=sceGxmProgramParameterGetArraySize(u.param)*sceGxmProgramParameterGetComponentCount(u.param);
+    const size_t offset=size_t(sceGxmProgramParameterGetResourceIndex(u.param))*4;
+    if(!floats || floats>1024 || offset+size_t(floats)*4>bytes)return false;
+    std::vector<float> pattern(floats);
+    for(uint32_t i=0;i<floats;++i)pattern[i]=1.25f+float(i)*0.5f;
+    for(const uint32_t count:{floats,floats>=8?floats/2&~3u:floats}) {
+        std::vector<uint8_t> written(bytes,0xA5),expected(bytes,0xA5);
+        if(sceGxmSetUniformDataF(written.data(),u.param,0,count,pattern.data())<0)return false;
+        std::memcpy(expected.data()+offset,pattern.data(),size_t(count)*4);
+        if(written!=expected)return false;
+    }
+    at=int32_t(offset);return true;
 }
 bool describe_program(Program& p) {
     const char* names[]={"proj_rows","regs","konst","fog"};
@@ -491,6 +520,16 @@ bool describe_program(Program& p) {
             twv::vita::telemetryText("gxm_program_failure","fragment uniform buffer 1 unexpected or too large");return false;
         }
         p.fragmentBuffer1.assign(bytes,0);
+    }
+    if(twv_gpu_features()&TwvGpuFeatureUniformDirect) {
+        p.direct=true;
+        for(unsigned i=0;i<15 && p.direct;++i) {
+            const UniformRef& u=i<4?p.uniforms[i]:p.vertexUniforms[i-4];
+            if(!u.param || u.buffer1)continue;
+            p.direct=direct_layout(u,u.fragment?p.fragmentDefaults.size():p.vertexDefaults.size(),p.directAt[i],
+                                   p.directFloats[i]);
+        }
+        if(!p.direct)++directFallbackPrograms;
     }
     return true;
 }
@@ -909,6 +948,9 @@ int gxm_init() {
     }
     uniformReuse=(twv_gpu_features()&TwvGpuFeatureUniformReuse)!=0;
     if(uniformReuse)twv::vita::telemetryEvent("gxm_uniform_reuse",1);
+    uniformDirect=(twv_gpu_features()&TwvGpuFeatureUniformDirect)!=0;
+    uniformDirectVerify=uniformDirect && (twv_gpu_features()&TwvGpuFeatureUniformDirectVerify)!=0;
+    if(uniformDirect)twv::vita::telemetryEvent("gxm_uniform_direct",uniformDirectVerify?2:1);
     uniformSplit=(twv_gpu_features()&TwvGpuFeatureUniformSplit)!=0;
     uniformSplitVerify=uniformSplit && (twv_gpu_features()&TwvGpuFeatureUniformSplitVerify)!=0;
     if(uniformSplit)twv::vita::telemetryEvent("gxm_uniform_split",uniformSplitVerify?2:1);
@@ -1145,6 +1187,14 @@ void gxm_report() {
     twv::vita::telemetryEvent("gxm_uniform_vertex_reuses",uniformVertexReuses);
     twv::vita::telemetryEvent("gxm_uniform_fragment_uploads",uniformFragmentUploads);
     twv::vita::telemetryEvent("gxm_uniform_fragment_reuses",uniformFragmentReuses);
+    if(uniformDirect) {
+        twv::vita::telemetryEvent("gxm_uniform_direct_draws",directDraws);
+        twv::vita::telemetryEvent("gxm_uniform_direct_bytes",directBytes);
+        twv::vita::telemetryEvent("gxm_uniform_direct_fallback_programs",directFallbackPrograms);
+        twv::vita::telemetryEvent("gxm_uniform_direct_fallback_draws",directFallbackDraws);
+        twv::vita::telemetryEvent("gxm_uniform_direct_checks",directChecks);
+        twv::vita::telemetryEvent("gxm_uniform_direct_mismatches",directMismatches);
+    }
     if(uniformSplit) {
         twv::vita::telemetryEvent("gxm_uniform_split_rebuilds",splitRebuilds); // lighting values changed
         twv::vita::telemetryEvent("gxm_uniform_split_uploads",splitUploads);   // buffer 1 copied to the ring
@@ -1360,22 +1410,59 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     else set_depth(depth_func(7),SCE_GXM_DEPTH_WRITE_DISABLED);
     set_programs(vertex->program,fragment);
     finish_state();
+    // --vita-gxm-uniform-direct: the reserved buffers this draw writes its uniforms into.
+    const bool direct=uniformDirect && !uniformDirectVerify && p.direct;
+    uint8_t* directBuffer[2]={nullptr,nullptr}; // vertex, fragment
+    if(direct) {
+        void* buffer=nullptr;
+        if(!p.vertexDefaults.empty()) {
+            if(!ok(sceGxmReserveVertexDefaultUniformBuffer(ctx,&buffer),"ReserveVertexDefaultUniformBuffer")) {
+                ++uniformReserveFailures;uniform_reservations_end();return;
+            }
+            directBuffer[0]=static_cast<uint8_t*>(buffer);++uniformVertexUploads;
+        }
+        if(!p.fragmentDefaults.empty()) {
+            if(!ok(sceGxmReserveFragmentDefaultUniformBuffer(ctx,&buffer),"ReserveFragmentDefaultUniformBuffer")) {
+                ++uniformReserveFailures;uniform_reservations_end();return;
+            }
+            directBuffer[1]=static_cast<uint8_t*>(buffer);++uniformFragmentUploads;
+        }
+        reservedVertexProgram=nullptr;reservedFragmentProgram=nullptr;++directDraws;
+    } else if(uniformDirect && !p.direct)++directFallbackDraws;
+    // One uniform's vectors: into the reserved buffer (direct), or into the program's copy as before.
+    // index: 0..3 uniforms, 4..14 vertexUniforms (Program::directAt).
+    const auto put=[&](unsigned index,const UniformRef& u,int count,const float* values) {
+        if(!u.param || count<=0)return;
+        if(direct && !u.buffer1) {
+            const uint32_t floats=std::min<uint32_t>(uint32_t(count)*4,p.directFloats[index]);
+            std::memcpy(directBuffer[u.fragment?1:0]+p.directAt[index],values,size_t(floats)*4);
+            directBytes+=floats*4;
+            return;
+        }
+        uniform4(p,u,count,values);
+        if(uniformDirectVerify && p.direct && !u.buffer1) {
+            const auto& copy=u.fragment?p.fragmentDefaults:p.vertexDefaults;
+            const uint32_t floats=std::min<uint32_t>(uint32_t(count)*4,p.directFloats[index]);
+            ++directChecks;
+            if(std::memcmp(copy.data()+p.directAt[index],values,size_t(floats)*4)!=0)++directMismatches;
+        }
+    };
     // Uniform values persist per program, as GL uniforms do; each draw writes its fields.
-    uniform4(p,p.uniforms[0],4,s->projection);
-    if(!p.uniforms[1].buffer1)uniform4(p,p.uniforms[1],4,s->color_regs);
-    if(!p.uniforms[2].buffer1)uniform4(p,p.uniforms[2],4,s->kcolors);
-    if(!p.uniforms[3].buffer1)uniform4(p,p.uniforms[3],2,s->fog);
+    put(0,p.uniforms[0],4,s->projection);
+    if(!p.uniforms[1].buffer1)put(1,p.uniforms[1],4,s->color_regs);
+    if(!p.uniforms[2].buffer1)put(2,p.uniforms[2],4,s->kcolors);
+    if(!p.uniforms[3].buffer1)put(3,p.uniforms[3],2,s->fog);
     if(!p.fragmentBuffer1.empty() && !fragment_buffer1_bind(p,*s))return;
     if(s->gpu_vertex) {
         const float* values[]={s->pn_pos,s->pn_nrm,s->light_pos,s->light_dir,s->light_color,
             s->light_cos,s->light_dist,s->channel_mat,s->channel_amb,s->light_masks};
         const int n=int(s->light_count);
         const int counts[]={int(s->pn_vectors),int(s->pn_vectors),n,n,n,n,n,4,4,8};
-        for(int i=0;i<10;++i)if(!p.vertexUniforms[i].buffer1)uniform4(p,p.vertexUniforms[i],counts[i],values[i]);
-        if(s->texgen_vectors)uniform4(p,p.vertexUniforms[10],int(s->texgen_vectors),s->texgen_rows);
+        for(int i=0;i<10;++i)if(!p.vertexUniforms[i].buffer1)put(4+unsigned(i),p.vertexUniforms[i],counts[i],values[i]);
+        if(s->texgen_vectors)put(14,p.vertexUniforms[10],int(s->texgen_vectors),s->texgen_rows);
         if(!p.buffer1.empty() && !buffer1_bind(p,*s,p.vertexUniforms.data(),counts,values))return;
     }
-    if(!p.vertexDefaults.empty()) {
+    if(!direct && !p.vertexDefaults.empty()) {
         if(uniformReuse && reservedVertexProgram==vertex->program && reservedVertexBytes==p.vertexDefaults) {
             ++uniformVertexReuses;
         } else {
@@ -1388,7 +1475,7 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
             if(uniformReuse){reservedVertexProgram=vertex->program;reservedVertexBytes=p.vertexDefaults;}
         }
     }
-    if(!p.fragmentDefaults.empty()) {
+    if(!direct && !p.fragmentDefaults.empty()) {
         if(uniformReuse && reservedFragmentProgram==fragment && reservedFragmentBytes==p.fragmentDefaults) {
             ++uniformFragmentReuses;
         } else {
@@ -1489,7 +1576,8 @@ const TwvGpuBackend gxmBackend{
     TwvGpuFeaturePrimitives|TwvGpuFeatureCompact|TwvGpuFeatureCompactColors|TwvGpuFeatureResident|
     TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50|
     TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo|  // the memo is front-end only, offered with GXM
-    TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify};
+    TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify|
+    TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}
 // Settings page (ui/settings_screen.hpp): the FPS counter on or off, at any time (kept for gxm_init

@@ -88,7 +88,13 @@ constexpr uint32_t TWV_PROFILE_VERTEX = 0, TWV_PROFILE_SUBMIT = 1,
     TWV_PROFILE_GX_WAIT = 23,
     // The game's frame limiter sleeping inside the painter (JFWDisplay::beginRender -> waitForTick,
     // nested in PAINTER): pacing, not painter work.
-    TWV_PROFILE_PAINTER_SLEEP = 24, TWV_PROFILE_COUNT = 25;
+    TWV_PROFILE_PAINTER_SLEEP = 24,
+    // The main loop outside the ticks and the painter: sleeps outside the painter (the loop's frame
+    // limiter and the game clock's wait for a tick due soon), aurora_end_frame (publish, draw-done
+    // wait, scene probe), aurora_begin_frame, and every frame-overlap settle called from the loop or
+    // from the game's GXDrawDone (worker wait included; inside the tick's draw phase for the latter).
+    TWV_PROFILE_LOOP_SLEEP = 25, TWV_PROFILE_END_FRAME = 26, TWV_PROFILE_BEGIN_FRAME = 27,
+    TWV_PROFILE_SETTLE = 28, TWV_PROFILE_COUNT = 29;
 uint64_t twv_vgl_time_us(void);
 void twv_vgl_profile_add(uint32_t category, uint64_t microseconds);
 uint32_t twv_vgl_program(const char* vertex, const char* fragment);
@@ -123,6 +129,8 @@ constexpr uint32_t TwvGpuFeatureUniformSplit=2048u; // G3: lighting uniforms in 
 constexpr uint32_t TwvGpuFeatureUniformSplitVerify=4096u; // with it: every reuse rebuilt and compared
 constexpr uint32_t TwvGpuFeatureFragmentSplit=8192u; // G3 step 2: TEV registers, konst and fog in fragment uniform buffer 1
 constexpr uint32_t TwvGpuFeatureFragmentSplitVerify=16384u; // with it: every reuse rebuilt and compared
+constexpr uint32_t TwvGpuFeatureUniformDirect=32768u; // default uniforms written straight into the reserved buffers
+constexpr uint32_t TwvGpuFeatureUniformDirectVerify=65536u; // with it: written as before, every direct write compared
 uint32_t twv_gpu_features(void);
 uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it

@@ -70,7 +70,17 @@ extern "C" void twv_vita_gx_fast_disable(unsigned reason) noexcept{selected=fals
 #include "gfx_vgl/gpu_api.h"
 uint32_t gpuFeatures=0; // the start-up GPU features the callback reads (the pipeline memo bit)
 extern "C" uint32_t twv_gpu_features(void){return gpuFeatures;}
+// --vita-fast-pipeline-info (runtime/fast_painter.hpp option 3): the start-up choice, and whether the
+// last lookup returned this pipeline for this config object (gfx_vgl/pipeline_fast.cpp).
+int infoFastMode=0;uint32_t resolvedPipeline=UINT32_MAX;const void* resolvedConfig=nullptr;
+// Weak, as backend.cpp declares them (it tests their addresses); defined after the callback.
+extern "C" int twv_vita_fast_painter_mode(unsigned option) __attribute__((weak));
+extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept __attribute__((weak));
 #include "pipeline_info_callback.inc"
+extern "C" int twv_vita_fast_painter_mode(unsigned option){return option==3?infoFastMode:0;}
+extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept{
+ return pipeline==resolvedPipeline&&config==resolvedConfig;
+}
 
 namespace aurora::gx {
 struct TestState {
@@ -126,7 +136,7 @@ static void reset(){
  twv::vgl::pipelines.clear();aurora::gx::fifo::sDrawCache={};g_gxState={};nextConfig={};
  events.clear();textureCalls=uniformCalls=bindCalls=storageCalls=disableReason=0;
  gfx::drawCalls=gfx::pipelineCalls=0;gfx::layoutKey=1;selected=false;bindGeneration=17;sPipelineInfoReuse={};
- gpuFeatures=0;
+ gpuFeatures=0;infoFastMode=0;resolvedPipeline=UINT32_MAX;resolvedConfig=nullptr;
  test_pipeline_info_copy=twv_vita_pipeline_info_copy;
 }
 static PipelineConfig config(unsigned iteration){
@@ -277,6 +287,48 @@ static void pipeline_memo(){
  }
  int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==103);
 }
+// --vita-fast-pipeline-info: the pipeline the lookup has just returned for this config object is not
+// compared with it again (on), or is compared as before and counted (verify).
+static void pipeline_info_fast(){
+ const auto a=config(31),b=config(32);
+ ShaderInfo out{};
+ const auto copy=[&](uint32_t pipeline,const PipelineConfig& c){
+  out={};assert(twv_vita_pipeline_info_copy(pipeline,&c,&out));
+  assert(same_shader_info(out,twv::vgl::pipelines[pipeline].info));
+ };
+ // On: a resolved lookup skips the comparison; anything else is compared as before.
+ reset();infoFastMode=1;
+ twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ twv::vgl::pipelines.push_back({b,build_shader_info(b.shaderConfig)});
+ resolvedPipeline=0;resolvedConfig=&a;copy(0,a);
+ assert(sPipelineInfoReuse.infoSkipped==1&&sPipelineInfoReuse.infoChecked==0);
+ copy(1,b); // another pipeline than the lookup's
+ const PipelineConfig a2=a;copy(0,a2); // an equal config in another object
+ assert(sPipelineInfoReuse.infoSkipped==1&&sPipelineInfoReuse.reused==3);
+ // The oracle still rebuilds the info from the config on the first and every 128th call.
+ for(unsigned i=3;i<128;++i)copy(0,a);
+ assert(sPipelineInfoReuse.oracleChecks==2&&sPipelineInfoReuse.infoSkipped==126);
+ // The pipeline memo is neither asked nor fed by a skipped comparison.
+ reset();infoFastMode=1;gpuFeatures=TwvGpuFeaturePipelineMemo;
+ twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ resolvedPipeline=0;resolvedConfig=&a;copy(0,a);copy(0,a);
+ assert(sPipelineInfoReuse.infoSkipped==2&&sPipelineInfoReuse.memoHits==0&&sPipelineInfoReuse.memoPipeline==UINT32_MAX);
+ // Verify: compared as before and counted; a different config still stops the game.
+ reset();infoFastMode=2;twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ resolvedPipeline=0;resolvedConfig=&a;copy(0,a);
+ assert(sPipelineInfoReuse.infoSkipped==0&&sPipelineInfoReuse.infoChecked==1);
+ resolvedConfig=&b;
+ const auto child=fork();assert(child>=0);
+ if(child==0){
+  std::signal(SIGABRT,[](int){_exit(disableReason==3?103:1);});
+  twv_vita_pipeline_info_copy(0,&b,&out);_exit(2);
+ }
+ int status=0;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&WEXITSTATUS(status)==103);
+ // Off: nothing counted.
+ reset();twv::vgl::pipelines.push_back({a,build_shader_info(a.shaderConfig)});
+ resolvedPipeline=0;resolvedConfig=&a;copy(0,a);
+ assert(sPipelineInfoReuse.infoSkipped==0&&sPipelineInfoReuse.infoChecked==0);
+}
 static void bounded_corruption_death(){
  reset();nextConfig=config(13);twv::vgl::pipelines.push_back({nextConfig,build_shader_info(nextConfig.shaderConfig)});
  ShaderInfo output{};
@@ -294,6 +346,6 @@ int main(){
  compare_frontend();lifecycle_and_sampling();lifecycle_and_sampling(true);texture_transitions();
  pipeline_invalidations();fallback_and_off();
  for(unsigned mutation=0;mutation<17;++mutation)mutation_death(mutation);
- bounded_corruption_death();pipeline_memo();
- std::printf("pipeline_info_reuse_test: compile=%d; real builder fields/config cases, frontend submission/texture transitions, cache hits/growth/clear, bounded oracle, 17 corruption deaths and the pipeline memo passed\n",TWV_VITA_GX_FAST_DECODE);
+ bounded_corruption_death();pipeline_memo();pipeline_info_fast();
+ std::printf("pipeline_info_reuse_test: compile=%d; real builder fields/config cases, frontend submission/texture transitions, cache hits/growth/clear, bounded oracle, 17 corruption deaths, the pipeline memo and the fast info check passed\n",TWV_VITA_GX_FAST_DECODE);
 }

@@ -177,8 +177,10 @@ void settle_in_tick(twv::vita::SettleSite site) noexcept {
   }
   const uint64_t start = twv_vgl_time_us();
   g_overlap.settle(site);
+  const uint64_t spent = twv_vgl_time_us() - start;
+  twv_vgl_profile_add(TWV_PROFILE_SETTLE, spent);
   if (dusk_vita_tick_pause_ns) {
-    dusk_vita_tick_pause_ns(static_cast<long long>(twv_vgl_time_us() - start) * 1000);
+    dusk_vita_tick_pause_ns(static_cast<long long>(spent) * 1000);
   }
 }
 bool g_viewportPolicySet = false;
@@ -471,6 +473,7 @@ void finish_frame() noexcept {
 
 bool begin_frame() noexcept {
 #if TWV_VITA_GFX_VGL
+  twv::vgl::ProfileScope timer(TWV_PROFILE_BEGIN_FRAME);
   if (g_settingsOpen) {
     return false; // the settings page owns the display; the game loop skips its tick and draw
   }
@@ -490,6 +493,7 @@ bool begin_frame() noexcept {
 
 void end_frame() noexcept {
 #if TWV_VITA_GFX_VGL
+  twv::vgl::ProfileScope timer(TWV_PROFILE_END_FRAME);
   if (g_overlap.enabled) {
     // The worker goes on with this frame while the next game tick runs (frame_overlap.hpp).
     g_overlap.end_frame();

@@ -169,9 +169,58 @@ CONSOLE_FIXES = [
      ' const int x1=std::min({r.x+r.width,int(std::ceil(vp.left+vp.width)),GameWidth});\n'),
 ]
 
+# --vita-fast-pipeline-info (the shader-info check does
+# not compare a config with the pipeline the lookup has just returned for it) and the query behind
+# --vita-fast-unseen-map. Outside the sampled-texture loop.
+FAST_INFO = [
+    (' aurora::gx::ShaderInfo memoInfo{};\n'
+     '} sPipelineInfoReuse;\n'
+     '}\n',
+     ' aurora::gx::ShaderInfo memoInfo{};\n'
+     ' // --vita-fast-pipeline-info (runtime/fast_painter.hpp): -1 until read at the first call. The\n'
+     ' // pipeline a lookup has just returned for this very config was found or created by comparing\n'
+     ' // that config, so the comparison below repeats it. skipped: comparisons left out (on);\n'
+     ' // checked: comparisons on would have left out, made as before (verify).\n'
+     ' int infoFast=-1;\n'
+     ' uint64_t infoSkipped=0,infoChecked=0;\n'
+     '} sPipelineInfoReuse;\n'
+     '}\n'
+     '// gfx_vgl/pipeline_fast.cpp: whether the last pipeline_ref call returned `pipeline` for `config`.\n'
+     'extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept __attribute__((weak));\n'
+     '// runtime/fast_painter.cpp: the start-up choice of a --vita-fast-<name> option.\n'
+     'extern "C" int twv_vita_fast_painter_mode(unsigned option) __attribute__((weak));\n'),
+    ('constexpr bool OffscreenDrawSupported=false;\n',
+     'constexpr bool OffscreenDrawSupported=false;\n'
+     '// --vita-fast-unseen-map (runtime/fast_painter.cpp, patches/dusklight/0052): every draw into an\n'
+     '// offscreen framebuffer is dropped (push_draw_command), and so is the copy out of it.\n'
+     'extern "C" int twv_vita_offscreen_draws_dropped(void) {return !OffscreenDrawSupported;}\n'),
+    ('   twv::vita::telemetryEvent("gfx_shader_info_memo_hits",sPipelineInfoReuse.memoHits);\n',
+     '   twv::vita::telemetryEvent("gfx_shader_info_memo_hits",sPipelineInfoReuse.memoHits);\n'
+     '  if(sPipelineInfoReuse.infoFast>0) {\n'
+     '   twv::vita::telemetryEvent("gfx_shader_info_fast_mode",sPipelineInfoReuse.infoFast);\n'
+     '   twv::vita::telemetryEvent("gfx_shader_info_fast_skipped",sPipelineInfoReuse.infoSkipped);\n'
+     '   twv::vita::telemetryEvent("gfx_shader_info_fast_checked",sPipelineInfoReuse.infoChecked);\n'
+     '  }\n'),
+    (' const bool remembered=memo.memoOn && pipeline==memo.memoPipeline &&\n'
+     '  std::memcmp(&memo.memoConfig,expected,sizeof *expected)==0;\n'
+     ' if(!remembered) {\n',
+     ' // --vita-fast-pipeline-info: FastPipelineInfo is option 3 of runtime/fast_painter.hpp.\n'
+     ' if(memo.infoFast<0)memo.infoFast=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(3):0;\n'
+     ' const bool resolved=memo.infoFast>0 && pipeline<twv::vgl::pipelines.size() && twv_vita_pipeline_ref_resolved &&\n'
+     '  twv_vita_pipeline_ref_resolved(pipeline,expected);\n'
+     ' const bool trusted=resolved && memo.infoFast==1;\n'
+     ' if(trusted)++memo.infoSkipped;\n'
+     ' else if(resolved)++memo.infoChecked;\n'
+     ' const bool remembered=!trusted && memo.memoOn && pipeline==memo.memoPipeline &&\n'
+     '  std::memcmp(&memo.memoConfig,expected,sizeof *expected)==0;\n'
+     ' if(!remembered && !trusted) {\n'),
+    (' if(memo.memoOn) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}\n',
+     ' if(memo.memoOn && !trusted) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
-    off-screen edits, the pipeline memo and the g4 console fixes."""
+    off-screen edits, the pipeline memo, the g4 console fixes and the fast info check."""
     expected = original.replace(OLD, NEW, 1)
     for anchor, inserted in G2_INSERTIONS:
         if expected.count(anchor) != 1:
@@ -188,6 +237,10 @@ def audited(original):
     for old, new in CONSOLE_FIXES:
         if expected.count(old) != 1:
             raise SystemExit('Audited console-fix edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in FAST_INFO:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited fast-info edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

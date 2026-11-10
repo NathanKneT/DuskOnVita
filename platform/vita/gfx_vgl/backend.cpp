@@ -52,8 +52,18 @@ struct PipelineInfoReuseStats {
  uint32_t memoPipeline=UINT32_MAX;
  aurora::gx::PipelineConfig memoConfig{};
  aurora::gx::ShaderInfo memoInfo{};
+ // --vita-fast-pipeline-info (runtime/fast_painter.hpp): -1 until read at the first call. The
+ // pipeline a lookup has just returned for this very config was found or created by comparing
+ // that config, so the comparison below repeats it. skipped: comparisons left out (on);
+ // checked: comparisons on would have left out, made as before (verify).
+ int infoFast=-1;
+ uint64_t infoSkipped=0,infoChecked=0;
 } sPipelineInfoReuse;
 }
+// gfx_vgl/pipeline_fast.cpp: whether the last pipeline_ref call returned `pipeline` for `config`.
+extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept __attribute__((weak));
+// runtime/fast_painter.cpp: the start-up choice of a --vita-fast-<name> option.
+extern "C" int twv_vita_fast_painter_mode(unsigned option) __attribute__((weak));
 
 namespace aurora::gfx::detail {
 Resources& resources() noexcept {
@@ -306,6 +316,9 @@ bool ready=false, in_frame=false, offscreen=false;
 // This capability gates BOTH the actual draw rejection and the CPU shortcut.
 // Implementing FBO drawing must change it here; supported passes cannot be skipped.
 constexpr bool OffscreenDrawSupported=false;
+// --vita-fast-unseen-map (runtime/fast_painter.cpp, patches/dusklight/0052): every draw into an
+// offscreen framebuffer is dropped (push_draw_command), and so is the copy out of it.
+extern "C" int twv_vita_offscreen_draws_dropped(void) {return !OffscreenDrawSupported;}
 // EFB copies (resolve_pass_into) are not implemented either. A draw that samples a copy would
 // read storage nothing wrote and paint it over the scene: retail water (fbtex_dummy) shows the
 // copied scene behind it, and here it came out opaque black (F_SP104 opening, village, Faron).
@@ -423,6 +436,11 @@ void end_frame() noexcept {
   twv::vita::telemetryEvent("gfx_shader_info_invalid",sPipelineInfoReuse.invalid);
   if(twv_gpu_features()&TwvGpuFeaturePipelineMemo)
    twv::vita::telemetryEvent("gfx_shader_info_memo_hits",sPipelineInfoReuse.memoHits);
+  if(sPipelineInfoReuse.infoFast>0) {
+   twv::vita::telemetryEvent("gfx_shader_info_fast_mode",sPipelineInfoReuse.infoFast);
+   twv::vita::telemetryEvent("gfx_shader_info_fast_skipped",sPipelineInfoReuse.infoSkipped);
+   twv::vita::telemetryEvent("gfx_shader_info_fast_checked",sPipelineInfoReuse.infoChecked);
+  }
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
   for(const auto& t:vgl::offscreenDiscards) if(t.draws)
@@ -474,9 +492,16 @@ extern "C" int twv_vita_pipeline_info_copy(uint32_t pipeline,const aurora::gx::P
  // the pipeline's own, rarely cached, config.
  auto& memo=sPipelineInfoReuse;
  if(memo.memoOn<0)memo.memoOn=(twv_gpu_features()&TwvGpuFeaturePipelineMemo)!=0;
- const bool remembered=memo.memoOn && pipeline==memo.memoPipeline &&
+ // --vita-fast-pipeline-info: FastPipelineInfo is option 3 of runtime/fast_painter.hpp.
+ if(memo.infoFast<0)memo.infoFast=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(3):0;
+ const bool resolved=memo.infoFast>0 && pipeline<twv::vgl::pipelines.size() && twv_vita_pipeline_ref_resolved &&
+  twv_vita_pipeline_ref_resolved(pipeline,expected);
+ const bool trusted=resolved && memo.infoFast==1;
+ if(trusted)++memo.infoSkipped;
+ else if(resolved)++memo.infoChecked;
+ const bool remembered=!trusted && memo.memoOn && pipeline==memo.memoPipeline &&
   std::memcmp(&memo.memoConfig,expected,sizeof *expected)==0;
- if(!remembered) {
+ if(!remembered && !trusted) {
   if(pipeline>=twv::vgl::pipelines.size()) {
    ++sPipelineInfoReuse.invalid;pipeline_info_failure(3);
   }
@@ -497,7 +522,7 @@ extern "C" int twv_vita_pipeline_info_copy(uint32_t pipeline,const aurora::gx::P
  }
  if(remembered) {*out=memo.memoInfo;++sPipelineInfoReuse.memoHits;++sPipelineInfoReuse.reused;return 1;}
  *out=cached.info;
- if(memo.memoOn) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}
+ if(memo.memoOn && !trusted) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}
  ++sPipelineInfoReuse.reused;return 1;
 }
 namespace aurora::gfx {

@@ -28,12 +28,14 @@ constexpr const char* FastActorModeNames[] = {"off", "on", "verify"};
 //  hair (0041): E_s1's hair segments with C_MTXConcat's and C_MTXMultVec's expressions written out
 //    in registers instead of the matrix stack.
 //  rnd (0040): cM_rnd / cM_rnd2 without the fmodf call (v - trunc(v) is exact below 2^23).
+//  envelopes (0053, with mtx on): a weight envelope calc multiplies each joint's animation matrix by
+//    its inverse bind matrix once per call instead of once per mix that uses the joint.
 enum FastActorSwitch : int { FastObstacle = 0, FastSearch = 1, FastBgList = 2, FastFlowBind = 3,
-                             FastMtx = 4, FastSearchIndex = 5, FastHair = 6, FastRnd = 7,
+                             FastMtx = 4, FastSearchIndex = 5, FastHair = 6, FastRnd = 7, FastEnvelopes = 8,
                              FastActorSwitchCount };
 constexpr const char* FastActorSwitchNames[FastActorSwitchCount] = {"obstacle", "search", "bg-list",
                                                                     "flow-bind", "mtx", "search-index",
-                                                                    "hair", "rnd"};
+                                                                    "hair", "rnd", "envelopes"};
 
 // "--vita-fast-<name>=off|on|verify" for a known name: 1 (choices[name] set), -1 for another value
 // or a second time, 0 for any other token.

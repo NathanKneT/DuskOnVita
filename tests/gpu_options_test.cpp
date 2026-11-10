@@ -88,6 +88,16 @@ int main() {
         assert(fv.consume("--vita-gxm-fragment-split=verify")==1 &&
                fv.features==(GpuOptions::FeatureFragmentSplit|GpuOptions::FeatureFragmentSplitVerify) && fv.any());
         assert(GpuOptions{}.consume("--vita-gxm-fragment-split=yes")==-1 && GpuOptions{}.consume("--vita-gxm-fragment-split")==0);
+        // Direct default-uniform writes: GXM only, once, an addition (not a choice); verify sets both bits.
+        GpuOptions ud;
+        assert(ud.consume("--vita-gxm-uniform-direct=on")==1 && ud.features==GpuOptions::FeatureUniformDirect);
+        assert(ud.any() && !ud.any_choice() && !ud.consistent() && ud.consume("--vita-gxm-uniform-direct=off")==-1);
+        assert(ud.consume("--vita-gxm-uniform-reuse=on")==1 && ud.consume("--vita-gpu=gxm")==1 && ud.consistent());
+        GpuOptions uv;
+        assert(uv.consume("--vita-gxm-uniform-direct=verify")==1 &&
+               uv.features==(GpuOptions::FeatureUniformDirect|GpuOptions::FeatureUniformDirectVerify));
+        GpuOptions uo;assert(uo.consume("--vita-gxm-uniform-direct=off")==1 && uo.features==0 && uo.any());
+        assert(GpuOptions{}.consume("--vita-gxm-uniform-direct=yes")==-1 && GpuOptions{}.consume("--vita-gxm-uniform-direct")==0);
     }
     {
         // GPU diagnostics: GXM only, once.
