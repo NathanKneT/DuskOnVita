@@ -7,7 +7,7 @@ game state, never to state a frame rate.
 
 ## Results so far (PS Vita 1000, console)
 
-The latest results (build b2, 28 Oct, six crowded places with the play profile) are in the README.
+The latest results (5 and 10 Nov, six crowded places with the play profile) are in the README.
 The single runs before them are in [benchmarks.csv](benchmarks.csv) (`python3 tools/charts.py`
 redraws the charts), measured by `tools/vita_run_report.py` over steady windows. Build v61, at the
 system clocks (333 MHz CPU, 111 MHz GPU):
@@ -72,11 +72,25 @@ Added on 28 Oct:
 | `--vita-ticks=fixed\|frames\|single` | `fixed` with the profile | game ticks at a fixed 30 Hz, at most two per frame (dusklight 0015), so the game keeps its speed down to 15 FPS; `frames` is one tick per frame (as before); `single` is at most one per loop, for emulator A/B runs |
 | `--vita-frame-overlap=off\|on\|verify` | `on` with the profile | the first game tick runs while the GX worker finishes the last frame (aurora 0009, dusklight 0019); needs the GX worker. Console, Ordon at 75 %: 20.5 FPS off, 25.9 on. `verify` checks the memory the last frame read against the next tick |
 | `--vita-fast-shadow-collect=off\|on\|verify` | `on` with the profile | the ground polygons under real shadows: the walk stops once the 256-triangle list is full and skips prisms the shadow test would reject, with the same list (dusklight 0018); `verify` runs both and reports lists that differ |
-| `--vita-fast-<name>=off\|on\|verify` | see right | exact actor and painter fast paths: `search` (0032), `bg-list` (0033, terrain queries) and `flow-bind` (0034, message flows) are on with the profile; `obstacle` (0031), `gx-wake` and `static-dl` (aurora 0020, 0021) are off until verified on more scenes. `verify` runs the original next to the fast path and counts differences |
+| `--vita-fast-<name>=off\|on\|verify` | see right | exact actor and painter fast paths: `search` (0032), `bg-list` (0033, terrain queries) and `flow-bind` (0034, message flows) are on with the profile; `obstacle` (0031) is off; `gx-wake` and `static-dl` (aurora 0020, 0021) are on with the profile since 10 Nov. `verify` runs the original next to the fast path and counts differences |
 | `--vita-receipts=full\|quiet` | `quiet` with the profile | `full` adds the per-actor-type and painter timing used by `tools/vita_bench_report.py --actors --painter` |
 | `--vita-input-script=FILE` | off | replays a button script from the data folder (`tools/input_scripts/`), for repeatable walks |
 | `--vita-import-saves=auto\|off` | `auto` | save import at boot ([ARCHITECTURE.md](ARCHITECTURE.md), "Saves") |
-| `--vita-gxm-uniform-split`, `--vita-gxm-fragment-split` `=on\|off\|verify`; `--vita-gxm-uniform-reuse`, `--vita-gxm-pipeline-memo` `=on\|off` | `off` | GXM experiments: lighting and TEV registers in their own uniform buffers, reuse of the last uniform reservation, a memo of the last pipeline checked. Not measured on the console |
+| `--vita-gxm-uniform-split`, `--vita-gxm-fragment-split` `=on\|off\|verify`; `--vita-gxm-uniform-reuse`, `--vita-gxm-pipeline-memo` `=on\|off` | `off` | GXM experiments: lighting and TEV registers in their own uniform buffers, reuse of the last uniform reservation, a memo of the last pipeline checked. The memo is on with the profile since 10 Nov; the others are not measured on the console |
+
+Added on 6 and 10 Nov (every `verify` mode runs the original next to the fast path and counts
+differences; in the six bench places in Vita3K they found none):
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `--vita-fast-mtx=off\|on\|verify` | `on` with the profile | `C_MTXConcat` and the J3D weight-envelope sums through NEON, same result bit for bit (aurora 0022, dusklight 0037). Console verify: 10.6 million products, no difference |
+| `--vita-fast-search-index`, `--vita-fast-hair`, `--vita-fast-rnd`, `--vita-fast-envelopes` `=off\|on\|verify` | `on` with the profile since 10 Nov | actor ID and name searches from an index of the kept process list (dusklight 0039); the E_s1 hair keeps only the product column it uses (0041); the game's random numbers without `fmodf` (0040); a weight envelope multiplies each joint's matrices once per calc instead of once per mix (0053). Console, Ordon village centre: execute 2.2 ms per tick faster with the four on |
+| `--vita-fast-gen-mode`, `--vita-fast-pipeline-info` `=off\|on\|verify` | `on` with the profile since 10 Nov | GX worker: a material's gen-mode, colour-channel and texgen writes that leave the decoded state as it was no longer mark the pipeline changed (aurora 0023); the pipeline a lookup has just returned is not compared with the same config again. Console: the pipeline step fell from 10.7 to 5.1 ms per frame in Ordon village centre, from 13.6 to 3.7 in Hyrule Field |
+| `--vita-fast-unseen-map=off\|on` | `on` with the profile since 10 Nov | the minimap's and map screen's polygons are not sent while the backend has no off-screen target to draw them in (dusklight 0052); the picture is the same today. Hyrule Field sent 351 such draws per frame |
+| `--vita-gxm-uniform-direct=off\|on\|verify` | `on` with the profile since 10 Nov | each draw's default uniforms written straight into the reserved buffers, only the vectors it sets; every program's layout is checked against `sceGxmSetUniformDataF` when it is created. Console: about 1 ms per frame off the GX worker |
+| `--vita-skip-hidden-draw`, `--vita-skip-offscreen-anim`, `--vita-rest-creatures` `=off\|on` | `off`; the settings page's Speed-ups | picture-only: no actor draw in a game tick that another tick follows before the frame is shown (grass still draws, dusklight 0045); no skeleton update for a few ambient animals while they are off screen (0046); far, unseen fish (no rod out), pumpkins and chickens take the game's own no-execute path until Link comes near (0047) |
+| `--vita-crowd=full\|half\|low` | `full`; the settings page's Speed-ups | how many passers Castle Town's crowd keeps walking (dusklight 0048). Resting creatures and a smaller crowd draw fewer random numbers, so random idle choices can differ |
+| `--vita-state-digest=off\|on` | `off` | test only: one hash of the game state per tick (every actor's place, angles, speeds, health, status and condition flags; the save data; both random generators), to check that a run with a speed-up on plays the same game as a run with it off (dusklight 0044) |
 
 The play profile also renders at 75 % (`--vita-gxm-scale=75`) unless the command line chooses a
 scale: drawn full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %.

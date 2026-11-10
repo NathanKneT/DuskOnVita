@@ -13,14 +13,17 @@ Vita side of things: a renderer that turns Aurora's GX commands into GXM (or
 [vitaGL](https://github.com/Rinnegatamante/vitaGL)), audio, input, memory, a lot of logging, and a
 small stack of patches on top of the pinned upstreams.
 
-## Where it's at (5 Nov 2026)
+## Where it's at (10 Nov 2026)
 
 - **First release: you can install it and play, but it's not comfy yet.** On my PS Vita 1000 it
   boots from your disc image to the title screen, a new game starts, the opening in Ordon plays, and
   saving works.
-- **It's slow.** 12 to 28 FPS in the places I've measured, where the original runs at 30. The game
-  keeps its normal speed down to 15 FPS; below that, everything slows down with it.
-- **New:** an in-game settings page (two fingers held on the rear touch pad, or three on the screen), your disc as `.iso`, `.ciso`
+- **It's getting faster, but it's not there yet.** 13 to 28 FPS in the places I've measured, where
+  the original runs at 30; Hyrule Field went from 18 to 28 FPS on 10 Nov. The game keeps its normal
+  speed down to 15 FPS; below that, everything slows down with it.
+- **New on 10 Nov:** exact speed-ups for the renderer's worker thread and the game's model maths, on
+  by default, and a Speed-ups setting (Original or Performance) that skips work you can't see.
+- **New on 5 Nov:** an in-game settings page (two fingers held on the rear touch pad, or three on the screen), your disc as `.iso`, `.ciso`
   or `.gcz`, the game in your Vita's language, and Cross/Circle following your Vita's Enter button.
 - **Not there yet:** the minimap and map screens, Link's real-time shadow, water effects, bloom and
   depth of field (everything that needs frame-buffer copies).
@@ -33,24 +36,37 @@ It's all open so anyone can reproduce it, poke at it and help out.
 
 ## Numbers (on a real PS Vita 1000)
 
-Latest console session (28 Oct, build b2): six of the busiest places in the game, each loaded with
+Latest console sessions (5 and 10 Nov): six of the busiest places in the game, each loaded with
 `--stage`, drawn at 75 % with the default play profile ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 FPS with Link standing still / walking a scripted route:
 
-| Place | FPS | What holds it back |
-| --- | ---: | --- |
-| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 27.9 / 27.4 | GX worker |
-| Castle Town, twilight (`F_SP116,0,0,-1`) | 21.7 / 19.4 | main thread |
-| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.6 | main thread |
-| Hyrule Field bridge (`F_SP121,0,4,-1`) | 17.6 / 19.2 | main thread and GX worker |
-| Kakariko, twilight (`F_SP109,0,59,-1`) | 12.1 / 12.7 | main thread |
-| Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.5 | main thread |
+| Place | 5 Nov | 10 Nov | What holds it back now |
+| --- | ---: | ---: | --- |
+| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 28.5 / 27.4 | not run | GX worker |
+| Hyrule Field bridge (`F_SP121,0,4,-1`) | 18.3 / 19.7 | **28.1 / 28.2** | main thread |
+| Castle Town, twilight (`F_SP116,0,0,-1`) | 21.1 / 18.9 | not run | main thread |
+| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.5 | not run | main thread and GX worker |
+| Kakariko, twilight (`F_SP109,0,59,-1`) | 12.2 / 12.9 | 14.0 / 14.9 | GX worker and main thread |
+| Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.4 | 13.3 / 14.0 | GX worker and main thread |
 
-The game now ticks at a fixed 30 Hz (two ticks per frame at most), so it keeps its real speed down to
-15 FPS; four of these six places held 28-30 ticks per second. At 75 % the GPU has room to spare. The
-bottleneck is the main thread, mostly actors updating (crowds, fish, a few enemies) and the game's
-painter. How these runs are done: [docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded
-places".
+What changed on 10 Nov, all exact and on by default: the GX worker (the thread that turns the game's
+GX commands into GXM draws) no longer checks again a pipeline that didn't change, no longer receives
+the minimap the renderer can't draw yet, and writes uniforms straight into GPU memory; the game's
+matrix products, weight envelopes, actor searches, hair and random numbers have faster paths with
+the same results bit for bit. Hyrule Field was measured with only the GX worker part on, Kakariko
+without the direct uniforms; both are on now. Part of the field's gain comes from not sending the
+minimap: once the minimap is drawn again, it has to be redrawn only when it changes, or some of that
+gain goes.
+
+With Speed-ups set to Performance (settings page), Ordon village centre ran at 14.1 / 16.0 FPS,
+against 12.6 / 13.2 with the same GX worker speed-ups and Original.
+
+The game ticks at a fixed 30 Hz (two ticks per frame at most), so it keeps its real speed down to
+15 FPS. At 75 % the GPU has room to spare (23-27 ms per frame). The limits are the main thread (the
+game's actors and its painter) and the GX worker. How these runs are done:
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded places".
+
+![The bench places on the console, 28 Oct to 10 Nov](docs/img/bench.svg)
 
 Older runs, build g2c at 444 MHz, FPS:
 
@@ -83,13 +99,14 @@ Where the GX worker's time went in the house on g2c:
 | Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select around 21 FPS, Ordon around 23 |
 | Saves | ✅ | saving and the rolling backups work on the console; the repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
 | Link's house, Ordon, the Faron fight | ✅ | loaded with `--stage` |
-| Castle Town, Kakariko, Hyrule Field | ⚠️ | they run, at 12-22 FPS |
+| Castle Town, Kakariko, Hyrule Field | ⚠️ | they run: Hyrule Field at 28 FPS, Castle Town around 20, Kakariko around 14 |
 | Full-width 16:9 picture | ✅ | drawn at 75 % (720x408) and scaled to 960x544; `--vita-gxm-scale=100` for full size |
 | GXM renderer | ✅ | the default; `--vita-profile=off` goes back to vitaGL |
 | Real game speed | ✅ | fixed 30 game ticks per second, held down to 15 FPS |
 | Controls (both sticks, buttons) | ✅ | |
 | PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork |
 | Settings page | ✅ | two fingers held on the rear touch pad, or three on the screen; presets, render size, FPS counter, prompts, confirm button, language, gyro, camera. Works on the console |
+| Speed-ups (Original / Performance) | ⚠️ | off by default. Performance skips work you can't see: the frame that isn't shown, animals off screen or far away, part of the Castle Town crowd. Quests, items and saves are unchanged; random idle choices can differ. On the console: Ordon village centre 14.1 / 16.0 FPS instead of 12.6 / 13.2 |
 | Disc images: ISO, CISO, GCZ | ⚠️ | read in place, any name, region from the disc; checked in the emulator with the European disc |
 | Your Vita's language and Enter button | ⚠️ | text in the console's language when the disc has it, Circle confirms when the Vita does (prompts follow); checked in the emulator |
 | Front touch in menus, gyro aim | ✅ | work on the console |
@@ -172,12 +189,13 @@ also follows the gyro (on by default).
 
 **Settings:** hold two fingers still on the rear touch pad for a second, or tap the screen with
 three fingers. The game pauses and a page opens: a preset (Quality 100 %, Balanced 75 %, Battery
-50 % with the console's own clocks), render size, an FPS counter, button prompts (PlayStation or
-GameCube), the confirm button (System, Cross or Circle), the language (from the ones on your disc),
-gyro aim, sensitivity, invert and recentre, camera invert, and a reset. D-pad and Cross to change,
-Circle or START to close (or tap). Render size, performance, language and the confirm button apply
-at the next start. Game settings go to Dusklight's `config.json`, the port's own to
-`ux0:data/twilight-vita/vita_settings.json`.
+50 % with the console's own clocks), render size, Speed-ups (Original or Performance, or each of
+the four on its own), an FPS counter, button prompts (PlayStation or GameCube), the confirm button
+(System, Cross or Circle), the language (from the ones on your disc), gyro aim, sensitivity, invert
+and recentre, camera invert, and a reset. D-pad and Cross to change, Circle or START to close (or
+tap). Render size, performance, language and the confirm button apply at the next start; Speed-ups
+apply at once (the crowd at the next area). Game settings go to Dusklight's `config.json`, the
+port's own to `ux0:data/twilight-vita/vita_settings.json`.
 
 ## Measuring
 

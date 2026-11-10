@@ -23,3 +23,15 @@ b2,2026-10-28,vita1000,castle-town,every,19.80,29.98,measured,444 MHz; bench v2;
 b2,2026-10-28,vita1000,kakariko,every,12.60,25.25,measured,444 MHz; bench v2; F_SP109 (twilight); b1 + fast actor paths + texture pool fix
 b2,2026-10-28,vita1000,hyrule-field,every,18.90,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); b1 + fast actor paths + texture pool fix
 b2,2026-10-28,vita1000,faron-bench,every,11.50,23.04,measured,444 MHz; bench v2; F_SP108 room 6; only 4 steady windows; b1 + fast actor paths + texture pool fix
+b3,2026-11-05,vita1000,outside,every,27.57,30.00,measured,444 MHz; bench v2; F_SP103 room 1 (outside Link's house); first-release build (b2 + Dusklight update + settings page)
+b3,2026-11-05,vita1000,ordon-centre,every,12.30,24.67,measured,444 MHz; bench v2; F_SP103 room 0 (village centre); first-release build
+b3,2026-11-05,vita1000,castle-town,every,19.26,29.97,measured,444 MHz; bench v2; F_SP116 (twilight); first-release build
+b3,2026-11-05,vita1000,kakariko,every,12.72,25.49,measured,444 MHz; bench v2; F_SP109 (twilight); first-release build
+b3,2026-11-05,vita1000,hyrule-field,every,19.55,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); first-release build
+b3,2026-11-05,vita1000,faron-bench,every,11.74,23.56,measured,444 MHz; bench v2; F_SP108 room 6; only 4 steady windows; first-release build
+p1-control,2026-11-10,vita1000,ordon-centre,every,12.29,24.62,measured,444 MHz; bench v2; F_SP103 room 0; 10 Nov build with every new speed-up off (repeats b3)
+p1-gx,2026-11-10,vita1000,ordon-centre,every,13.05,26.14,measured,444 MHz; bench v2; F_SP103 room 0; GX worker speed-ups on (gen-mode; pipeline-info; unseen-map; gx-wake; static-dl; pipeline memo)
+p1,2026-11-10,vita1000,ordon-centre,every,13.87,27.60,measured,444 MHz; bench v2; F_SP103 room 0; GX worker speed-ups + direct uniforms + search-index; hair; rnd; envelopes (the new default)
+p1-perf,2026-11-10,vita1000,ordon-centre,every,15.60,28.61,measured,444 MHz; bench v2; F_SP103 room 0; GX worker speed-ups + Speed-ups: Performance (picture-only; opt-in)
+p1,2026-11-10,vita1000,hyrule-field,every,28.15,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); GX worker speed-ups only (part of the new default)
+p1,2026-11-10,vita1000,kakariko,every,14.72,29.22,measured,444 MHz; bench v2; F_SP109 (twilight); GX worker speed-ups + search-index; hair; rnd; envelopes (the new default without direct uniforms)

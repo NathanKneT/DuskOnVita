@@ -1,0 +1,61 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 820 420' width='820' height='420'>
+<rect width='820' height='420' rx='10' fill='#ffffff' stroke='#d1d9e0'/>
+<text x='60.0' y='28.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='16' fill='#1f2328' text-anchor='start' font-weight='600'>PS Vita 1000 — crowded places of the bench, FPS on the console</text>
+<text x='60.0' y='46.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#59636e' text-anchor='start' font-weight='normal'>whole-run average with the play profile at 75 %; no bar: not run that day</text>
+<line x1='60' x2='790' y1='308.0' y2='308.0' stroke='#d1d9e0'/>
+<text x='52.0' y='312.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>0</text>
+<line x1='60' x2='790' y1='269.9' y2='269.9' stroke='#d1d9e0'/>
+<text x='52.0' y='273.9' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>5</text>
+<line x1='60' x2='790' y1='231.8' y2='231.8' stroke='#d1d9e0'/>
+<text x='52.0' y='235.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>10</text>
+<line x1='60' x2='790' y1='193.6' y2='193.6' stroke='#d1d9e0'/>
+<text x='52.0' y='197.6' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>15</text>
+<line x1='60' x2='790' y1='155.5' y2='155.5' stroke='#d1d9e0'/>
+<text x='52.0' y='159.5' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>20</text>
+<line x1='60' x2='790' y1='117.4' y2='117.4' stroke='#d1d9e0'/>
+<text x='52.0' y='121.4' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>25</text>
+<line x1='60' x2='790' y1='79.2' y2='79.2' stroke='#d1d9e0'/>
+<text x='52.0' y='83.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='end' font-weight='normal'>30</text>
+<line x1='60' x2='790' y1='79.2' y2='79.2' stroke='#1a7f37' stroke-width='2' stroke-dasharray='6 4'/>
+<text x='790.0' y='73.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1a7f37' text-anchor='end' font-weight='600'>target: 30</text>
+<rect x='90.0' y='98.8' width='26' height='209.2' rx='3' fill='#d1d9e0'/>
+<text x='103.0' y='93.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>27</text>
+<rect x='120.0' y='97.8' width='26' height='210.2' rx='3' fill='#0969da'/>
+<text x='133.0' y='92.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>28</text>
+<text x='133.0' y='326.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>Ordon, outside</text>
+<text x='133.0' y='340.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>the house</text>
+<rect x='236.0' y='157.0' width='26' height='151.0' rx='3' fill='#d1d9e0'/>
+<text x='249.0' y='152.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>20</text>
+<rect x='266.0' y='161.1' width='26' height='146.9' rx='3' fill='#0969da'/>
+<text x='279.0' y='156.1' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>19</text>
+<text x='279.0' y='326.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>Castle Town</text>
+<rect x='382.0' y='163.9' width='26' height='144.1' rx='3' fill='#d1d9e0'/>
+<text x='395.0' y='158.9' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>19</text>
+<rect x='412.0' y='158.9' width='26' height='149.1' rx='3' fill='#0969da'/>
+<text x='425.0' y='153.9' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>20</text>
+<rect x='442.0' y='93.4' width='26' height='214.6' rx='3' fill='#1a7f37'/>
+<text x='455.0' y='88.4' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>28</text>
+<text x='425.0' y='326.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>Hyrule Field</text>
+<rect x='528.0' y='211.9' width='26' height='96.1' rx='3' fill='#d1d9e0'/>
+<text x='541.0' y='206.9' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>13</text>
+<rect x='558.0' y='211.0' width='26' height='97.0' rx='3' fill='#0969da'/>
+<text x='571.0' y='206.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>13</text>
+<rect x='588.0' y='195.8' width='26' height='112.2' rx='3' fill='#1a7f37'/>
+<text x='601.0' y='190.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>15</text>
+<text x='571.0' y='326.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>Kakariko</text>
+<rect x='674.0' y='213.8' width='26' height='94.2' rx='3' fill='#d1d9e0'/>
+<text x='687.0' y='208.8' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>12</text>
+<rect x='704.0' y='214.2' width='26' height='93.8' rx='3' fill='#0969da'/>
+<text x='717.0' y='209.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>12</text>
+<rect x='734.0' y='202.2' width='26' height='105.8' rx='3' fill='#1a7f37'/>
+<text x='747.0' y='197.2' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='middle' font-weight='600'>14</text>
+<text x='717.0' y='326.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>Ordon village</text>
+<text x='717.0' y='340.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='12' fill='#1f2328' text-anchor='middle' font-weight='600'>centre</text>
+<rect x='60' y='367' width='12' height='12' rx='2' fill='#d1d9e0'/>
+<text x='78.0' y='378.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>28 Oct (b2)</text>
+<rect x='180' y='367' width='12' height='12' rx='2' fill='#0969da'/>
+<text x='198.0' y='378.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>5 Nov (b3)</text>
+<rect x='300' y='367' width='12' height='12' rx='2' fill='#1a7f37'/>
+<text x='318.0' y='378.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#1f2328' text-anchor='start' font-weight='normal'>10 Nov (p1)</text>
+<text x='60.0' y='402.0' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='11' fill='#59636e' text-anchor='start' font-weight='normal'>10 Nov: Hyrule Field with the GX worker speed-ups only, Kakariko without direct uniforms; both are on by default now</text>
+</svg>

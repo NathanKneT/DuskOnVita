@@ -3,7 +3,19 @@
 What's next, roughly in order. It comes from two places: what the console numbers say (README,
 "Numbers"), and what people playing the other ports of this game on phones and handhelds ask for
 and complain about the most. One rule for everything here: the game has to behave exactly like the
-original. Anything that changes the picture is a setting, and the default stays faithful.
+original. Anything that changes the picture, or how random events roll, is a setting, and the
+default stays faithful.
+
+## Done on 6-10 Nov 2026
+
+- The GX worker does less: it no longer checks again a pipeline that didn't change, it no longer
+  gets the minimap the renderer can't draw yet, and uniforms go straight into GPU memory.
+- Faster model maths: matrix products and weight envelopes through NEON, plus actor searches, hair
+  and random numbers, all with the same results bit for bit.
+- All of it on by default. On the console, Hyrule Field went from 18 to 28 FPS; Ordon village
+  centre and Kakariko gained 1.5 to 2 FPS.
+- A Speed-ups setting: Original keeps the game as it was made, Performance skips work you can't
+  see. Off by default.
 
 ## Done on 5 Nov 2026
 
@@ -28,12 +40,12 @@ original. Anything that changes the picture is a setting, and the default stays 
 
 | # | Goal | Where it's at | Next step |
 | --- | --- | --- | --- |
-| 1 | A steady 30 FPS in towns and fields | 12-28 FPS in the six bench places; the main thread is the bottleneck in five of them | Exact speed-ups for the actors at the top of the console ranking (fish, the town crowd, a few enemies, Link) and for the painter; the GX worker where it's the limit |
+| 1 | A steady 30 FPS in towns and fields | Hyrule Field 28 FPS, Castle Town about 20, Ordon village centre and Kakariko 14-15, where both the main thread and the GX worker are over budget | Find out where the GX worker's backend step spends its time (a console run), then move GXM submission to the third core or keep each material's decoded state; time the part of each game tick that no timer covers yet |
 | 2 | No shader stutter anywhere | Rare in the bench places once the warm-up file covers them | A warm-up file for the whole game. How it gets to players is still open, since it's derived from the game's materials |
 | 3 | Long sessions without crashes | Test runs last minutes, not hours | Track memory use per area, long scripted runs in the emulator, a pass over the spots where other ports crash, then an hour of real play on the console |
 | 4 | Your disc, your language | ISO, CISO, GCZ; the region, language and Enter button from the disc and the Vita (done, checked in the emulator) | A USA and a Japanese disc on the console |
-| 5 | Settings without editing files | The settings page and presets are in (5 Nov) | The HUD kept sharp while the 3D is scaled; shadow and bloom settings once those effects exist |
-| 6 | Minimap and map, then shadows and bloom | Not drawn yet: EFB copies aren't in | Copies and off-screen targets on GXM, minimap and map first (in progress), then shadows and bloom as settings |
+| 5 | Settings without editing files | The settings page, presets and Speed-ups are in | The HUD kept sharp while the 3D is scaled; shadow and bloom settings once those effects exist |
+| 6 | Minimap and map, then shadows and bloom | Not drawn yet: EFB copies aren't in | Copies and off-screen targets on GXM, minimap and map first (in progress), with the minimap redrawn only when it changes so the field keeps its speed; then shadows and bloom as settings |
 | 7 | Sleep and resume | Not tested | A console checklist: sleep mid-game, in a cutscene and right after saving, and go back and forth to LiveArea; check picture, sound, gyro, touch, speed and the in-game clock |
 | 8 | Measure where it actually hurts | Six bench places | Add a horse ride across the field, some grass, a dungeon; count hitches over 100 ms; run the bench before every release |
 | 9 | Releases you can trust | First test release with a short install guide | A changelog and the bench table with every release, a short "how to send a crash log" |
@@ -45,5 +57,6 @@ original. Anything that changes the picture is a setting, and the default stays 
   30 yet anyway.
 - Dynamic resolution: at 75 % the GPU isn't the problem, the CPU is.
 - A touch overlay for gameplay: the Vita has real buttons. Touch stays for menus.
-- Draw-distance cuts that change what the game simulates. At most an opt-in setting that skips
-  drawing far things, never the game's own updates.
+- Draw-distance cuts that change what the game simulates by default. Opt-in settings may pause far,
+  unseen ambient creatures (fish, pumpkins, chickens), never anything that quests, items or saves
+  depend on.
