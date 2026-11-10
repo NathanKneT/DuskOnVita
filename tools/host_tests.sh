@@ -681,3 +681,16 @@ TWV_WORK="$work" bash "$repo/tools/save_safety_tests.sh" "$out/save-safety"
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/painter_profile_stats_test.cpp" -o "$out/painter_profile_stats_test"
 "$out/painter_profile_stats_test"
+# PADRead's kept SDL values (patches/aurora/0024, --vita-fast-pad): the patch's own memo code
+# against a fake SDL pad whose state changes only at a pump.
+python3 - "$repo/patches/aurora/0024-vita-fast-pad.patch" "$out/fast_pad_memo.inc" <<'PY'
+from pathlib import Path
+import sys
+lines=Path(sys.argv[1]).read_text().split('\n')
+start=lines.index('+constexpr int TWV_FAST_PAD_SWITCH = 9;');end=lines.index('+} // namespace',start)
+assert all(l.startswith('+') for l in lines[start:end])
+Path(sys.argv[2]).write_text('\n'.join(l[1:] for l in lines[start:end])+'\n')
+PY
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$out" "$repo/tests/fast_pad_test.cpp" -o "$out/fast_pad_test"
+"$out/fast_pad_test"

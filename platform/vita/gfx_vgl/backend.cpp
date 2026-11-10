@@ -59,6 +59,13 @@ struct PipelineInfoReuseStats {
  int infoFast=-1;
  uint64_t infoSkipped=0,infoChecked=0;
 } sPipelineInfoReuse;
+// --vita-gxm-draw-split (diagnostic, runtime/gpu_options.hpp): a draw's time in push_draw_command,
+// four clock reads per draw: before the vertex fetch (checks, light plan, shader lookup), the
+// vertex fetch, the draw state, and the backend's draw call (split further in gxm_backend.cpp).
+struct DrawSplit {
+ int on=-1;
+ uint64_t draws=0,entryUs=0,vertexUs=0,stateUs=0,submitUs=0;
+} sDrawSplit;
 }
 // gfx_vgl/pipeline_fast.cpp: whether the last pipeline_ref call returned `pipeline` for `config`.
 extern "C" int twv_vita_pipeline_ref_resolved(uint32_t pipeline,const void* config) noexcept __attribute__((weak));
@@ -441,6 +448,13 @@ void end_frame() noexcept {
    twv::vita::telemetryEvent("gfx_shader_info_fast_skipped",sPipelineInfoReuse.infoSkipped);
    twv::vita::telemetryEvent("gfx_shader_info_fast_checked",sPipelineInfoReuse.infoChecked);
   }
+  if(sDrawSplit.on>0) {
+   twv::vita::telemetryEvent("gfx_draw_split_draws",sDrawSplit.draws);
+   twv::vita::telemetryEvent("gfx_draw_split_entry_us",sDrawSplit.entryUs);
+   twv::vita::telemetryEvent("gfx_draw_split_vertex_us",sDrawSplit.vertexUs);
+   twv::vita::telemetryEvent("gfx_draw_split_state_us",sDrawSplit.stateUs);
+   twv::vita::telemetryEvent("gfx_draw_split_submit_us",sDrawSplit.submitUs);
+  }
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
   for(const auto& t:vgl::offscreenDiscards) if(t.draws)
@@ -598,6 +612,8 @@ template<> PipelineRef pipeline_ref<gx::PipelineConfig>(const gx::PipelineConfig
 template<> gx::DrawData* get_last_draw_command<gx::DrawData>() { return nullptr; }
 template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  using namespace twv::vgl;
+ if(sDrawSplit.on<0)sDrawSplit.on=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;
+ const uint64_t splitEntry=sDrawSplit.on?twv_vgl_time_us():0;
  if(!in_frame) {count("draw_outside_frame");return;}
  if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}
  if(data.pipeline>=pipelines.size()) {count("invalid_pipeline");return;}
@@ -648,8 +664,10 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  const bool trace=!p.drawn;
  if(trace && !p.vertexTraced){twv::vita::telemetryEvent("gfx_vertex_enter",data.pipeline);p.vertexTraced=true;}
  void* vertices;unsigned pnSlots=10;bool vertexCulled=false;
+ const uint64_t splitVertex=sDrawSplit.on?twv_vgl_time_us():0;
  { DrawProfileScope<TWV_PROFILE_VERTEX> timer;
    vertices=p.gpuVertex ? build_gpu_vertices(p,data,pnSlots,vertexCulled) : build_vertices(p,data); }
+ const uint64_t splitState=sDrawSplit.on?twv_vgl_time_us():0;
  if(vertexCulled){count(CounterId::VertexCullDraws);return;}
  if(!vertices)return;
  if(trace) twv::vita::telemetryEvent("gfx_vertex_return",data.pipeline);
@@ -695,6 +713,7 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
   }
  }
  stateTimer.finish();
+ const uint64_t splitSubmit=sDrawSplit.on?twv_vgl_time_us():0;
  if(p.gpuVertex) {
   count(CounterId::GpuMatrixSlots,pnSlots);count(CounterId::GpuMatrixSlotsFull,10);
   if(p.info.lightingEnabled) {
@@ -705,6 +724,10 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  const auto* indices=reinterpret_cast<const uint16_t*>(uintptr_t(data.idxRange.offset));
  { DrawProfileScope<TWV_PROFILE_SUBMIT> timer;
    twv_vgl_draw(&state,vertices,data.vtxCount,indices,data.indexCount); }
+ if(sDrawSplit.on) {
+  ++sDrawSplit.draws;sDrawSplit.entryUs+=splitVertex-splitEntry;sDrawSplit.vertexUs+=splitState-splitVertex;
+  sDrawSplit.stateUs+=splitSubmit-splitState;sDrawSplit.submitUs+=twv_vgl_time_us()-splitSubmit;
+ }
  if(trace) twv::vita::telemetryEvent("gfx_draw_return",data.pipeline);
  count(CounterId::DrawsSubmitted);count(CounterId::VerticesSubmitted,data.vtxCount);++sFrameStats.drawCallCount;
  count(p.gpuVertex?CounterId::GpuVertexDraws:CounterId::CpuVertexDraws);

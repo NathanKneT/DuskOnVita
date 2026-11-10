@@ -450,6 +450,11 @@ size_t uniform_buffer1_bytes(const SceGxmProgram* program) {
 // only the matrices, lights and texgen rows the draw sets). Verify: written as before, and each
 // uniform's bytes in the program's copy compared with the vectors direct would have written.
 bool uniformDirect=false,uniformDirectVerify=false;
+// --vita-gxm-draw-split (diagnostic): where a draw's time goes inside gxm_draw. Six clock reads per
+// draw: program variants, GXM state (viewport, region, cull, depth, programs), uniforms, textures,
+// then the vertex stream and sceGxmDraw. Microseconds and draws since the start.
+bool drawSplit=false;
+uint64_t splitDraws=0,splitVariantsUs=0,splitStateUs=0,splitUniformsUs=0,splitTexturesUs=0,splitDrawUs=0;
 uint64_t directDraws=0,directBytes=0,directFallbackPrograms=0,directFallbackDraws=0,directChecks=0,directMismatches=0;
 // --vita-gxm-uniform-direct. True when sceGxmSetUniformDataF stores this uniform's floats unchanged
 // at its resource index (32-bit words) in a default buffer of `bytes` bytes and touches nothing else,
@@ -948,6 +953,8 @@ int gxm_init() {
     }
     uniformReuse=(twv_gpu_features()&TwvGpuFeatureUniformReuse)!=0;
     if(uniformReuse)twv::vita::telemetryEvent("gxm_uniform_reuse",1);
+    drawSplit=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;
+    if(drawSplit)twv::vita::telemetryEvent("gxm_draw_split",1);
     uniformDirect=(twv_gpu_features()&TwvGpuFeatureUniformDirect)!=0;
     uniformDirectVerify=uniformDirect && (twv_gpu_features()&TwvGpuFeatureUniformDirectVerify)!=0;
     if(uniformDirect)twv::vita::telemetryEvent("gxm_uniform_direct",uniformDirectVerify?2:1);
@@ -1195,6 +1202,14 @@ void gxm_report() {
         twv::vita::telemetryEvent("gxm_uniform_direct_checks",directChecks);
         twv::vita::telemetryEvent("gxm_uniform_direct_mismatches",directMismatches);
     }
+    if(drawSplit) {
+        twv::vita::telemetryEvent("gxm_draw_split_draws",splitDraws);
+        twv::vita::telemetryEvent("gxm_draw_split_variants_us",splitVariantsUs);
+        twv::vita::telemetryEvent("gxm_draw_split_state_us",splitStateUs);
+        twv::vita::telemetryEvent("gxm_draw_split_uniforms_us",splitUniformsUs);
+        twv::vita::telemetryEvent("gxm_draw_split_textures_us",splitTexturesUs);
+        twv::vita::telemetryEvent("gxm_draw_split_draw_us",splitDrawUs);
+    }
     if(uniformSplit) {
         twv::vita::telemetryEvent("gxm_uniform_split_rebuilds",splitRebuilds); // lighting values changed
         twv::vita::telemetryEvent("gxm_uniform_split_uploads",splitUploads);   // buffer 1 copied to the ring
@@ -1380,9 +1395,12 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     }
     if(!inScene || !s || !s->program || !v || s->program>=programs.size() || !programs[s->program].references)return;
     auto& p=programs[s->program];
+    uint64_t splitAt[6]={};
+    if(drawSplit)splitAt[0]=twv::vita::processTimeUs();
     const auto* vertex=vertex_variant(p,*s);
     auto* fragment=fragment_variant(p,blend_key(s->blend,s->subtract,s->src_factor,s->dst_factor,s->color_write,s->alpha_write));
     if(!vertex || !fragment){++drawsSkipped;return;}
+    if(drawSplit)splitAt[1]=twv::vita::processTimeUs();
     const uint16_t* drawIndices=indices;uint32_t drawCount=indexCount;
     SceGxmPrimitiveType primitive=SCE_GXM_PRIMITIVE_TRIANGLES;
     if(s->primitive==TwvPrimitiveStrip || s->primitive==TwvPrimitiveFan) {
@@ -1410,6 +1428,7 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
     else set_depth(depth_func(7),SCE_GXM_DEPTH_WRITE_DISABLED);
     set_programs(vertex->program,fragment);
     finish_state();
+    if(drawSplit)splitAt[2]=twv::vita::processTimeUs();
     // --vita-gxm-uniform-direct: the reserved buffers this draw writes its uniforms into.
     const bool direct=uniformDirect && !uniformDirectVerify && p.direct;
     uint8_t* directBuffer[2]={nullptr,nullptr}; // vertex, fragment
@@ -1488,6 +1507,7 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
             if(uniformReuse){reservedFragmentProgram=fragment;reservedFragmentBytes=p.fragmentDefaults;}
         }
     }
+    if(drawSplit)splitAt[3]=twv::vita::processTimeUs();
     for(unsigned i=0;i<8;++i)if(p.textureIndex[i]>=0) {
         Texture* t=find_texture(s->textures[i]);
         if(!t){t=&missingTexture;++missingTextureBinds;}
@@ -1497,10 +1517,18 @@ void gxm_draw(const TwvVitaDrawState* s,const void* v,uint32_t count,const uint1
         sceGxmSetFragmentTexture(ctx,unsigned(p.textureIndex[i]),&texture);
         t->lastUse=frameSerial;
     }
+    if(drawSplit)splitAt[4]=twv::vita::processTimeUs();
     sceGxmSetVertexStream(ctx,0,v);
     if(vertex->generic)sceGxmSetVertexStream(ctx,1,zeroAttribute);
     if(!ok(sceGxmDraw(ctx,primitive,SCE_GXM_INDEX_FORMAT_U16,drawIndices,drawCount),"sceGxmDraw"))return;
     ++draws;++frameDraws;
+    if(drawSplit) {
+        splitAt[5]=twv::vita::processTimeUs();
+        ++splitDraws;
+        splitVariantsUs+=splitAt[1]-splitAt[0];splitStateUs+=splitAt[2]-splitAt[1];
+        splitUniformsUs+=splitAt[3]-splitAt[2];splitTexturesUs+=splitAt[4]-splitAt[3];
+        splitDrawUs+=splitAt[5]-splitAt[4];
+    }
     if(splitScenes && timingOn) {
         if(p.discard<0){p.discard=sceGxmProgramIsDiscardUsed(p.fs->program())?1:0;p.fragmentBytes=sceGxmProgramGetSize(p.fs->program());}
         auto& seg=timedFrames[frameSerial%TimingRing].segments[frameScene];
@@ -1577,7 +1605,7 @@ const TwvGpuBackend gxmBackend{
     TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50|
     TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo|  // the memo is front-end only, offered with GXM
     TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify|
-    TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify};
+    TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify|TwvGpuFeatureDrawSplit};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}
 // Settings page (ui/settings_screen.hpp): the FPS counter on or off, at any time (kept for gxm_init

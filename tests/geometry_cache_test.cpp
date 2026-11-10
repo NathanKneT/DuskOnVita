@@ -92,6 +92,32 @@ int main() {
     assert(twoWay.stats.hits==2*49 && fourWay.stats.hits==4*49);
     assert(twoWay.stats.setDeferrals>0 && fourWay.stats.setDeferrals==0);
 
+    // --vita-fast-wide-cache: the same 512 entries in groups of 8. Eight packets sharing a hash
+    // all stay; in groups of 4 the last four are decoded every frame. The group size changes
+    // only while the cache is empty.
+    GeometryCacheImpl<4> narrow(4096),wide(4096);
+    assert(!wide.set_ways(3) && !wide.set_ways(16) && wide.set_ways(8) && wide.way_count()==8 && narrow.way_count()==4);
+    uint8_t wideInput[8][8]{},wideOutput[8][16]{};
+    GeometryKey wideKeys[8]{};
+    for(unsigned i=0;i<8;++i){wideKeys[i]=key;wideKeys[i].pipeline=300+i;}
+    for(unsigned frame=0;frame<50;++frame) {
+        for(unsigned i=0;i<8;++i) {
+            wideInput[i][0]=uint8_t(i);wideOutput[i][0]=uint8_t(80+i);
+            SourceSpan input{wideInput[i],8};
+            const auto visit=[&](auto& c) {
+                auto found=c.lookup(77,wideKeys[i]);
+                if(found.data)assert(found.data[0]==80+i);
+                else if(found.mayStore)assert(c.store(77,wideKeys[i],&input,1,wideOutput[i],16));
+            };
+            visit(narrow);visit(wide);
+        }
+        narrow.end_frame();wide.end_frame();
+    }
+    assert(narrow.stats.hits==4*49 && wide.stats.hits==8*49);
+    assert(narrow.stats.setDeferrals==4*50 && wide.stats.setDeferrals==0);
+    assert(!wide.set_ways(4)); // entries in use
+    wide.clear();wide.end_frame();
+
     GeometryCache tiny(31);
     assert(!tiny.store(0,key,spans,2,packet,16) && tiny.bytes()==0);
     assert(!tiny.lookup(0,key).mayStore); // Rejected spans must not be rescanned every frame.

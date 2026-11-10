@@ -94,7 +94,21 @@ constexpr uint32_t TWV_PROFILE_VERTEX = 0, TWV_PROFILE_SUBMIT = 1,
     // wait, scene probe), aurora_begin_frame, and every frame-overlap settle called from the loop or
     // from the game's GXDrawDone (worker wait included; inside the tick's draw phase for the latter).
     TWV_PROFILE_LOOP_SLEEP = 25, TWV_PROFILE_END_FRAME = 26, TWV_PROFILE_BEGIN_FRAME = 27,
-    TWV_PROFILE_SETTLE = 28, TWV_PROFILE_COUNT = 29;
+    TWV_PROFILE_SETTLE = 28,
+    // Between the main loop's marks (patches/dusklight/0054, profile_hooks.cpp twv_vita_loop_mark):
+    // the loop head (frame begin to the tick count: VI wait, render size, UI update, game clock),
+    // per tick the input reads (pad, mouse, gyro, combos) and the tail (camera commands, audio,
+    // commit), the presentation set-up, its draw pass and its end, and the loop tail after the frame
+    // end (the limiter's sleep is LOOP_SLEEP, inside it).
+    TWV_PROFILE_LOOP_HEAD = 29, TWV_PROFILE_TICK_INPUT = 30, TWV_PROFILE_TICK_TAIL = 31,
+    TWV_PROFILE_PRESENT_PREP = 32, TWV_PROFILE_PRESENT_PASS = 33, TWV_PROFILE_PRESENT_END = 34,
+    TWV_PROFILE_LOOP_TAIL = 35,
+    // The tick's input step (TICK_INPUT) split into its parts (patches/dusklight/0055,
+    // profile_hooks.cpp twv_vita_input_mark): tick set-up, touch-control sync, PADRead, action
+    // bindings, pad state update, pad conversion, mouse and gyro, combos.
+    TWV_PROFILE_INPUT_SETUP = 36, TWV_PROFILE_INPUT_TOUCH = 37, TWV_PROFILE_INPUT_PAD_READ = 38,
+    TWV_PROFILE_INPUT_BINDS = 39, TWV_PROFILE_INPUT_PAD_UPDATE = 40, TWV_PROFILE_INPUT_CONVERT = 41,
+    TWV_PROFILE_INPUT_SENSORS = 42, TWV_PROFILE_INPUT_COMBOS = 43, TWV_PROFILE_COUNT = 44;
 uint64_t twv_vgl_time_us(void);
 void twv_vgl_profile_add(uint32_t category, uint64_t microseconds);
 uint32_t twv_vgl_program(const char* vertex, const char* fragment);
@@ -131,6 +145,7 @@ constexpr uint32_t TwvGpuFeatureFragmentSplit=8192u; // G3 step 2: TEV registers
 constexpr uint32_t TwvGpuFeatureFragmentSplitVerify=16384u; // with it: every reuse rebuilt and compared
 constexpr uint32_t TwvGpuFeatureUniformDirect=32768u; // default uniforms written straight into the reserved buffers
 constexpr uint32_t TwvGpuFeatureUniformDirectVerify=65536u; // with it: written as before, every direct write compared
+constexpr uint32_t TwvGpuFeatureDrawSplit=131072u; // diagnostic: each draw's backend time split into its steps
 uint32_t twv_gpu_features(void);
 uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it

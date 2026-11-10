@@ -88,6 +88,9 @@ uint32_t XXH32(const void*,size_t,uint32_t){return 0;}
 // T3 static geometry is off in these builder tests: no certificate, no verify mode.
 StaticCert static_packet_cert(const Pipeline&,const aurora::gx::DrawData&,size_t){return {};}
 bool static_verify(){return false;}
+// runtime/fast_painter.cpp is not linked in these builder tests. --vita-fast-wide-cache (option 5)
+// stays off: groups of 4.
+int (*twv_vita_fast_painter_mode)(unsigned)=nullptr;
 namespace original {
 #include "vertex_setup_original.inc"
 }

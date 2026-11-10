@@ -98,6 +98,12 @@ int main() {
                uv.features==(GpuOptions::FeatureUniformDirect|GpuOptions::FeatureUniformDirectVerify));
         GpuOptions uo;assert(uo.consume("--vita-gxm-uniform-direct=off")==1 && uo.features==0 && uo.any());
         assert(GpuOptions{}.consume("--vita-gxm-uniform-direct=yes")==-1 && GpuOptions{}.consume("--vita-gxm-uniform-direct")==0);
+        // The draw split is a diagnostic: GXM only, once, never a choice.
+        GpuOptions ds;
+        assert(ds.consume("--vita-gxm-draw-split=on")==1 && ds.features==GpuOptions::FeatureDrawSplit && ds.any());
+        assert(!ds.any_choice() && !ds.consistent() && ds.consume("--vita-gxm-draw-split=on")==-1);
+        assert(ds.consume("--vita-gpu=gxm")==1 && ds.consistent());
+        assert(GpuOptions{}.consume("--vita-gxm-draw-split=verify")==-1 && GpuOptions{}.consume("--vita-gxm-draw-split")==0);
     }
     {
         // GPU diagnostics: GXM only, once.

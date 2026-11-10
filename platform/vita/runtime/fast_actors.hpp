@@ -30,12 +30,17 @@ constexpr const char* FastActorModeNames[] = {"off", "on", "verify"};
 //  rnd (0040): cM_rnd / cM_rnd2 without the fmodf call (v - trunc(v) is exact below 2^23).
 //  envelopes (0053, with mtx on): a weight envelope calc multiplies each joint's animation matrix by
 //    its inverse bind matrix once per call instead of once per mix that uses the joint.
+//  pad (aurora 0024): PADRead keeps the SDL gamepad values asked since SDL last pumped events (they
+//    cannot change in between): each button or axis is asked once per pump instead of once per use
+//    per tick, and buttons the pad's mapping does not have are not asked. Verify asks every time
+//    and counts the reads whose kept value differed.
 enum FastActorSwitch : int { FastObstacle = 0, FastSearch = 1, FastBgList = 2, FastFlowBind = 3,
                              FastMtx = 4, FastSearchIndex = 5, FastHair = 6, FastRnd = 7, FastEnvelopes = 8,
+                             FastPad = 9,
                              FastActorSwitchCount };
 constexpr const char* FastActorSwitchNames[FastActorSwitchCount] = {"obstacle", "search", "bg-list",
                                                                     "flow-bind", "mtx", "search-index",
-                                                                    "hair", "rnd", "envelopes"};
+                                                                    "hair", "rnd", "envelopes", "pad"};
 
 // "--vita-fast-<name>=off|on|verify" for a known name: 1 (choices[name] set), -1 for another value
 // or a second time, 0 for any other token.

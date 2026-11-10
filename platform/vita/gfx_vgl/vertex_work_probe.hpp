@@ -11,7 +11,9 @@
 #endif
 
 namespace twv::vgl {
-enum class VertexWorkRoute : uint8_t {Replay,GpuDecode,CpuFallback,Culled,Failed,Count};
+// GpuDecodeSmall: a decoded packet of fewer than 32 vertices (the quads no cache takes), so its
+// time is not averaged with the large dynamic packets'.
+enum class VertexWorkRoute : uint8_t {Replay,GpuDecode,CpuFallback,Culled,Failed,GpuDecodeSmall,Count};
 enum class VertexWorkPhase : uint8_t {Allocate,Lookup,Setup,Decode,Oracle,Store,ReplayCopy,StagingCopy,Other,Count};
 class VertexWorkProbe {
 public:
@@ -78,7 +80,7 @@ public:
     template<class Emit>
     void report(Emit emit)const {
         emit("gfx_vertex_probe_period",Period);emit("gfx_vertex_probe_seen",seen);emit("gfx_vertex_probe_clock_calls",clockCalls);
-        constexpr const char* routeNames[]={"replay","gpu_decode","cpu_fallback","culled","failed"};
+        constexpr const char* routeNames[]={"replay","gpu_decode","cpu_fallback","culled","failed","gpu_decode_small"};
         constexpr const char* phaseNames[]={"allocate","lookup","setup","decode","oracle","store","replay_copy","staging_copy","other"};
         char key[112];
         for(unsigned i=0;i<Routes;++i) {

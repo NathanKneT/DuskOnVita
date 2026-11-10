@@ -218,6 +218,62 @@ FAST_INFO = [
      ' if(memo.memoOn && !trusted) {memo.memoPipeline=pipeline;memo.memoConfig=*expected;memo.memoInfo=cached.info;}\n'),
 ]
 
+# console session of 10 Nov: --vita-gxm-draw-split (diagnostic), four clock reads per draw around
+# the vertex fetch, the draw state and the backend's draw call. Outside the sampled-texture loop.
+DRAW_SPLIT = [
+    (' int infoFast=-1;\n'
+     ' uint64_t infoSkipped=0,infoChecked=0;\n'
+     '} sPipelineInfoReuse;\n',
+     ' int infoFast=-1;\n'
+     ' uint64_t infoSkipped=0,infoChecked=0;\n'
+     '} sPipelineInfoReuse;\n'
+     "// --vita-gxm-draw-split (diagnostic, runtime/gpu_options.hpp): a draw's time in push_draw_command,\n"
+     '// four clock reads per draw: before the vertex fetch (checks, light plan, shader lookup), the\n'
+     "// vertex fetch, the draw state, and the backend's draw call (split further in gxm_backend.cpp).\n"
+     'struct DrawSplit {\n'
+     ' int on=-1;\n'
+     ' uint64_t draws=0,entryUs=0,vertexUs=0,stateUs=0,submitUs=0;\n'
+     '} sDrawSplit;\n'),
+    ('   twv::vita::telemetryEvent("gfx_shader_info_fast_checked",sPipelineInfoReuse.infoChecked);\n'
+     '  }\n',
+     '   twv::vita::telemetryEvent("gfx_shader_info_fast_checked",sPipelineInfoReuse.infoChecked);\n'
+     '  }\n'
+     '  if(sDrawSplit.on>0) {\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_draws",sDrawSplit.draws);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_entry_us",sDrawSplit.entryUs);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_vertex_us",sDrawSplit.vertexUs);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_state_us",sDrawSplit.stateUs);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_submit_us",sDrawSplit.submitUs);\n'
+     '  }\n'),
+    ('template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {\n'
+     ' using namespace twv::vgl;\n',
+     'template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {\n'
+     ' using namespace twv::vgl;\n'
+     ' if(sDrawSplit.on<0)sDrawSplit.on=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;\n'
+     ' const uint64_t splitEntry=sDrawSplit.on?twv_vgl_time_us():0;\n'),
+    (' void* vertices;unsigned pnSlots=10;bool vertexCulled=false;\n'
+     ' { DrawProfileScope<TWV_PROFILE_VERTEX> timer;\n'
+     '   vertices=p.gpuVertex ? build_gpu_vertices(p,data,pnSlots,vertexCulled) : build_vertices(p,data); }\n',
+     ' void* vertices;unsigned pnSlots=10;bool vertexCulled=false;\n'
+     ' const uint64_t splitVertex=sDrawSplit.on?twv_vgl_time_us():0;\n'
+     ' { DrawProfileScope<TWV_PROFILE_VERTEX> timer;\n'
+     '   vertices=p.gpuVertex ? build_gpu_vertices(p,data,pnSlots,vertexCulled) : build_vertices(p,data); }\n'
+     ' const uint64_t splitState=sDrawSplit.on?twv_vgl_time_us():0;\n'),
+    (' stateTimer.finish();\n'
+     ' if(p.gpuVertex) {\n',
+     ' stateTimer.finish();\n'
+     ' const uint64_t splitSubmit=sDrawSplit.on?twv_vgl_time_us():0;\n'
+     ' if(p.gpuVertex) {\n'),
+    (' { DrawProfileScope<TWV_PROFILE_SUBMIT> timer;\n'
+     '   twv_vgl_draw(&state,vertices,data.vtxCount,indices,data.indexCount); }\n',
+     ' { DrawProfileScope<TWV_PROFILE_SUBMIT> timer;\n'
+     '   twv_vgl_draw(&state,vertices,data.vtxCount,indices,data.indexCount); }\n'
+     ' if(sDrawSplit.on) {\n'
+     '  ++sDrawSplit.draws;sDrawSplit.entryUs+=splitVertex-splitEntry;sDrawSplit.vertexUs+=splitState-splitVertex;\n'
+     '  sDrawSplit.stateUs+=splitSubmit-splitState;sDrawSplit.submitUs+=twv_vgl_time_us()-splitSubmit;\n'
+     ' }\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
     off-screen edits, the pipeline memo, the g4 console fixes and the fast info check."""
@@ -241,6 +297,10 @@ def audited(original):
     for old, new in FAST_INFO:
         if expected.count(old) != 1:
             raise SystemExit('Audited fast-info edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in DRAW_SPLIT:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited draw-split edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

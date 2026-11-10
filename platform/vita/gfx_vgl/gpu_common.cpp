@@ -25,13 +25,27 @@ twv::vgl::FramePacing framePacing;
 uint32_t frames=0;
 
 void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
+    // The window's slowest frame and what it was made of: the receipts below are means over 30
+    // frames, which say that a place holds 30 FPS on average but not why one frame in twenty is
+    // late. For the frame with the longest interval in the window, each category's time during
+    // that frame (the difference between two frame ends; the GX worker's time is counted between
+    // the main thread's frame ends).
+    static std::array<uint64_t,TWV_PROFILE_COUNT> frameStart{},worst{};
+    static uint64_t lastEnd=0,worstInterval=0;
+    const uint64_t interval=lastEnd && now>=lastEnd?now-lastEnd:0;
+    lastEnd=now;
+    if(interval>worstInterval) {
+        worstInterval=interval;
+        for(size_t i=0;i<profileUs.size();++i)worst[i]=profileUs[i]-frameStart[i];
+    }
+    frameStart=profileUs;
     twv::vgl::FramePacingStats pacing;
     if(!framePacing.frame_end(now,pacing))return;
     // Free play (telemetryQuiet): one complete 30-frame window in every 300 frames.
     static unsigned windows=0;
     if(twv::vita::telemetryIsQuiet() &&
        ++windows%(twv::vita::QuietReceiptFrames/twv::vgl::FramePacing::Window)) {
-        profileUs.fill(0);
+        profileUs.fill(0);frameStart.fill(0);worstInterval=0;
         return;
     }
     const char* names[] = {"prof_vertex_cpu_us", "prof_gl_submit_us", "prof_shader_us",
@@ -42,7 +56,11 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
         "prof_tick_shadow_collect_us", "prof_tick_demo_us", "prof_tick_shadow_collect_calls_x1000",
         "prof_tick_bg_acch_us", "prof_tick_bg_ground_us", "prof_tick_bg_line_us", "prof_tick_cc_move_us",
         "prof_tick_bg_queries", "prof_gx_wait_us", "prof_painter_sleep_us", "prof_loop_sleep_us",
-        "prof_end_frame_us", "prof_begin_frame_us", "prof_settle_us"};
+        "prof_end_frame_us", "prof_begin_frame_us", "prof_settle_us", "prof_loop_head_us",
+        "prof_tick_input_us", "prof_tick_tail_us", "prof_present_prep_us", "prof_present_pass_us",
+        "prof_present_end_us", "prof_loop_tail_us", "prof_input_setup_us", "prof_input_touch_us",
+        "prof_input_pad_read_us", "prof_input_binds_us", "prof_input_pad_update_us",
+        "prof_input_convert_us", "prof_input_sensors_us", "prof_input_combos_us"};
     static_assert(sizeof names/sizeof names[0]==TWV_PROFILE_COUNT);
     twv::vita::telemetryEvent("prof_frame_samples",pacing.frames);
     twv::vita::telemetryEvent("prof_draw_timers_enabled",TWV_VITA_DRAW_TIMERS);
@@ -84,6 +102,16 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
             twv::vita::telemetryEvent(names[i],profileUs[i]/pacing.frames);
         profileUs[i]=0;
     }
+    twv::vita::telemetryEvent("prof_worst_frame_us",worstInterval);
+    for(const uint32_t category:{TWV_PROFILE_FIFO,TWV_PROFILE_GAME_EXECUTE,
+            TWV_PROFILE_PAINTER,TWV_PROFILE_GX_WAIT,TWV_PROFILE_PAINTER_SLEEP,TWV_PROFILE_LOOP_SLEEP,
+            TWV_PROFILE_SETTLE,TWV_PROFILE_TICK_INPUT,TWV_PROFILE_TICK_TAIL,TWV_PROFILE_PRESENT_PASS,
+            TWV_PROFILE_LOOP_HEAD,TWV_PROFILE_END_FRAME}) {
+        char name[64]; // "prof_x_us" -> "prof_worst_x_us"
+        std::snprintf(name,sizeof name,"prof_worst_%s",names[category]+5);
+        twv::vita::telemetryEvent(name,worst[category]);
+    }
+    frameStart.fill(0);worstInterval=0;
     if(backend.pacing_report)backend.pacing_report();
     const auto audio=twv::vita::audio::stats();
     twv::vita::telemetryEvent("audio_buffers",audio.buffers);

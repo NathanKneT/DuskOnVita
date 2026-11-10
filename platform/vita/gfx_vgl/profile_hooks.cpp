@@ -287,6 +287,32 @@ extern "C" void __wrap_SDL_DelayPrecise(uint64_t ns) {
     twv_vgl_profile_add(TWV_PROFILE_PAINTER_SLEEP,us);
     if(twv_paintprof_sleep)twv_paintprof_sleep(us);
 }
+// patches/dusklight/0054: the main loop's marks. The time between two marks that follow each other
+// in the table goes to its category; any other pair of marks is not counted (ticks and the painter
+// have their own timers).
+extern "C" void twv_vita_loop_mark(int mark) {
+    static uint64_t last=0;
+    static int lastMark=-1;
+    struct Step {int from,to;uint32_t category;};
+    static constexpr Step steps[]={{0,1,TWV_PROFILE_LOOP_HEAD},{10,11,TWV_PROFILE_TICK_INPUT},
+        {12,13,TWV_PROFILE_TICK_TAIL},{20,21,TWV_PROFILE_PRESENT_PREP},{21,22,TWV_PROFILE_PRESENT_PASS},
+        {23,24,TWV_PROFILE_PRESENT_END},{30,31,TWV_PROFILE_LOOP_TAIL}};
+    const uint64_t now=twv_vgl_time_us();
+    for(const Step& step:steps)
+        if(step.from==lastMark && step.to==mark)twv_vgl_profile_add(step.category,now-last);
+    last=now;lastMark=mark;
+}
+// patches/dusklight/0055: the tick's input step. Step 0 starts it; step n (1 to 8) adds the time
+// since step n-1 to its category. A step that does not follow its predecessor (the pad is also
+// read outside the tick) is not counted.
+extern "C" void twv_vita_input_mark(int step) {
+    static uint64_t last=0;
+    static int lastStep=-1;
+    const uint64_t now=twv_vgl_time_us();
+    if(step>=1 && step<=8 && lastStep==step-1)
+        twv_vgl_profile_add(TWV_PROFILE_INPUT_SETUP+uint32_t(step-1),now-last);
+    last=now;lastStep=step;
+}
 extern "C" void __real_VIWaitForRetrace();
 extern "C" void __wrap_VIWaitForRetrace() {
     twv::vgl::ProfileScope timer(TWV_PROFILE_VI_CALLBACKS);

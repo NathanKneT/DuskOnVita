@@ -1,0 +1,103 @@
+Vita: the tick's input step split into its parts (twv_vita_input_mark, platform/vita/gfx_vgl/
+profile_hooks.cpp). The console session of 10 Nov measured the input step at 1.50 ms per game tick in
+every place, without saying which of its calls costs it. Each mark reads the clock once; the
+platform adds the time since the previous mark to a receipt: tick set-up, touch-control sync,
+PADRead, action bindings, pad state update, pad conversion, mouse and gyro, combos. Without the
+platform hook the marks do nothing. No game behaviour changes.
+
+--- a/libs/JSystem/src/JUtility/JUTGamePad.cpp
++++ b/libs/JSystem/src/JUtility/JUTGamePad.cpp
+@@ -8,6 +8,8 @@
+ #include "dusk/action_bindings.h"
+ #if TARGET_VITA
+ extern "C" void twv_vita_benchmark_pad(PADStatus*) __attribute__((weak));
++// patches/dusklight/0055 (see m_Do_main.cpp): steps 3 to 5 of the tick's input step.
++extern "C" void twv_vita_input_mark(int step) __attribute__((weak));
+ #endif
+ #endif
+ 
+@@ -93,9 +95,13 @@ DUSK_GAME_DATA u32 JUTGamePad::sRumbleSupported;
+ u32 JUTGamePad::read() {
+     sRumbleSupported = PADRead(mPadStatus);
+ #if TARGET_PC
++#if TARGET_VITA
++   if (twv_vita_input_mark) twv_vita_input_mark(3);
++#endif
+    dusk::updateActionBindings();
+ #if TARGET_VITA
+    if (twv_vita_benchmark_pad) twv_vita_benchmark_pad(mPadStatus);
++   if (twv_vita_input_mark) twv_vita_input_mark(4);
+ #endif
+ #endif
+ 
+@@ -172,6 +178,9 @@ u32 JUTGamePad::read() {
+     }
+ 
+     checkResetSwitch();
++#if TARGET_PC && TARGET_VITA
++    if (twv_vita_input_mark) twv_vita_input_mark(5);
++#endif
+     return sRumbleSupported;
+ }
+ 
+--- a/src/m_Do/m_Do_controller_pad.cpp
++++ b/src/m_Do/m_Do_controller_pad.cpp
+@@ -17,6 +17,10 @@
+ #include "dusk/ui/touch_controls.hpp"
+ 
+ #include <tracy/Tracy.hpp>
++#if TARGET_VITA
++// patches/dusklight/0055 (see m_Do_main.cpp): step 2 of the tick's input step.
++extern "C" void twv_vita_input_mark(int step) __attribute__((weak));
++#endif
+ #endif
+ 
+ DUSK_GAME_DATA JUTGamePad* mDoCPd_c::m_gamePad[4];
+@@ -83,6 +87,9 @@ void mDoCPd_c::read() {
+     ZoneScoped;
+ #if TARGET_PC
+     dusk::ui::sync_virtual_input();
++#if TARGET_VITA
++    if (twv_vita_input_mark) twv_vita_input_mark(2);
++#endif
+ #endif
+     JUTGamePad::read();
+ 
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -63,8 +63,15 @@ extern "C" void twv_vita_frame_overlap_settle(int site) __attribute__((weak));
+ // reads the clock once; without the platform hook it does nothing.
+ extern "C" void twv_vita_loop_mark(int mark) __attribute__((weak));
+ #define TWV_LOOP_MARK(n) do { if (twv_vita_loop_mark) twv_vita_loop_mark(n); } while (0)
++// Vita (patches/dusklight/0055): the tick's input step split into its parts. Steps in order: 0 the
++// step begins, 1 tick set-up done, 2 touch controls synced (m_Do_controller_pad.cpp), 3 PADRead,
++// 4 action bindings, 5 pad state update (JUTGamePad.cpp), 6 pad conversion, 7 mouse and gyro,
++// 8 combos. The platform adds the time since the previous step to the step's receipt.
++extern "C" void twv_vita_input_mark(int step) __attribute__((weak));
++#define TWV_INPUT_MARK(n) do { if (twv_vita_input_mark) twv_vita_input_mark(n); } while (0)
+ #else
+ #define TWV_LOOP_MARK(n) ((void)0)
++#define TWV_INPUT_MARK(n) ((void)0)
+ #endif
+ #include "dusk/iso_validate.hpp"
+ #include "dusk/logging.h"
+@@ -317,14 +324,19 @@ void main01(void) {
+                     if (i > 0 && twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(1);
+ #endif
+                     TWV_LOOP_MARK(10);
++                    TWV_INPUT_MARK(0);
+                     if (timing.interpolating) {
+                         dusk::interp::begin_sim_tick();
+                     }
+                     dusk::game_clock::begin_sim_tick();
++                    TWV_INPUT_MARK(1);
+                     mDoCPd_c::read();
++                    TWV_INPUT_MARK(6);
+                     dusk::mouse::read();
+                     dusk::gyro::read(dusk::game_clock::kSimPeriod);
++                    TWV_INPUT_MARK(7);
+                     dusk::processGameCombos();
++                    TWV_INPUT_MARK(8);
+                     TWV_LOOP_MARK(11);
+                     fapGm_Execute();
+                     TWV_LOOP_MARK(12);

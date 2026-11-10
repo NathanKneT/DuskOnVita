@@ -1,0 +1,95 @@
+Vita: marks between the main loop steps (twv_vita_loop_mark, platform/vita/gfx_vgl/
+profile_hooks.cpp). The console session of 10 Nov left about 1.45 ms per game tick and 0.9 ms per frame of
+the main loop outside every timer. A mark reads the clock once; the platform adds the time between
+two marks to a receipt: the loop head (frame begin to the tick count), each tick input reads and
+tail (camera commands, audio, commit), the presentation set-up, pass and end, and the loop tail.
+Without the platform hook the marks do nothing. No game behaviour changes.
+
+--- a/src/m_Do/m_Do_main.cpp
++++ b/src/m_Do/m_Do_main.cpp
+@@ -57,6 +57,14 @@ extern "C" void twv_vita_benchmark_tick() __attribute__((weak));
+ // GX processing may still run during the first game tick; it is finished here, before a second
+ // tick or the presentation draw (1 second tick, 2 presentation, 3 the one-tick-per-frame path).
+ extern "C" void twv_vita_frame_overlap_settle(int site) __attribute__((weak));
++// Vita (patches/dusklight/0054, platform/vita/gfx_vgl/profile_hooks.cpp): marks between the main
++// loop's steps, so the receipts can time what runs outside the game tick and the painter (the
++// loop's head, the per-tick input reads and tail, the presentation pass, the loop's tail). A mark
++// reads the clock once; without the platform hook it does nothing.
++extern "C" void twv_vita_loop_mark(int mark) __attribute__((weak));
++#define TWV_LOOP_MARK(n) do { if (twv_vita_loop_mark) twv_vita_loop_mark(n); } while (0)
++#else
++#define TWV_LOOP_MARK(n) ((void)0)
+ #endif
+ #include "dusk/iso_validate.hpp"
+ #include "dusk/logging.h"
+@@ -286,6 +294,7 @@ void main01(void) {
+             DuskLog.debug("aurora_begin_frame returned false, skipping draw this frame");
+             continue;
+         }
++        TWV_LOOP_MARK(0);
+ 
+         VIWaitForRetrace();
+ 
+@@ -295,6 +304,7 @@ void main01(void) {
+         dusk::ui::update();
+ 
+         const auto timing = dusk::game_clock::advance();
++        TWV_LOOP_MARK(1);
+         if (timing.separatePresentation) {
+             if (timing.numSimTicks > 0) {
+                 dusk::interp::begin_frame(0.0f);
+@@ -306,6 +316,7 @@ void main01(void) {
+ #if TARGET_VITA
+                     if (i > 0 && twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(1);
+ #endif
++                    TWV_LOOP_MARK(10);
+                     if (timing.interpolating) {
+                         dusk::interp::begin_sim_tick();
+                     }
+@@ -314,10 +325,13 @@ void main01(void) {
+                     dusk::mouse::read();
+                     dusk::gyro::read(dusk::game_clock::kSimPeriod);
+                     dusk::processGameCombos();
++                    TWV_LOOP_MARK(11);
+                     fapGm_Execute();
++                    TWV_LOOP_MARK(12);
+                     dusk::processCameraCommands();
+                     mDoAud_Execute();
+                     dusk::game_clock::commit_sim_tick();
++                    TWV_LOOP_MARK(13);
+ #if TARGET_VITA
+                     if (twv_vita_benchmark_tick) twv_vita_benchmark_tick();
+ #endif
+@@ -327,11 +341,16 @@ void main01(void) {
+ #if TARGET_VITA
+             if (twv_vita_frame_overlap_settle) twv_vita_frame_overlap_settle(2);
+ #endif
++            TWV_LOOP_MARK(20);
+             const float step = timing.interpolating ? dusk::game_clock::sample_interpolation_step() : 1.0f;
+             dusk::interp::begin_presentation(step);
++            TWV_LOOP_MARK(21);
+             fpcM_DrawIterater((fpcM_DrawIteraterFunc)fpcM_Draw);
++            TWV_LOOP_MARK(22);
+             cAPIGph_Painter();
++            TWV_LOOP_MARK(23);
+             dusk::interp::end_presentation();
++            TWV_LOOP_MARK(24);
+         } else {
+ #if TARGET_VITA
+             // Painting happens inside this tick: nothing to overlap.
+@@ -359,6 +378,7 @@ void main01(void) {
+         }
+ 
+         aurora_end_frame();
++        TWV_LOOP_MARK(30);
+ 
+         FrameMark;
+ 
+@@ -398,6 +418,7 @@ void main01(void) {
+         } else {
+             main_loop_limiter.Reset();
+         }
++        TWV_LOOP_MARK(31);
+     } while (dusk::IsRunning);
+ 
+     exit:;

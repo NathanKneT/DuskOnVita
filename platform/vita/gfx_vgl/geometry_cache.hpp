@@ -82,6 +82,9 @@ class GeometryCacheImpl {
         uint64_t frame=0,use=0,cooldown=0;
     };
     std::array<Entry,Sets*Ways> entries{};
+    // The group a key is looked for in: Ways entries by default, 2*Ways after set_ways (the same
+    // entries in half as many, twice as large groups).
+    unsigned ways=Ways,sets=Sets;
     size_t limit,usedBytes=0,residentUsedBytes=0;
     uint64_t frame=1,serial=0;
     bool saturated=false;
@@ -99,8 +102,8 @@ class GeometryCacheImpl {
         e.source.reset();e.vertices.reset();e.resident=false;e.sourceBytes=e.vertexBytes=0;e.spanCount=0;
     }
     Entry* matching(unsigned set,const GeometryKey& key) {
-        for(unsigned i=0;i<Ways;++i) {
-            auto& e=entries[set*Ways+i];
+        for(unsigned i=0;i<ways;++i) {
+            auto& e=entries[set*ways+i];
             if(e.frame && std::memcmp(&e.key,&key,sizeof key)==0)return &e;
         }
         return nullptr;
@@ -108,8 +111,8 @@ class GeometryCacheImpl {
     bool hot(const Entry& e) const {return e.vertices && e.frame+1>=frame;}
     Entry* replacement(unsigned set) {
         Entry* candidate=nullptr;
-        for(unsigned i=0;i<Ways;++i) {
-            auto& e=entries[set*Ways+i];
+        for(unsigned i=0;i<ways;++i) {
+            auto& e=entries[set*ways+i];
             if(!hot(e) && (!candidate || e.use<candidate->use))candidate=&e;
         }
         return candidate;
@@ -132,9 +135,17 @@ public:
         outputRelease=allocate && release?release:nullptr;
     }
     void set_neon_compare(bool enabled){neonCompare=enabled;}
+    // --vita-fast-wide-cache: groups of Ways or 2*Ways entries. Only while the cache is empty
+    // (start-up), so no entry sits in a group its key no longer maps to.
+    bool set_ways(unsigned count) {
+        if(count!=Ways && count!=2*Ways)return false;
+        for(const auto& e:entries)if(e.frame)return false;
+        ways=count;sets=EntryCount/count;return true;
+    }
+    unsigned way_count()const{return ways;}
     bool neon_compare_enabled()const{return neonCompare;}
     void defer(uint32_t hash,const GeometryKey& key) {
-        const unsigned set=hash&(Sets-1);
+        const unsigned set=hash&(sets-1);
         auto* e=matching(set,key);
         if(!e)e=replacement(set);
         if(!e){++stats.rejected;++stats.setDeferrals;return;}
@@ -144,7 +155,7 @@ public:
     // `now`: the current packet's certificate (invalid outside static lists). Verify compares
     // even certified packets and counts a difference as staticMismatches.
     Lookup lookup(uint32_t hash,const GeometryKey& key,const StaticCert& now={},bool verify=false) {
-        const unsigned set=hash&(Sets-1);
+        const unsigned set=hash&(sets-1);
         auto* e=matching(set,key);
         if(!e){
             ++stats.misses;
@@ -199,7 +210,7 @@ public:
             sourceBytes+=spans[i].size;
         }
         if(sourceBytes>MaxEntryBytes-vertexBytes || sourceBytes+vertexBytes>limit){defer(hash,key);return false;}
-        const unsigned set=hash&(Sets-1);
+        const unsigned set=hash&(sets-1);
         auto* e=matching(set,key);
         if(e && e->cooldown>=frame)return false;
         if(!e)e=replacement(set);

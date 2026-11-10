@@ -119,6 +119,10 @@ constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
     twv::vita::FastActorOn,  // hair (dusklight 0041)
     twv::vita::FastActorOn,  // rnd (dusklight 0040)
     twv::vita::FastActorOn,  // envelopes (dusklight 0053)
+    // The pad read's kept values (aurora 0024), on since the console session of 10 Nov: verify with
+    // hands on the buttons compared 2,292 reads, no difference; the tick's input step went from
+    // 1.5 ms per tick to about 1.05 ms per frame.
+    twv::vita::FastActorOn,  // pad
 };
 // GXM additions the play profile turns on unless the command line chooses (console, 10 Nov):
 // the pipeline memo (with gen-mode and pipeline-info the worker's pipeline step fell from 10.7 to
