@@ -58,6 +58,14 @@ bool residentAllocatorConfigured=false;
 // again by the reference decoder and compared (a difference turns the cache off and is counted
 // as gfx_geometry_cache_validation_failure).
 int wideCacheMode=0;
+// --vita-fast-decode-blocks (runtime/fast_painter.hpp, option 6): 1 a packet of more than 256
+// vertices is decoded 256 vertices at a time. The stream decoder writes one attribute per pass
+// over the packet; a 5,000-vertex packet's output (150 KB) does not fit the 32 KB first-level
+// cache, so every pass misses it (console, 10 Nov: 0.72 us per vertex). A block's output does. The
+// decoder, its order within a vertex and the bytes are the same. 2 (verify): the packet is also
+// decoded in one piece and compared; that result is used and the differences are counted.
+int decodeBlocksMode=0;
+uint64_t decodeBlockPackets=0,decodeBlockVertices=0,decodeBlockVerified=0,decodeBlockMismatches=0;
 uint64_t residentReplayPackets=0,residentReplayBytes=0;
 uint64_t cacheValidationSerial=0;
 // G2 (GXM backend, start-up features): resident certified geometry and indices, packed formats.
@@ -73,6 +81,18 @@ VertexWorkProbe vertexWorkProbe;
 // 3 large, cache miss or changed source; 4 not cacheable (CPU texgen or the cache is off);
 // 5 a validation re-decode. Sizes: <=4, <=8, <=16, <32, <64, <128, more.
 std::array<std::array<uint64_t,7>,6> decodeWhyPackets{},decodeWhyVertices{};
+// Probe builds with --vita-gxm-draw-split=on (a diagnostic run): the large packets (128 vertices
+// and more) that are decoded instead of replayed, one slot per pipeline and vertex count. For
+// each: how often, why the cache had no copy (in its pause after a change, its group full, a miss
+// that may store, other), whether the packet was certified static, whether its attributes are
+// indexed, and whether its source bytes (the packet and the array ranges it reads) were the same
+// as the last time it was decoded. Reported as gfx_big_decode, largest total first.
+struct BigDecode {
+  uint32_t pipeline=0,vertices=0,lastHash=0;
+  uint64_t decodes=0,paused=0,full=0,miss=0,other=0,certified=0,indexed=0,same=0,changed=0;
+};
+std::array<BigDecode,48> bigDecodes{};
+int bigDecodeOn=-1;
 void decode_why(unsigned reason,uint32_t vertices) noexcept {
   const unsigned bin=vertices<=4?0:vertices<=8?1:vertices<=16?2:vertices<32?3:vertices<64?4:vertices<128?5:6;
   ++decodeWhyPackets[reason][bin];decodeWhyVertices[reason][bin]+=vertices;
@@ -1106,6 +1126,7 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
       geometryCache.set_output_allocator(twv_gpu_resident_alloc,twv_gpu_resident_release);
     wideCacheMode=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(5):0;
     if(wideCacheMode && !geometryCache.set_ways(2*GeometryCache::WayCount))wideCacheMode=0;
+    decodeBlocksMode=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(6):0;
     residentAllocatorConfigured=true;
   }
   streamDecodeControl.begin();
@@ -1128,6 +1149,9 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
   GeometryKey key{};uint32_t hash=0;
   StaticCert staticCert{};
   GeometryCache::Lookup cached{nullptr,0,false};
+#if TWV_VITA_VERTEX_WORK_PROBE
+  unsigned bigDecodeReason=3;
+#endif
   bool validateCached=false;
   SmallPacketKey smallKey{};
   uint32_t smallHash=0;
@@ -1169,7 +1193,14 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
 #endif
     hash=XXH32(&key,sizeof key,0);
     staticCert=static_packet_cert(pipeline,data,size_t(data.vtxCount)*config.vtxStride);
+#if TWV_VITA_VERTEX_WORK_PROBE
+    const uint64_t pausesBefore=geometryCache.stats.cooldowns,fullBefore=geometryCache.stats.setDeferrals;
+#endif
     cached=geometryCache.lookup(hash,key,staticCert,static_verify());
+#if TWV_VITA_VERTEX_WORK_PROBE
+    bigDecodeReason=geometryCache.stats.cooldowns!=pausesBefore?0u:geometryCache.stats.setDeferrals!=fullBefore?1u:
+        cached.mayStore?2u:3u;
+#endif
     sample.mark(VertexWorkPhase::Lookup);
     if(cached.data && cached.bytes==outputBytes) {
       validateCached=(TWV_VITA_CACHE_VALIDATE && (++cacheValidationSerial%256==0)) || wideCacheMode==2;
@@ -1252,6 +1283,31 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
 #if TWV_VITA_PLANNED_FETCH
   count((validateCached || validateSmall)?CounterId::VertexReferenceFetchVertices:CounterId::VertexPlannedFetchVertices,data.vtxCount);
 #endif
+#if TWV_VITA_VERTEX_WORK_PROBE
+  if(bigDecodeOn<0)bigDecodeOn=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;
+  if(bigDecodeOn>0 && cacheable && data.vtxCount>=128 && !validateCached) {
+    BigDecode* slot=nullptr;
+    for(auto& e:bigDecodes) {
+      if(e.decodes && e.pipeline==uint32_t(data.pipeline) && e.vertices==data.vtxCount){slot=&e;break;}
+      if(!e.decodes && !slot)slot=&e;
+    }
+    if(slot) {
+      std::array<SourceSpan,MaxGeometrySpans> spans{};
+      const unsigned n=stage.source_spans(spans);
+      uint32_t sourceHash=XXH32(smallSource,size_t(data.vtxCount)*config.vtxStride,0);
+      for(unsigned i=1;i<n;++i)sourceHash=XXH32(spans[i].data,spans[i].size,sourceHash);
+      bool indexed=false;
+      for(unsigned attr=GX_VA_POS;attr<=GX_VA_TEX7;++attr) {
+        const auto type=config.attrs[attr].attrType;
+        if(type==GX_INDEX8 || type==GX_INDEX16)indexed=true;
+      }
+      if(slot->decodes)++(sourceHash==slot->lastHash?slot->same:slot->changed);
+      slot->pipeline=uint32_t(data.pipeline);slot->vertices=data.vtxCount;slot->lastHash=sourceHash;
+      ++slot->decodes;slot->certified+=staticCert.valid();slot->indexed+=indexed;
+      ++(bigDecodeReason==0?slot->paused:bigDecodeReason==1?slot->full:bigDecodeReason==2?slot->miss:slot->other);
+    }
+  }
+#endif
   sample.mark(VertexWorkPhase::Setup);
   bool streamed=false;
   const bool packed=pipeline.packed.any(); // G2 packed formats (configure_packed_formats)
@@ -1259,9 +1315,51 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
   if(streamDecodeControl.enabled() && !validateCached && !validateSmall && pipeline.gpuTexgen &&
      stage.can_pack_raw_streams(packed?float_layout_of(layout):layout)) {
     // G2 packed pipelines: the unchanged F32 packer writes the F32 slots, then the packed slots.
-    if(!stage.pack_raw_streams(packed?packed_slots_absent(layout,pipeline.packed):layout,decoded,pnSlots))
-      {count("invalid_position_matrix");return nullptr;}
-    if(packed)stage.pack_packed_slots(layout,decoded,pipeline.packed);
+    const auto streamLayout=packed?packed_slots_absent(layout,pipeline.packed):layout;
+    constexpr uint32_t BlockVertices=256;
+    const bool blocks=decodeBlocksMode && data.vtxCount>BlockVertices && streamLayout.stride==layout.stride;
+    // The same two packers over 256 vertices at a time: each block is a draw of its own that
+    // starts where the previous one ended in the packet and in the output.
+    const auto packBlocks=[&](uint8_t* output,unsigned& slotsOut) {
+      aurora::gx::DrawData block=data;
+      slotsOut=1;
+      for(uint32_t first=0;first<data.vtxCount;first+=BlockVertices) {
+        block.vtxCount=std::min(BlockVertices,data.vtxCount-first);
+        block.immediateData.vtxStart=static_cast<decltype(block.immediateData.vtxStart)>(
+            data.immediateData.vtxStart+size_t(first)*config.vtxStride);
+#if TWV_VITA_LAZY_VERTEX_PLAN
+        const VertexStage blockStage(pipeline,block,false);
+#else
+        const VertexStage blockStage(pipeline,block);
+#endif
+        unsigned slots=1;
+        if(!blockStage.pack_raw_streams(streamLayout,output+size_t(first)*layout.stride,slots))return false;
+        if(packed)blockStage.pack_packed_slots(layout,output+size_t(first)*layout.stride,pipeline.packed);
+        slotsOut=std::max(slotsOut,slots);
+      }
+      return true;
+    };
+    if(blocks && decodeBlocksMode==1) {
+      if(!packBlocks(decoded,pnSlots)){count("invalid_position_matrix");return nullptr;}
+      ++decodeBlockPackets;decodeBlockVertices+=data.vtxCount;
+    } else {
+      if(!stage.pack_raw_streams(streamLayout,decoded,pnSlots))
+        {count("invalid_position_matrix");return nullptr;}
+      if(packed)stage.pack_packed_slots(layout,decoded,pipeline.packed);
+      if(blocks) { // verify: the blocks into a scratch copy, compared with the packet decoded in one piece
+        std::unique_ptr<uint8_t[]> scratch(new(std::nothrow) uint8_t[outputBytes]);
+        unsigned blockSlots=1;
+        if(scratch) {
+          std::memcpy(scratch.get(),decoded,outputBytes); // bytes neither packer writes stay equal
+          const bool packedBlocks=packBlocks(scratch.get(),blockSlots);
+          ++decodeBlockPackets;decodeBlockVertices+=data.vtxCount;++decodeBlockVerified;
+          if(!packedBlocks || blockSlots!=pnSlots || std::memcmp(scratch.get(),decoded,outputBytes)!=0) {
+            ++decodeBlockMismatches;
+            twv::vita::telemetryEvent("decode_blocks_mismatch",decodeBlockMismatches);
+          }
+        }
+      }
+    }
     ++streamPackets;streamVertices+=data.vtxCount;streamed=true;
     if(TWV_VITA_CACHE_VALIDATE && ++streamValidationSerial%128==0) {
       if(packed?stage.validate_packed_streams(layout,decoded,pnSlots,pipeline.packed)
@@ -1439,6 +1537,13 @@ void geometry_cache_report() noexcept {
   twv::vita::telemetryEvent("gfx_geometry_resident_releases",s.residentReleases);
   twv::vita::telemetryEvent("gfx_geometry_resident_hit_bytes",s.residentHitBytes);
   twv::vita::telemetryEvent("gfx_geometry_cache_ways",geometryCache.way_count());
+  if(decodeBlocksMode) {
+    twv::vita::telemetryEvent("gfx_decode_blocks_mode",decodeBlocksMode);
+    twv::vita::telemetryEvent("gfx_decode_blocks_packets",decodeBlockPackets);
+    twv::vita::telemetryEvent("gfx_decode_blocks_vertices",decodeBlockVertices);
+    twv::vita::telemetryEvent("gfx_decode_blocks_verified",decodeBlockVerified);
+    twv::vita::telemetryEvent("gfx_decode_blocks_mismatches",decodeBlockMismatches);
+  }
   twv::vita::telemetryEvent("gfx_geometry_cache_entries",GeometryCache::EntryCount);
   twv::vita::telemetryEvent("gfx_geometry_cache_hits",s.hits);
   twv::vita::telemetryEvent("gfx_geometry_cache_misses",s.misses);
@@ -1512,6 +1617,27 @@ void geometry_cache_report() noexcept {
             static_cast<unsigned long long>(decodeWhyPackets[r][i]),
             static_cast<unsigned long long>(decodeWhyVertices[r][i])));
       twv::vita::telemetryText("gfx_decode_why",text);
+    }
+    if(bigDecodeOn>0) { // the eight slots with the most decoded vertices
+      std::array<const BigDecode*,8> top{};
+      for(const auto& e:bigDecodes) {
+        if(!e.decodes)continue;
+        const BigDecode* candidate=&e;
+        for(auto& t:top) {
+          if(!candidate)break;
+          if(!t || candidate->decodes*candidate->vertices>t->decodes*t->vertices)std::swap(t,candidate);
+        }
+      }
+      for(const auto* e:top)if(e) {
+        std::snprintf(text,sizeof text,"v=%lu;p=%lu;n=%llu;paused=%llu;full=%llu;miss=%llu;other=%llu;cert=%llu;idx=%llu;same=%llu;changed=%llu",
+            static_cast<unsigned long>(e->vertices),static_cast<unsigned long>(e->pipeline),
+            static_cast<unsigned long long>(e->decodes),static_cast<unsigned long long>(e->paused),
+            static_cast<unsigned long long>(e->full),static_cast<unsigned long long>(e->miss),
+            static_cast<unsigned long long>(e->other),static_cast<unsigned long long>(e->certified),
+            static_cast<unsigned long long>(e->indexed),static_cast<unsigned long long>(e->same),
+            static_cast<unsigned long long>(e->changed));
+        twv::vita::telemetryText("gfx_big_decode",text);
+      }
     }
   }
 #endif

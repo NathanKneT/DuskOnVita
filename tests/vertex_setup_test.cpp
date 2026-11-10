@@ -89,8 +89,10 @@ uint32_t XXH32(const void*,size_t,uint32_t){return 0;}
 StaticCert static_packet_cert(const Pipeline&,const aurora::gx::DrawData&,size_t){return {};}
 bool static_verify(){return false;}
 // runtime/fast_painter.cpp is not linked in these builder tests. --vita-fast-wide-cache (option 5)
-// stays off: groups of 4.
-int (*twv_vita_fast_painter_mode)(unsigned)=nullptr;
+// stays off: groups of 4. --vita-fast-decode-blocks (option 6) is what the block cases below set.
+int decodeBlocksForTest=0;
+int painter_mode_for_test(unsigned option){return option==6?decodeBlocksForTest:0;}
+int (*twv_vita_fast_painter_mode)(unsigned)=painter_mode_for_test;
 namespace original {
 #include "vertex_setup_original.inc"
 }
@@ -235,6 +237,38 @@ int main() {
  original::planCalls=candidate::planCalls=0;original::configure_gpu_cache_dependencies(p);const auto mask=p.sourceArrayMask;candidate::configure_gpu_cache_dependencies(p);
  assert(p.sourceArrayMask==mask);if(candidate::lazyVertexPlanControl.enabled())assert(candidate::planCalls==0);else assert(candidate::planCalls==original::planCalls);
  if(TWV_VITA_PLANNED_FETCH && candidate::lazyVertexPlanControl.enabled()){assert(original::planCalls>0 && omittedPlans>0);}
+ }
+ // --vita-fast-decode-blocks: a packet of more than 256 vertices decoded 256 at a time gives the
+ // original builder's bytes, slots, counters and failure, for direct and indexed sources, with and
+ // without a direct matrix index; verify finds nothing to report.
+ {
+  LowBuffer bigRoot(16384),bigPosition(16384),bigTexcoord(16384);
+  for(int mode:{1,2}) for(unsigned type:{unsigned(GX_DIRECT),unsigned(GX_INDEX16)}) for(bool pn:{false,true}) for(unsigned count:{257u,512u,700u}) {
+   reset(true);auto p=pipeline(type,false,pn);packet(p,bigRoot,bigPosition,bigTexcoord,count);
+   aurora::gx::DrawData d{};d.pipeline=11;d.vtxCount=count;d.immediateData.vtxStart=uint32_t(uintptr_t(bigRoot.data));d.immediateData.currentPnMtx=9;
+   d.immediateData.arrayStart[0]=uint32_t(uintptr_t(bigPosition.data));d.immediateData.arrayStart[GX_VA_TEX0-GX_VA_POS]=uint32_t(uintptr_t(bigTexcoord.data));
+   decodeBlocksForTest=mode;
+   candidate::decodeBlockPackets=candidate::decodeBlockVerified=candidate::decodeBlockMismatches=0;
+   // Not compare(): without the lazy plan every block's stage prepares fetch plans the stream
+   // packer never uses, so the candidate may make more of them than the original here.
+   const auto whole=run(p,d,original::planCalls,original::build_gpu_vertices);
+   const auto r=run(p,d,candidate::planCalls,candidate::build_gpu_vertices);
+   assert(whole.success && r.success && candidate::decodeBlocksMode==mode && whole.slots==r.slots && whole.bytes==r.bytes &&
+          whole.allocations==r.allocations && whole.counters==r.counters && whole.telemetry==r.telemetry &&
+          whole.allocationCalls==r.allocationCalls);
+   ++cases;
+   if(TWV_VITA_STREAM_DECODE)assert(candidate::decodeBlockPackets==1 && candidate::decodeBlockVerified==unsigned(mode==2) && !candidate::decodeBlockMismatches);
+   // An invalid matrix index in the last block fails as in the original, with the same counters.
+   // The output is not drawn then; it is not compared, because the blocks before the bad one are
+   // complete where the original stops after the matrix indices.
+   if(pn)bigRoot.data[size_t(count-1)*p.config.shaderConfig.vtxStride+p.config.shaderConfig.attrs[GX_VA_PNMTXIDX].offset]=30;
+   else d.immediateData.currentPnMtx=10;
+   const auto failedOriginal=run(p,d,original::planCalls,original::build_gpu_vertices);
+   const auto failedBlocks=run(p,d,candidate::planCalls,candidate::build_gpu_vertices);
+   assert(!failedOriginal.success && !failedBlocks.success && failedOriginal.counters==failedBlocks.counters &&
+          failedOriginal.telemetry==failedBlocks.telemetry && failedOriginal.allocationCalls==failedBlocks.allocationCalls);
+   decodeBlocksForTest=0;
+  }
  }
  std::printf("vertex_setup_test: lazy=%d planned=%d stream=%d, %u real-builder equivalence cases; %u unused fetch plans omitted; source-bearing bodies unchanged; no timing/GPU claims\n",TWV_VITA_LAZY_VERTEX_PLAN,TWV_VITA_PLANNED_FETCH,TWV_VITA_STREAM_DECODE,cases,omittedPlans);
 }

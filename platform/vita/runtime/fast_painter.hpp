@@ -26,6 +26,11 @@
 //     instead of 4 (the same 512 entries), so a packet is no longer decoded every frame because
 //     four others share its group. verify: as on, and every cache hit is decoded again by the
 //     reference decoder and compared.
+// The vertex decode of large packets:
+//   decode-blocks (gfx_vgl/vertex.cpp build_gpu_vertices): a packet of more than 256 vertices is
+//     decoded 256 vertices at a time by the same decoder, so each block's output stays in the
+//     first-level cache across the decoder's passes. verify: the packet is also decoded in one
+//     piece and compared; that result is used, differences are counted.
 #include <cstdint>
 #include <cstring>
 
@@ -34,18 +39,21 @@ enum : int { FastOff = 0, FastOn = 1, FastVerify = 2 };
 constexpr const char* FastModeNames[] = {"off", "on", "verify"};
 enum FastPainterOption : unsigned {
     FastGxWake, FastStaticDl, FastGenMode, FastPipelineInfo, FastUnseenMap, FastWideCache,
-    FastPainterOptionCount
+    FastDecodeBlocks, FastPainterOptionCount
 };
 constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake", "static-dl", "gen-mode",
                                                                         "pipeline-info", "unseen-map",
-                                                                        "wide-cache"};
+                                                                        "wide-cache", "decode-blocks"};
 // Play-profile defaults: the first five on since the console session of 10 Nov
 // (docs/benchmarks.csv). Vita3K verify in the six bench-v2 places found no lost wakeup, no
 // different list id, no different pipeline and no differing draw digest; on the console the GX
 // worker fell by 6.6 ms in Ordon centre, 8.0 in Kakariko and 13.6 in Hyrule Field with the five on
 // together (and the pipeline memo). unseen-map only acts while the backend drops offscreen draws.
-// wide-cache: off until a console run has measured it.
-constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn, FastOff};
+// wide-cache and decode-blocks: on since the console session of 10 Nov: verify compared 34,323
+// cache hits and 572 large packets on the console without a difference; the worker fell by 1 to 1.7
+// ms in Ordon centre.
+constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn, FastOn,
+                                                         FastOn};
 
 // "--vita-fast-<name>=off|on|verify" for a name above: 1 (choices[option] set), -1 for another
 // value or a second time, 0 for any other token.
