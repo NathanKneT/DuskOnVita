@@ -274,6 +274,38 @@ DRAW_SPLIT = [
      ' }\n'),
 ]
 
+# With --vita-gxm-draw-split, small draws whose state equals the previous small draw's
+# (diagnostic for merging neighbouring quads). Outside the sampled-texture loop.
+SAME_STATE = [
+    ('struct DrawSplit {\n'
+     ' int on=-1;\n'
+     ' uint64_t draws=0,entryUs=0,vertexUs=0,stateUs=0,submitUs=0;\n'
+     '} sDrawSplit;\n',
+     'struct DrawSplit {\n'
+     ' int on=-1;\n'
+     ' uint64_t draws=0,entryUs=0,vertexUs=0,stateUs=0,submitUs=0;\n'
+     ' // Small draws (at most 8 vertices: the quads) and how many of them have, byte for byte, the draw\n'
+     ' // state of the draw just before them, which was small too: what merging neighbours could save.\n'
+     ' uint64_t smallDraws=0,smallSameState=0,sameStateRuns=0;\n'
+     ' bool previousSmall=false,previousSame=false;\n'
+     '} sDrawSplit;\n'),
+    ('   twv::vita::telemetryEvent("gfx_draw_split_submit_us",sDrawSplit.submitUs);\n',
+     '   twv::vita::telemetryEvent("gfx_draw_split_submit_us",sDrawSplit.submitUs);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_small_draws",sDrawSplit.smallDraws);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_small_same_state",sDrawSplit.smallSameState);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_same_state_runs",sDrawSplit.sameStateRuns);\n'),
+    ('  sDrawSplit.stateUs+=splitSubmit-splitState;sDrawSplit.submitUs+=twv_vgl_time_us()-splitSubmit;\n'
+     ' }\n',
+     '  sDrawSplit.stateUs+=splitSubmit-splitState;sDrawSplit.submitUs+=twv_vgl_time_us()-splitSubmit;\n'
+     '  static TwvVitaDrawState previousState;\n'
+     '  const bool small=data.vtxCount<=8;\n'
+     '  const bool same=small && sDrawSplit.previousSmall && std::memcmp(&previousState,&state,sizeof state)==0;\n'
+     '  sDrawSplit.smallDraws+=small;sDrawSplit.smallSameState+=same;\n'
+     '  if(same && !sDrawSplit.previousSame)++sDrawSplit.sameStateRuns;\n'
+     '  previousState=state;sDrawSplit.previousSmall=small;sDrawSplit.previousSame=same;\n'
+     ' }\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
     off-screen edits, the pipeline memo, the g4 console fixes and the fast info check."""
@@ -301,6 +333,10 @@ def audited(original):
     for old, new in DRAW_SPLIT:
         if expected.count(old) != 1:
             raise SystemExit('Audited draw-split edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in SAME_STATE:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited same-state edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

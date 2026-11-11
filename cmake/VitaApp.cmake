@@ -11,7 +11,9 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(TWV_TITLE_ID "TWVT00001")
-set(TWV_VERSION "00.01")
+set(TWV_VERSION "00.01" CACHE STRING "App version in param.sfo and on the settings page (NN.NN)")
+# The name under the bubble on the home screen. A release build passes its own (-DTWV_APP_NAME=...).
+set(TWV_APP_NAME "DuskOnVita (dev)" CACHE STRING "App name in param.sfo")
 option(TWV_VITA_RENDER_BUNDLE "Compile startup-selectable grouped Vita rendering optimizations" OFF)
 option(TWV_VITA_GX_FAST_DECODE "Compile startup-selectable exact GX decode and cached shader-info reuse" OFF)
 
@@ -75,6 +77,11 @@ if(TWV_VITA_APP_WARMUP_BUNDLE)
     endif()
     set(TWV_VPK_EXTRA_FILES FILE "${TWV_VITA_APP_WARMUP_BUNDLE_FILE}" shader_warmup.bin)
 endif()
+# LiveArea: the bubble's icon, the page background and the gate picture, drawn in code by
+# tools/make_livearea.py (8-bit palette PNGs, which is what the Vita installs), and the page layout.
+foreach(asset icon0.png livearea/contents/bg.png livearea/contents/startup.png livearea/contents/template.xml)
+    list(APPEND TWV_VPK_EXTRA_FILES FILE "${CMAKE_SOURCE_DIR}/platform/vita/sce_sys/${asset}" "sce_sys/${asset}")
+endforeach()
 
 # Dusklight's own platform/UI layer (src/dusk: OS threads/queues, settings,
 # config, audio DSP emulation, menus). Linked; what it needs from Aurora,
@@ -234,6 +241,7 @@ if(TWV_VITA_GFX_VGL)
     # (--vita-gpu); gpu_api.cpp is the vitaGL backend, gpu_common.cpp the shared receipts.
     target_sources(twv_vita_runtime PRIVATE platform/vita/gfx_vgl/gpu_api.cpp
         platform/vita/gfx_vgl/gpu_dispatch.cpp
+        platform/vita/gfx_vgl/submit_thread.cpp
         platform/vita/gfx_vgl/gpu_common.cpp
         platform/vita/gfx_vgl/frame_capture.cpp
         platform/vita/gfx_vgl/shader_preparation.cpp
@@ -337,7 +345,7 @@ endif ()
 vita_create_self(eboot.bin twilight_vita.elf UNSAFE)
 vita_create_vpk(twilight_vita.vpk ${TWV_TITLE_ID} eboot.bin
         VERSION ${TWV_VERSION}
-        NAME "DuskOnVita (dev)"
+        NAME "${TWV_APP_NAME}"
         ${TWV_VPK_EXTRA_FILES})
 
 # Audio output probe (platform/vita/probes/audio_probe.cpp): the SceAudioOut path

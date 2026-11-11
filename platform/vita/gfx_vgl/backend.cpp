@@ -65,6 +65,10 @@ struct PipelineInfoReuseStats {
 struct DrawSplit {
  int on=-1;
  uint64_t draws=0,entryUs=0,vertexUs=0,stateUs=0,submitUs=0;
+ // Small draws (at most 8 vertices: the quads) and how many of them have, byte for byte, the draw
+ // state of the draw just before them, which was small too: what merging neighbours could save.
+ uint64_t smallDraws=0,smallSameState=0,sameStateRuns=0;
+ bool previousSmall=false,previousSame=false;
 } sDrawSplit;
 }
 // gfx_vgl/pipeline_fast.cpp: whether the last pipeline_ref call returned `pipeline` for `config`.
@@ -454,6 +458,9 @@ void end_frame() noexcept {
    twv::vita::telemetryEvent("gfx_draw_split_vertex_us",sDrawSplit.vertexUs);
    twv::vita::telemetryEvent("gfx_draw_split_state_us",sDrawSplit.stateUs);
    twv::vita::telemetryEvent("gfx_draw_split_submit_us",sDrawSplit.submitUs);
+   twv::vita::telemetryEvent("gfx_draw_split_small_draws",sDrawSplit.smallDraws);
+   twv::vita::telemetryEvent("gfx_draw_split_small_same_state",sDrawSplit.smallSameState);
+   twv::vita::telemetryEvent("gfx_draw_split_same_state_runs",sDrawSplit.sameStateRuns);
   }
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
@@ -727,6 +734,12 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  if(sDrawSplit.on) {
   ++sDrawSplit.draws;sDrawSplit.entryUs+=splitVertex-splitEntry;sDrawSplit.vertexUs+=splitState-splitVertex;
   sDrawSplit.stateUs+=splitSubmit-splitState;sDrawSplit.submitUs+=twv_vgl_time_us()-splitSubmit;
+  static TwvVitaDrawState previousState;
+  const bool small=data.vtxCount<=8;
+  const bool same=small && sDrawSplit.previousSmall && std::memcmp(&previousState,&state,sizeof state)==0;
+  sDrawSplit.smallDraws+=small;sDrawSplit.smallSameState+=same;
+  if(same && !sDrawSplit.previousSame)++sDrawSplit.sameStateRuns;
+  previousState=state;sDrawSplit.previousSmall=small;sDrawSplit.previousSame=same;
  }
  if(trace) twv::vita::telemetryEvent("gfx_draw_return",data.pipeline);
  count(CounterId::DrawsSubmitted);count(CounterId::VerticesSubmitted,data.vtxCount);++sFrameStats.drawCallCount;

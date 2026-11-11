@@ -694,3 +694,18 @@ PY
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$out" "$repo/tests/fast_pad_test.cpp" -o "$out/fast_pad_test"
 "$out/fast_pad_test"
+# The draw hand-over queue (gfx_vgl/submit_queue.hpp, --vita-gxm-submit-thread) on two real threads,
+# with and without the thread sanitizer.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
+  -I "$repo/platform/vita" "$repo/tests/submit_queue_test.cpp" -o "$out/submit_queue_test"
+"$out/submit_queue_test"
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=thread -pthread \
+  -I "$repo/platform/vita" "$repo/tests/submit_queue_test.cpp" -o "$out/submit_queue_test_tsan"
+# ThreadSanitizer stops with "unexpected memory mapping" when the kernel randomises addresses over
+# more bits than its shadow layout expects (GCC 13 on recent kernels): run this binary without
+# address randomisation where setarch is allowed to (a container's default seccomp profile is not).
+if setarch "$(uname -m)" -R true 2>/dev/null; then
+  setarch "$(uname -m)" -R "$out/submit_queue_test_tsan"
+else
+  "$out/submit_queue_test_tsan"
+fi

@@ -14,7 +14,7 @@ namespace twv::ui::settings {
 
 enum class Id : uint8_t {
     Preset, RenderScale, Performance, SpeedUps, SkipUnseen, StillAnimals, RestingAnimals, Crowd, ShowFps, ButtonPrompts, ConfirmButton, Language, GyroAim, GyroSensitivity,
-    GyroInvertYaw, GyroInvertPitch, GyroRecentre, CameraInvertX, CameraInvertY, OpenGesture, ResetDefaults,
+    GyroInvertYaw, GyroInvertPitch, GyroRecentre, FreeCamera, CameraInvertX, CameraInvertY, OpenGesture, ResetDefaults,
     Close, Count
 };
 constexpr int EntryCount = int(Id::Count);
@@ -110,9 +110,13 @@ constexpr Entry Entries[EntryCount] = {
     {Id::GyroRecentre, Kind::Action, "Recentre gyro",
      "Forget the held angle: the way you hold the Vita when the game resumes is the new neutral.",
      Applies::Now, nullptr, 0, 0},
+    {Id::FreeCamera, Kind::Choice, "Free camera",
+     "Off: the original camera (the right stick turns it sideways; up looks through Link's eyes). "
+     "On: the right stick moves the camera freely, up and down too.", Applies::Now, text::OffOn, 2, 0},
     {Id::CameraInvertX, Kind::Choice, "Camera invert left/right", "Right stick camera, sideways.", Applies::Now,
      text::OffOn, 2, 0},
-    {Id::CameraInvertY, Kind::Choice, "Camera invert up/down", "Right stick camera, up and down.", Applies::Now,
+    {Id::CameraInvertY, Kind::Choice, "Camera invert up/down",
+     "Right stick camera, up and down. Only the free camera moves up and down.", Applies::Now,
      text::OffOn, 2, 0},
     {Id::OpenGesture, Kind::Choice, "Open this page with",
      "Rear: hold two fingers together on the rear touch pad for 1 second. Front: touch the screen with three "
@@ -123,7 +127,7 @@ constexpr Entry Entries[EntryCount] = {
     {Id::Close, Kind::Action, "Close and resume", "Back to the game. Changes are saved now.", Applies::Now,
      nullptr, 0, 0},
 };
-static_assert(EntryCount == 22);
+static_assert(EntryCount == 23);
 static_assert(Presets[1].renderScale == 2 && Presets[1].performance == 0, "Balanced is the default size and clock");
 constexpr const Entry& entry(Id id) { return Entries[int(id)]; }
 

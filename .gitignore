@@ -39,6 +39,9 @@ sequence.txt
 *.log
 *.jsonl
 *.png
+# ...except the LiveArea pictures, which tools/make_livearea.py draws in code (no game artwork).
+!/platform/vita/sce_sys/icon0.png
+!/platform/vita/sce_sys/livearea/contents/*.png
 *.jpg
 *.jpeg
 *.mp4

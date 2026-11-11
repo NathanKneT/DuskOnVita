@@ -98,6 +98,16 @@ int main() {
                uv.features==(GpuOptions::FeatureUniformDirect|GpuOptions::FeatureUniformDirectVerify));
         GpuOptions uo;assert(uo.consume("--vita-gxm-uniform-direct=off")==1 && uo.features==0 && uo.any());
         assert(GpuOptions{}.consume("--vita-gxm-uniform-direct=yes")==-1 && GpuOptions{}.consume("--vita-gxm-uniform-direct")==0);
+        // The submit thread: GXM only, once, never a renderer choice; verify sets both bits.
+        GpuOptions st;
+        assert(st.consume("--vita-gxm-submit-thread=on")==1 && st.features==GpuOptions::FeatureSubmitThread && st.any());
+        assert(!st.any_choice() && !st.consistent() && st.consume("--vita-gxm-submit-thread=off")==-1);
+        assert(st.consume("--vita-gpu=gxm")==1 && st.consistent());
+        GpuOptions sv;
+        assert(sv.consume("--vita-gxm-submit-thread=verify")==1 &&
+               sv.features==(GpuOptions::FeatureSubmitThread|GpuOptions::FeatureSubmitVerify));
+        GpuOptions so;assert(so.consume("--vita-gxm-submit-thread=off")==1 && so.features==0 && so.any());
+        assert(GpuOptions{}.consume("--vita-gxm-submit-thread=yes")==-1 && GpuOptions{}.consume("--vita-gxm-submit-thread")==0);
         // The draw split is a diagnostic: GXM only, once, never a choice.
         GpuOptions ds;
         assert(ds.consume("--vita-gxm-draw-split=on")==1 && ds.features==GpuOptions::FeatureDrawSplit && ds.any());

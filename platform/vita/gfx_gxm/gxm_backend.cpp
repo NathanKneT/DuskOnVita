@@ -744,9 +744,15 @@ void set_programs(const SceGxmVertexProgram* vertex,const SceGxmFragmentProgram*
 }
 void finish_state() {shadow.valid=true;}
 
+// --vita-gxm-submit-thread: the GX worker takes vertex memory from the ring while the submit
+// thread may take a uniform copy from it inside a draw, so the cursor is guarded then.
+std::atomic_flag ringBusy=ATOMIC_FLAG_INIT;
+bool ringShared=false;
 void* ring_alloc(size_t bytes,uint32_t alignment=16) {
     if(!ready || bytes>RingSlotBytes)return nullptr;
+    if(ringShared)while(ringBusy.test_and_set(std::memory_order_acquire)) {}
     const uint32_t offset=ring.allocate(uint32_t(bytes),alignment);
+    if(ringShared)ringBusy.clear(std::memory_order_release);
     if(offset==UINT32_MAX){++ringFailures;return nullptr;}
     return static_cast<unsigned char*>(ringMemory.base)+offset;
 }
@@ -954,6 +960,7 @@ int gxm_init() {
     uniformReuse=(twv_gpu_features()&TwvGpuFeatureUniformReuse)!=0;
     if(uniformReuse)twv::vita::telemetryEvent("gxm_uniform_reuse",1);
     drawSplit=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;
+    ringShared=(twv_gpu_features()&TwvGpuFeatureSubmitThread)!=0;
     if(drawSplit)twv::vita::telemetryEvent("gxm_draw_split",1);
     uniformDirect=(twv_gpu_features()&TwvGpuFeatureUniformDirect)!=0;
     uniformDirectVerify=uniformDirect && (twv_gpu_features()&TwvGpuFeatureUniformDirectVerify)!=0;
@@ -1605,7 +1612,8 @@ const TwvGpuBackend gxmBackend{
     TwvGpuFeatureTiming|TwvGpuFeatureSplit|TwvGpuFeatureScale75|TwvGpuFeatureScale67|TwvGpuFeatureScale50|
     TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo|  // the memo is front-end only, offered with GXM
     TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify|
-    TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify|TwvGpuFeatureDrawSplit};
+    TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify|TwvGpuFeatureDrawSplit|
+    TwvGpuFeatureSubmitThread|TwvGpuFeatureSubmitVerify};
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}
 // Settings page (ui/settings_screen.hpp): the FPS counter on or off, at any time (kept for gxm_init

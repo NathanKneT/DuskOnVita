@@ -1,11 +1,14 @@
 // SDK domain: the exported twv_vgl_* interface (gpu_api.h). Each call goes to the
 // backend chosen at start-up; with --vita-gpu-digest the same calls also feed the
 // per-frame draw digest, so two backends or two runs can be compared draw for draw.
-// Calls are serialised by the FIFO drain, as before (one backend owner at a time).
+// Calls are serialised by the FIFO drain, as before (one backend owner at a time). With
+// --vita-gxm-submit-thread (submit_thread.hpp) draws and their sampler units go through a queue to
+// a third thread; every other call below first waits until that queue is empty.
 #include "gpu_backend.h"
 #include "gpu_common.hpp"
 #include "draw_digest.hpp"
 #include "frame_capture.hpp"
+#include "submit_thread.hpp"
 #include "runtime/telemetry.hpp"
 #include "ui/startup_screen.hpp"
 #include <psp2/kernel/processmgr.h>
@@ -92,7 +95,11 @@ extern "C" int twv_vgl_init(void) {
         twv::vita::telemetryEvent("capture_last",capture.last);
         twv::vita::telemetryEvent("capture_step",capture.step);
     }
-    if(gpu().init())return 1;
+    if(gpu().init()) {
+        if(requestedFeatures&TwvGpuFeatureSubmitThread)
+            twv::gpu::submit::start(gpu(),(requestedFeatures&TwvGpuFeatureSubmitVerify)!=0);
+        return 1;
+    }
     // Fail closed: the backend's own receipts name the failing call and its error code (gxm_error,
     // gfx_init_failure); this one names the backend, and the run ends here with exit code 3 instead
     // of an abort dialog or a black screen: the start-up screen says what the backend noted (missing
@@ -103,10 +110,11 @@ extern "C" int twv_vgl_init(void) {
     twv::vita::startupGraphicsFailureExit(3);
 }
 extern "C" void twv_vgl_shutdown(void) {
+    twv::gpu::submit::stop();
     gpu().shutdown();
     if(drawLog){std::fclose(drawLog);drawLog=nullptr;}
 }
-extern "C" void twv_vgl_begin(void) {gpu().begin();}
+extern "C" void twv_vgl_begin(void) {twv::gpu::submit::drain();gpu().begin();}
 extern "C" void twv_vgl_end(void) {
     const uint32_t index=++frameIndex;
     uint64_t frameDigest=0;
@@ -129,8 +137,10 @@ extern "C" void twv_vgl_end(void) {
         twv::gpu::capture_name(path,sizeof path,CaptureRoot,index,frameDigest);
         capturePath=path;
     }
+    twv::gpu::submit::drain();
     if(!gpu().end(capturePath))return;
     twv::gpu::common_frame(gpu());
+    if(twv::gpu::frames_presented()%60==0)twv::gpu::submit::report();
     if(digest && twv::gpu::frames_presented()%60==0) {
         twv::vita::telemetryEvent("gpu_digest_draws",static_cast<long long>(digestDraws));
         twv::vita::telemetryEvent("gpu_digest_live_textures",static_cast<long long>(digest->live_textures()));
@@ -145,11 +155,12 @@ extern "C" uint32_t twv_vgl_vertex_write_class(const void* address,size_t bytes)
 }
 extern "C" void twv_vgl_vertex_write_class_report(void) {gpu().vertex_write_class_report();}
 extern "C" uint32_t twv_vgl_program(const char* vertex,const char* fragment) {
+    twv::gpu::submit::drain();
     const uint32_t id=gpu().program(vertex,fragment);
     if(digest)digest->program_created(id,vertex,fragment);
     return id;
 }
-extern "C" void twv_vgl_program_delete(uint32_t program) {gpu().program_delete(program);}
+extern "C" void twv_vgl_program_delete(uint32_t program) {twv::gpu::submit::drain();gpu().program_delete(program);}
 extern "C" void twv_vgl_draw(const TwvVitaDrawState* state,const void* vertices,uint32_t count,
                              const uint16_t* indices,uint32_t indexCount) {
     if(digest && state) {
@@ -157,37 +168,48 @@ extern "C" void twv_vgl_draw(const TwvVitaDrawState* state,const void* vertices,
         if(logging_draws())std::fprintf(drawLog,"D %016llx %lu %lu\n",static_cast<unsigned long long>(value),
             static_cast<unsigned long>(count),static_cast<unsigned long>(indexCount));
     }
-    gpu().draw(state,vertices,count,indices,indexCount);
+    if(twv::gpu::submit::active())twv::gpu::submit::draw(state,vertices,count,indices,indexCount);
+    else gpu().draw(state,vertices,count,indices,indexCount);
 }
 extern "C" uint32_t twv_vgl_texture(uint32_t width,uint32_t height,uint32_t levels) {
+    twv::gpu::submit::drain();
     const uint32_t id=gpu().texture(width,height,levels);
     if(digest)digest->texture_created(id,width,height,levels);
     return id;
 }
 extern "C" uint32_t twv_vgl_texture_static_rgba(uint32_t width,uint32_t height,uint32_t levels,
                                                 const void* bytes,size_t size) {
+    twv::gpu::submit::drain();
     const uint32_t id=gpu().texture_static_rgba(width,height,levels,bytes,size);
     if(digest)digest->texture_static(id,width,height,levels,bytes,size);
     return id;
 }
 extern "C" void twv_vgl_texture_write(uint32_t texture,uint32_t level,uint32_t width,uint32_t height,const void* rgba) {
     if(digest)digest->texture_written(texture,level,width,height,rgba);
+    twv::gpu::submit::drain();
     gpu().texture_write(texture,level,width,height,rgba);
 }
 extern "C" void twv_vgl_texture_delete(uint32_t texture) {
     if(digest)digest->texture_deleted(texture);
+    twv::gpu::submit::drain();
     gpu().texture_delete(texture);
 }
 extern "C" void twv_vgl_texture_sampler(uint32_t texture,int min,int mag,int s,int t) {
     if(digest)digest->texture_sampler(texture,min,mag,s,t);
+    twv::gpu::submit::drain();
     gpu().texture_sampler(texture,min,mag,s,t);
 }
 extern "C" int twv_vgl_texture_sampler_unit(uint32_t unit,int min,int mag,int s,int t) {
-    const int accepted=gpu().texture_sampler_unit(unit,min,mag,s,t);
+    // Queued in order with the draws. The GXM backend accepts every unit below 8 once it is ready
+    // (it is: the queue only exists after init); any other unit goes straight to it, after a drain.
+    int accepted=1;
+    if(twv::gpu::submit::active() && unit<8)twv::gpu::submit::sampler_unit(unit,min,mag,s,t);
+    else {twv::gpu::submit::drain();accepted=gpu().texture_sampler_unit(unit,min,mag,s,t);}
     if(digest)digest->sampler_unit(unit,min,mag,s,t,accepted);
     return accepted;
 }
 extern "C" void twv_vgl_clear(float r,float g,float b,float a,float depth,unsigned mask,int x,int y,int w,int h) {
     if(digest)digest->clear(r,g,b,a,depth,mask,x,y,w,h);
+    twv::gpu::submit::drain();
     gpu().clear(r,g,b,a,depth,mask,x,y,w,h);
 }

@@ -34,7 +34,8 @@ enum : int {
     TwvGameGyroInvertPitch = 6, // 0/1                               (game.gyroInvertPitch)
     TwvGameCameraInvertX = 7, // 0/1                                 (game.invertCameraXAxis)
     TwvGameCameraInvertY = 8, // 0/1                                 (game.invertCameraYAxis)
-    TwvGameKeyCount = 9
+    TwvGameFreeCamera = 9,    // 0/1                                 (game.freeCamera)
+    TwvGameKeyCount = 10
 };
 
 extern "C" {

@@ -18,6 +18,10 @@
 //   --vita-gxm-gpu-split=N                  N = 2..8 scenes per frame at equal draw shares, with
 //                                           depth stored and reloaded between them: per-scene GPU
 //                                           time (implies the timing; costs the extra loads/stores)
+//   --vita-gxm-submit-thread=off|on|verify  the GX worker hands each finished draw to a third thread
+//                                           (third user core) that makes the GXM calls; every other
+//                                           backend call waits for the queue to empty first. verify
+//                                           waits for each draw (same queue and thread, no overlap)
 //   --vita-gxm-draw-split=on|off            each draw's backend time split into its steps (vertex
 //                                           fetch, state build, program variants, GXM state,
 //                                           uniforms, textures, the draw call); several clock reads
@@ -55,14 +59,16 @@ struct GpuOptions {
     int captureMatch=0;
     bool primitivesSelected=false,compactSelected=false,residentSelected=false,timingSelected=false;
     bool splitSelected=false,scaleSelected=false,uniformReuseSelected=false,pipelineMemoSelected=false;
-    bool uniformSplitSelected=false,fragmentSplitSelected=false,uniformDirectSelected=false,drawSplitSelected=false;
+    bool uniformSplitSelected=false,fragmentSplitSelected=false,uniformDirectSelected=false,drawSplitSelected=false,
+         submitThreadSelected=false;
     uint32_t features=0; // TwvGpuFeature* bits (gfx_vgl/gpu_api.h)
     uint32_t splitScenes=0; // --vita-gxm-gpu-split
     static constexpr uint32_t FeaturePrimitives=1u,FeatureCompact=2u,FeatureCompactColors=4u,FeatureResident=8u,
         FeatureTiming=16u,FeatureSplit=32u,FeatureScale75=64u,FeatureScale67=128u,FeatureScale50=256u, // diagnostics
         FeatureUniformReuse=512u,FeaturePipelineMemo=1024u,FeatureUniformSplit=2048u,FeatureUniformSplitVerify=4096u,
         FeatureFragmentSplit=8192u,FeatureFragmentSplitVerify=16384u,FeatureUniformDirect=32768u,
-        FeatureUniformDirectVerify=65536u,FeatureDrawSplit=131072u; // FeatureDrawSplit: diagnostic
+        FeatureUniformDirectVerify=65536u,FeatureDrawSplit=131072u, // FeatureDrawSplit: diagnostic
+        FeatureSubmitThread=262144u,FeatureSubmitVerify=524288u;
     // 0 not a GPU option, -1 invalid or repeated, 1 accepted.
     int consume(const char* token) noexcept {
         if(!token)return -1;
@@ -76,6 +82,8 @@ struct GpuOptions {
         if(const char* v=value(token,"--vita-gxm-pipeline-memo"))return toggle(v,pipelineMemoSelected,FeaturePipelineMemo);
         if(const char* v=value(token,"--vita-gxm-gpu-timing"))return toggle(v,timingSelected,FeatureTiming);
         if(const char* v=value(token,"--vita-gxm-draw-split"))return toggle(v,drawSplitSelected,FeatureDrawSplit);
+        if(const char* v=value(token,"--vita-gxm-submit-thread"))
+            return split(v,submitThreadSelected,FeatureSubmitThread,FeatureSubmitVerify);
         if(const char* v=value(token,"--vita-gxm-gpu-split")) {
             uint32_t n=0;const char* rest=nullptr;
             if(splitSelected || !number(v,n,rest) || *rest || n<2 || n>8)return -1;
@@ -140,7 +148,7 @@ struct GpuOptions {
         return backendSelected || digestSelected || captureSelected || matchSelected ||
                primitivesSelected || compactSelected || residentSelected || timingSelected || splitSelected ||
                scaleSelected || uniformReuseSelected || pipelineMemoSelected || uniformSplitSelected ||
-               fragmentSplitSelected || uniformDirectSelected || drawSplitSelected;
+               fragmentSplitSelected || uniformDirectSelected || drawSplitSelected || submitThreadSelected;
     }
     // A backend or drawing-feature choice (main_vita.cpp's play profile then stays off). The
     // digest, captures and GPU diagnostics do not count.

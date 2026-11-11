@@ -54,6 +54,7 @@ ConfigVar<bool>* flag(int key) {
     case TwvGameGyroAim: return &g.enableGyroAim;
     case TwvGameGyroInvertYaw: return &g.gyroInvertYaw;
     case TwvGameGyroInvertPitch: return &g.gyroInvertPitch;
+    case TwvGameFreeCamera: return &g.freeCamera;
     case TwvGameCameraInvertX: return &g.invertCameraXAxis;
     case TwvGameCameraInvertY: return &g.invertCameraYAxis;
     default: return nullptr;

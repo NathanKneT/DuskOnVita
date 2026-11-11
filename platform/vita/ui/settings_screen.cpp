@@ -145,6 +145,7 @@ int game_key(st::Id id) {
     case st::Id::GyroSensitivity: return TwvGameGyroSensitivity;
     case st::Id::GyroInvertYaw: return TwvGameGyroInvertYaw;
     case st::Id::GyroInvertPitch: return TwvGameGyroInvertPitch;
+    case st::Id::FreeCamera: return TwvGameFreeCamera;
     case st::Id::CameraInvertX: return TwvGameCameraInvertX;
     case st::Id::CameraInvertY: return TwvGameCameraInvertY;
     default: return -1;
