@@ -16,7 +16,7 @@ struct Data {unsigned vtxCount=32;};
 VertexDecoderControl vertexCullControl{bool(TWV_VITA_VERTEX_CULL)};
 uint64_t cacheValidationSerial=0,cullEligible=0,cullRejected=0,cullVertices=0,cullBytes=0,cullChecks=0,cullFailures=0;
 uint64_t residentReplayPackets=0,residentReplayBytes=0;
-int wideCacheMode=0; // --vita-fast-wide-cache: off in this seam (2 would decode every hit again)
+int wideCacheMode=0,patientCacheMode=0; // the cache switches: off in this seam (2 would decode every hit again)
 unsigned allocations=0,events=0;bool allocationFailure=false;
 std::array<uint8_t,4096> ring{};
 void* twv_vgl_alloc(std::size_t n){++allocations;assert(n<=ring.size());return allocationFailure?nullptr:ring.data();}

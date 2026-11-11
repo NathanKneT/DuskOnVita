@@ -123,6 +123,9 @@ constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
     // hands on the buttons compared 2,292 reads, no difference; the tick's input step went from
     // 1.5 ms per tick to about 1.05 ms per frame.
     twv::vita::FastActorOn,  // pad
+    // The pad values kept from SDL's events (aurora 0024): off until a console verify run with hands
+    // on the buttons.
+    twv::vita::FastActorOff, // pad-events
 };
 // GXM additions the play profile turns on unless the command line chooses (console, 10 Nov):
 // the pipeline memo (with gen-mode and pipeline-info the worker's pipeline step fell from 10.7 to

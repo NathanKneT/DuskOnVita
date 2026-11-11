@@ -65,6 +65,7 @@ int wideCacheMode=0;
 // decoder, its order within a vertex and the bytes are the same. 2 (verify): the packet is also
 // decoded in one piece and compared; that result is used and the differences are counted.
 int decodeBlocksMode=0;
+int patientCacheMode=0;
 uint64_t decodeBlockPackets=0,decodeBlockVertices=0,decodeBlockVerified=0,decodeBlockMismatches=0;
 uint64_t residentReplayPackets=0,residentReplayBytes=0;
 uint64_t cacheValidationSerial=0;
@@ -1127,6 +1128,9 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
     wideCacheMode=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(5):0;
     if(wideCacheMode && !geometryCache.set_ways(2*GeometryCache::WayCount))wideCacheMode=0;
     decodeBlocksMode=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(6):0;
+    // --vita-fast-patient-cache (option 7): on or verify; verify also decodes every hit again.
+    patientCacheMode=twv_vita_fast_painter_mode?twv_vita_fast_painter_mode(7):0;
+    geometryCache.set_patient(patientCacheMode!=0);
     residentAllocatorConfigured=true;
   }
   streamDecodeControl.begin();
@@ -1203,7 +1207,8 @@ void* build_gpu_vertices(const Pipeline& pipeline,const aurora::gx::DrawData& da
 #endif
     sample.mark(VertexWorkPhase::Lookup);
     if(cached.data && cached.bytes==outputBytes) {
-      validateCached=(TWV_VITA_CACHE_VALIDATE && (++cacheValidationSerial%256==0)) || wideCacheMode==2;
+      validateCached=(TWV_VITA_CACHE_VALIDATE && (++cacheValidationSerial%256==0)) || wideCacheMode==2 ||
+          patientCacheMode==2;
       if(!validateCached) {
 #if TWV_VITA_VERTEX_CULL
         if(vertexCullControl.enabled() && cached.pnSlots==1 && cached.bounds.valid){
@@ -1537,6 +1542,8 @@ void geometry_cache_report() noexcept {
   twv::vita::telemetryEvent("gfx_geometry_resident_releases",s.residentReleases);
   twv::vita::telemetryEvent("gfx_geometry_resident_hit_bytes",s.residentHitBytes);
   twv::vita::telemetryEvent("gfx_geometry_cache_ways",geometryCache.way_count());
+  twv::vita::telemetryEvent("gfx_geometry_cache_patient",geometryCache.is_patient());
+  twv::vita::telemetryEvent("gfx_geometry_cache_first_sightings",geometryCache.stats.firstSightings);
   if(decodeBlocksMode) {
     twv::vita::telemetryEvent("gfx_decode_blocks_mode",decodeBlocksMode);
     twv::vita::telemetryEvent("gfx_decode_blocks_packets",decodeBlockPackets);

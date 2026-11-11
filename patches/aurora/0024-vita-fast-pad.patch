@@ -8,9 +8,16 @@ the pad's SDL mapping does not have reads up without a call. The PADStatus is th
 Verify asks SDL every time as before, uses its answer and counts the reads whose kept value
 differed. Off (the default without the platform hook) is the unchanged code path.
 
+--vita-fast-pad-events=off|on|verify (switch 10, with --vita-fast-pad on; console, 10 Nov left PADRead at
+0.98 ms per frame, about 25 SDL calls): the kept values are no longer dropped at every pump but
+brought up to date by SDL's own gamepad button and axis events, which window::process_event hands
+to the pad code before any PADRead; SDL is asked only for a value not seen since the pad was added
+or remapped. Verify asks SDL every time, uses its answer and counts the reads whose kept value
+differed.
+
 --- a/lib/dolphin/pad/pad.cpp
 +++ b/lib/dolphin/pad/pad.cpp
-@@ -629,8 +629,109 @@ static void EnsureMappingLoaded(aurora::input::GameController* controller) {
+@@ -629,8 +629,158 @@ static void EnsureMappingLoaded(aurora::input::GameController* controller) {
    }
  }
  
@@ -23,12 +30,20 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +// and a button the pad's SDL mapping does not have reads up without asking (SDL_GamepadHasButton,
 +// kept until a pad is added, removed or remapped). Verify asks SDL every time as before, uses its
 +// answer and counts the reads where the kept value differed.
++//
++// --vita-fast-pad-events=off|on|verify (switch 10, with --vita-fast-pad on): the kept values are
++// no longer dropped at every pump. SDL changes a gamepad button or axis and posts its event in the
++// same step, and window::process_event hands every event to pad_memo_event below before PADRead
++// runs, so a kept value is brought up to date by its event and SDL is asked only for a value not
++// seen since the pad was added or remapped. Verify asks SDL every time, uses its answer and counts
++// the reads where the value kept from events differed.
 +extern "C" {
 +int twv_vita_fast_actor_mode(int which) __attribute__((weak));
 +void twv_vita_fast_actor_count(int which, int fast, int mismatch) __attribute__((weak));
 +}
 +namespace {
 +constexpr int TWV_FAST_PAD_SWITCH = 9;
++constexpr int TWV_FAST_PAD_EVENTS_SWITCH = 10;
 +struct PadMemo {
 +  const SDL_Gamepad* pad = nullptr;
 +  uint32_t pump = 0, mapping = 0;
@@ -38,6 +53,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +static_assert(SDL_GAMEPAD_BUTTON_COUNT <= 32 && SDL_GAMEPAD_AXIS_COUNT <= 32);
 +std::array<PadMemo, PAD_CHANMAX> g_padMemo;
 +int g_padFastMode = 0;          // this PADRead: 0 off, 1 on, 2 verify
++int g_padEventsMode = 0;        // the last PADRead: 0 values dropped at each pump, 1 kept from events, 2 verify
 +bool g_padMemoRefilled = false; // this PADRead asked SDL for a value
 +bool g_padMemoMismatch = false; // verify: a kept value differed from SDL's
 +
@@ -50,9 +66,30 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +    memo.pump = aurora::input::g_padPumpGeneration;
 +  } else if (memo.pump != aurora::input::g_padPumpGeneration) {
 +    memo.pump = aurora::input::g_padPumpGeneration;
-+    memo.buttonKnown = memo.axisKnown = 0;
++    if (g_padEventsMode == 0) {
++      memo.buttonKnown = memo.axisKnown = 0;
++    }
 +  }
 +  return memo;
++}
++
++// One gamepad button or axis event: the value SDL now answers for it, on every port that keeps
++// values for that pad.
++void pad_memo_update(const SDL_Gamepad* pad, const int button, const bool down, const int axis, const Sint16 value) {
++  for (PadMemo& memo : g_padMemo) {
++    if (memo.pad != pad || memo.mapping != aurora::input::g_padMappingGeneration) {
++      continue;
++    }
++    if (button >= 0 && button < SDL_GAMEPAD_BUTTON_COUNT) {
++      const uint32_t bit = 1u << button;
++      memo.buttonKnown |= bit;
++      memo.buttonDown = down ? (memo.buttonDown | bit) : (memo.buttonDown & ~bit);
++    }
++    if (axis >= 0 && axis < SDL_GAMEPAD_AXIS_COUNT) {
++      memo.axisKnown |= 1u << axis;
++      memo.axis[axis] = value;
++    }
++  }
 +}
 +
 +bool pad_button(const aurora::input::GameController* controller, const uint32_t port, const int button) {
@@ -82,7 +119,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +      down = (memo.buttonDown & bit) != 0;
 +    }
 +  }
-+  if (g_padFastMode == 2) {
++  if (g_padFastMode == 2 || g_padEventsMode == 2) {
 +    const bool reference = SDL_GetGamepadButton(controller->m_controller, native);
 +    if (reference != down) {
 +      g_padMemoMismatch = true;
@@ -104,7 +141,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +    memo.axis[axis] = SDL_GetGamepadAxis(controller->m_controller, native);
 +    g_padMemoRefilled = true;
 +  }
-+  if (g_padFastMode == 2) {
++  if (g_padFastMode == 2 || g_padEventsMode == 2) {
 +    const Sint16 reference = SDL_GetGamepadAxis(controller->m_controller, native);
 +    if (reference != memo.axis[axis]) {
 +      g_padMemoMismatch = true;
@@ -115,13 +152,32 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +}
 +} // namespace
 +
++namespace aurora::input {
++void pad_memo_event(const SDL_Event& event) noexcept {
++  if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED ||
++      event.type == SDL_EVENT_GAMEPAD_REMAPPED) {
++    ++g_padMappingGeneration;
++    return;
++  }
++  if (g_padEventsMode == 0) {
++    return;
++  }
++  if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
++    pad_memo_update(SDL_GetGamepadFromID(event.gbutton.which), event.gbutton.button,
++                    event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN, -1, 0);
++  } else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
++    pad_memo_update(SDL_GetGamepadFromID(event.gaxis.which), -1, false, event.gaxis.axis, event.gaxis.value);
++  }
++}
++} // namespace aurora::input
++
  static Sint16 _get_axis_value(const aurora::input::GameController* controller, //  NOLINT(*-reserved-identifier)
 -                              PADAxis axis) {
 +                              PADAxis axis, const uint32_t port) {
    const auto iter =
        std::ranges::find_if(controller->m_axisMapping, [axis](const auto& pair) { return pair.padAxis == axis; });
    if (iter == controller->m_axisMapping.end()) {
-@@ -640,13 +741,11 @@ static Sint16 _get_axis_value(const aurora::input::GameController* controller, /
+@@ -640,13 +790,11 @@ static Sint16 _get_axis_value(const aurora::input::GameController* controller, /
    if (iter->nativeAxis.nativeAxis != -1) {
      const auto [nativeAxis, sign] = iter->nativeAxis;
      // clamp value to avoid overflow when casting to Sint16 if -32768 is negated
@@ -137,11 +193,12 @@ differed. Off (the default without the platform hook) is the unchanged code path
      return SDL_JOYSTICK_AXIS_MAX;
    }
    return 0;
-@@ -801,11 +900,13 @@ u32 PADRead(PADStatus* status) {
+@@ -801,11 +949,14 @@ u32 PADRead(PADStatus* status) {
  
      if (controller) {
        EnsureMappingLoaded(controller);
 +      g_padFastMode = twv_vita_fast_actor_mode ? twv_vita_fast_actor_mode(TWV_FAST_PAD_SWITCH) : 0;
++      g_padEventsMode = g_padFastMode != 0 ? twv_vita_fast_actor_mode(TWV_FAST_PAD_EVENTS_SWITCH) : 0;
 +      g_padMemoRefilled = g_padMemoMismatch = false;
        bool leftTriggerSet = false;
        bool rightTriggerSet = false;
@@ -152,7 +209,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
            status[i].button |= mapping.padButton;
          }
  
-@@ -837,15 +938,15 @@ u32 PADRead(PADStatus* status) {
+@@ -837,15 +988,15 @@ u32 PADRead(PADStatus* status) {
        }};
  
        for (const auto& [native, button] : kExtButtonMappings) {
@@ -173,7 +230,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
  
        auto xl = static_cast<Sint16>((xlPos + -xlNeg) / 2);
        // SDL's gamepad y-axis is inverted from GC's
-@@ -869,10 +970,10 @@ u32 PADRead(PADStatus* status) {
+@@ -869,10 +1020,10 @@ u32 PADRead(PADStatus* status) {
        status[i].stickX = static_cast<int8_t>(xl);
        status[i].stickY = static_cast<int8_t>(yl);
  
@@ -188,7 +245,7 @@ differed. Off (the default without the platform hook) is the unchanged code path
  
        auto xr = static_cast<Sint16>((xrPos + -xrNeg) / 2);
        // SDL's gamepad y-axis is inverted from GC's
-@@ -897,8 +998,8 @@ u32 PADRead(PADStatus* status) {
+@@ -897,8 +1048,8 @@ u32 PADRead(PADStatus* status) {
        status[i].substickX = static_cast<int8_t>(xr);
        status[i].substickY = static_cast<int8_t>(yr);
  
@@ -199,13 +256,17 @@ differed. Off (the default without the platform hook) is the unchanged code path
  
        if (controller->m_deadZones.emulateTriggers) {
          if (!leftTriggerSet && tl > controller->m_deadZones.leftTriggerActivationZone) {
-@@ -922,6 +1023,11 @@ u32 PADRead(PADStatus* status) {
+@@ -922,6 +1073,15 @@ u32 PADRead(PADStatus* status) {
          status[i].triggerRight = 180;
        }
  
 +      if (g_padFastMode != 0 && twv_vita_fast_actor_count) {
 +        twv_vita_fast_actor_count(TWV_FAST_PAD_SWITCH, g_padMemoRefilled ? 2 : 1,
 +                                  g_padFastMode == 2 ? (g_padMemoMismatch ? 1 : 0) : -1);
++        if (g_padEventsMode != 0) {
++          twv_vita_fast_actor_count(TWV_FAST_PAD_EVENTS_SWITCH, g_padMemoRefilled ? 2 : 1,
++                                    g_padEventsMode == 2 ? (g_padMemoMismatch ? 1 : 0) : -1);
++        }
 +      }
 +
        if (controller->m_hasRumble) {
@@ -224,7 +285,15 @@ differed. Off (the default without the platform hook) is the unchanged code path
  constexpr Module Log{"aurora::input"};
 --- a/lib/input.hpp
 +++ b/lib/input.hpp
-@@ -43,6 +43,11 @@ struct GameController {
+@@ -2,6 +2,7 @@
+ 
+ #include <string>
+ #include "dolphin/pad.h" // For PADDeaZones and PADButtonMapping
++#include "SDL3/SDL_events.h"
+ #include "SDL3/SDL_gamepad.h"
+ #include "SDL3/SDL_keyboard.h"
+ #include "SDL3/SDL_keycode.h"
+@@ -43,6 +44,14 @@ struct GameController {
  };
  
  GameController* get_controller_for_player(uint32_t player) noexcept;
@@ -233,12 +302,23 @@ differed. Off (the default without the platform hook) is the unchanged code path
 +// its calls; mappingGeneration counts the gamepad added, removed and remapped events it saw.
 +extern uint32_t g_padPumpGeneration;
 +extern uint32_t g_padMappingGeneration;
++// Every SDL event window::process_event sees (--vita-fast-pad-events, lib/dolphin/pad/pad.cpp):
++// gamepad button and axis events update the values PADRead keeps.
++void pad_memo_event(const SDL_Event& event) noexcept;
  Sint32 get_instance_for_player(uint32_t player) noexcept;
  SDL_JoystickID add_controller(SDL_JoystickID which) noexcept;
  void remove_controller(Uint32 instance) noexcept;
 --- a/lib/window.cpp
 +++ b/lib/window.cpp
-@@ -306,10 +306,16 @@ const AuroraEvent* poll_events() {
+@@ -179,6 +179,7 @@ void sync_paused() {
+ 
+ void process_event(SDL_Event& event) {
+   const bool primaryWindow = targets_primary_window(&event);
++  input::pad_memo_event(event);
+   if (primaryWindow) {
+ #ifdef AURORA_ENABLE_GX
+     imgui::process_event(event);
+@@ -306,10 +307,16 @@ const AuroraEvent* poll_events() {
      }
      if (hasEvent) {
        process_event(event);

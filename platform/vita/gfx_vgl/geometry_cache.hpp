@@ -85,6 +85,17 @@ class GeometryCacheImpl {
     // The group a key is looked for in: Ways entries by default, 2*Ways after set_ways (the same
     // entries in half as many, twice as large groups).
     unsigned ways=Ways,sets=Sets;
+    // --vita-fast-patient-cache (set_patient). On the console (10 Nov): Kakariko stored 77 packets per frame
+    // again and again. A packet of an animated model reads one of two vertex buffers in turn, so
+    // its key is new every frame: it missed, was decoded and copied into the cache, and was
+    // released at the end of the next frame, where the other buffer's key missed in its turn. The
+    // grass is one packet with a new vertex count, so a new key, every frame. Patient: the first
+    // sighting of a key only remembers the key; the packet is stored when the key is seen again
+    // while remembered, and an entry is kept through one frame in which it is not used. The two
+    // buffers' keys are then both remembered; an animated one fails its source comparison once
+    // and pauses for 30 frames without being stored, a still one hits. What is drawn is decided
+    // by the same certificate or source comparison as before.
+    bool patient=false;
     size_t limit,usedBytes=0,residentUsedBytes=0;
     uint64_t frame=1,serial=0;
     bool saturated=false;
@@ -123,7 +134,7 @@ public:
         budgetDeferrals=0,setDeferrals=0,admissionBlocked=0,budgetEvictions=0,memoryTrims=0,neonLookups=0,
         validationSpanBytes=0,validationSpans=0,residentBytes=0,residentStores=0,
         residentFallbacks=0,residentReleases=0,residentHitBytes=0,
-        staticHits=0,staticVerified=0,staticMismatches=0,staticCertified=0,staticStores=0;} stats;
+        staticHits=0,staticVerified=0,staticMismatches=0,staticCertified=0,staticStores=0,firstSightings=0;} stats;
     struct Lookup {const uint8_t* data;size_t bytes;bool mayStore;unsigned pnSlots=10;PositionBounds bounds{};bool resident=false;};
     explicit GeometryCacheImpl(size_t bytes=8*1024*1024):limit(bytes){}
     ~GeometryCacheImpl(){clear();}
@@ -143,6 +154,8 @@ public:
         ways=count;sets=EntryCount/count;return true;
     }
     unsigned way_count()const{return ways;}
+    void set_patient(bool enabled){patient=enabled;}
+    bool is_patient()const{return patient;}
     bool neon_compare_enabled()const{return neonCompare;}
     void defer(uint32_t hash,const GeometryKey& key) {
         const unsigned set=hash&(sets-1);
@@ -159,9 +172,15 @@ public:
         auto* e=matching(set,key);
         if(!e){
             ++stats.misses;
-            const bool room=replacement(set)!=nullptr;
+            Entry* spare=replacement(set);
+            const bool room=spare!=nullptr;
             if(!room)++stats.setDeferrals;
             if(saturated || !room)++stats.admissionBlocked;
+            if(patient && room && !saturated) { // first sighting: the key only
+                release(*spare);*spare=Entry{};spare->key=key;spare->frame=frame;spare->use=++serial;
+                ++stats.firstSightings;
+                return {nullptr,0,false};
+            }
             return {nullptr,0,!saturated && room};
         }
         e->frame=frame;e->use=++serial;
@@ -250,7 +269,8 @@ public:
         return true;
     }
     void end_frame() {
-        for(auto& e:entries)if(e.frame && e.frame!=frame){release(e);e=Entry{};}
+        // Released when not used in the frame that ends; patient: nor in the one before it.
+        for(auto& e:entries)if(e.frame && (patient?e.frame+1<frame:e.frame!=frame)){release(e);e=Entry{};}
         ++frame;
     }
     void clear(){for(auto& e:entries){release(e);e=Entry{};}saturated=false;}

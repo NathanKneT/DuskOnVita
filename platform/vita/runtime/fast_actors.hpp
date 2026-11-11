@@ -34,13 +34,17 @@ constexpr const char* FastActorModeNames[] = {"off", "on", "verify"};
 //    cannot change in between): each button or axis is asked once per pump instead of once per use
 //    per tick, and buttons the pad's mapping does not have are not asked. Verify asks every time
 //    and counts the reads whose kept value differed.
+//  pad-events (aurora 0024, with pad on): the kept values are not dropped at each pump but brought
+//    up to date by SDL's own gamepad button and axis events; SDL is asked only for a value not seen
+//    since the pad was added or remapped. Verify asks every time and counts the differences.
 enum FastActorSwitch : int { FastObstacle = 0, FastSearch = 1, FastBgList = 2, FastFlowBind = 3,
                              FastMtx = 4, FastSearchIndex = 5, FastHair = 6, FastRnd = 7, FastEnvelopes = 8,
-                             FastPad = 9,
+                             FastPad = 9, FastPadEvents = 10,
                              FastActorSwitchCount };
 constexpr const char* FastActorSwitchNames[FastActorSwitchCount] = {"obstacle", "search", "bg-list",
                                                                     "flow-bind", "mtx", "search-index",
-                                                                    "hair", "rnd", "envelopes", "pad"};
+                                                                    "hair", "rnd", "envelopes", "pad",
+                                                                    "pad-events"};
 
 // "--vita-fast-<name>=off|on|verify" for a known name: 1 (choices[name] set), -1 for another value
 // or a second time, 0 for any other token.

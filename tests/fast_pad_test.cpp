@@ -164,6 +164,57 @@ int main() {
     pads[0].has |= 1u << 20; // a mapping change without its event
     pads[0].down |= 1u << 20;
     assert(pad_button(&ports[0], 0, 20) && g_padMemoMismatch);
+
+    // --vita-fast-pad-events: the values are kept across pumps and brought up to date by events.
+    // The fake SDL changes its state at a pump and reports each changed button of the mapping and
+    // each changed axis, as SDL does; every answer equals SDL's and, once a value has been seen,
+    // SDL is not asked for it again.
+    g_padFastMode = 1;
+    g_padEventsMode = 1;
+    g_padMemoMismatch = false;
+    for (unsigned i = 0; i < PAD_CHANMAX; ++i) ports[i].m_controller = &pads[i];
+    ++aurora::input::g_padMappingGeneration;
+    ++aurora::input::g_padPumpGeneration;
+    const auto read_port = [&](unsigned port) {
+        const auto* pad = ports[port].m_controller;
+        for (int b = -1; b <= SDL_GAMEPAD_BUTTON_COUNT; ++b) assert(pad_button(&ports[port], port, b) == fake_button(pad, b));
+        for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; ++a) assert(pad_axis(&ports[port], port, a) == pad->axis[a]);
+    };
+    for (unsigned port = 0; port < PAD_CHANMAX; ++port) read_port(port); // first sight: asked once
+    asked_reset();
+    uint64_t eventReads = 0;
+    for (unsigned step = 0; step < 5000; ++step) {
+        for (unsigned p = 0; p < PAD_CHANMAX; ++p) { // a pump: changes, each with its event
+            SDL_Gamepad before = pads[p];
+            change(pads[p]);
+            for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b)
+                if ((pads[p].has & (1u << b)) && fake_button(&before, b) != fake_button(&pads[p], b))
+                    pad_memo_update(&pads[p], b, fake_button(&pads[p], b), -1, 0);
+            for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; ++a)
+                if (before.axis[a] != pads[p].axis[a]) pad_memo_update(&pads[p], -1, false, a, pads[p].axis[a]);
+        }
+        ++aurora::input::g_padPumpGeneration;
+        read_port(next() % PAD_CHANMAX);
+        ++eventReads;
+    }
+    unsigned stateQuestions = hasAsked;
+    for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b) stateQuestions += buttonAsked[b];
+    for (unsigned v : axisAsked) stateQuestions += v;
+    assert(eventReads == 5000 && stateQuestions == 0 && !g_padMemoMismatch);
+    // A remap: the mapping is asked again and the values are seen afresh.
+    pads[0].has = ~pads[0].has;
+    ++aurora::input::g_padMappingGeneration;
+    read_port(0);
+    assert(hasAsked == unsigned(SDL_GAMEPAD_BUTTON_COUNT));
+    // Verify: a change whose event never arrived is reported, and SDL's answer is used.
+    g_padEventsMode = 2;
+    g_padMemoMismatch = false;
+    read_port(1);
+    assert(!g_padMemoMismatch);
+    pads[1].axis[3] = Sint16(pads[1].axis[3] ^ 0x100);
+    ++aurora::input::g_padPumpGeneration;
+    assert(pad_axis(&ports[1], 1, 3) == pads[1].axis[3] && g_padMemoMismatch);
+    g_padEventsMode = 0;
     std::puts("fast_pad_test ok");
     return 0;
 }

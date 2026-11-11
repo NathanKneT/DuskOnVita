@@ -118,6 +118,54 @@ int main() {
     assert(!wide.set_ways(4)); // entries in use
     wide.clear();wide.end_frame();
 
+    // --vita-fast-patient-cache. A still packet: remembered, stored, then hit.
+    // (On the heap: the caches above already fill most of the stack.)
+    const auto waitingOwner=std::make_unique<GeometryCacheImpl<4>>(1<<20);
+    auto& waiting=*waitingOwner;
+    assert(!waiting.is_patient());waiting.set_patient(true);assert(waiting.is_patient());
+    uint8_t stillInput[8]={9},stillOutput[16]={21};
+    SourceSpan stillSpan{stillInput,8};
+    GeometryKey stillKey=key;stillKey.pipeline=400;
+    assert(!waiting.lookup(5,stillKey).mayStore && waiting.stats.firstSightings==1 && waiting.bytes()==0);
+    waiting.end_frame();
+    assert(waiting.lookup(5,stillKey).mayStore && waiting.store(5,stillKey,&stillSpan,1,stillOutput,16));
+    waiting.end_frame();
+    assert(waiting.lookup(5,stillKey).data[0]==21);
+    waiting.end_frame();waiting.end_frame(); // one frame without use keeps it, two release it
+    assert(waiting.lookup(5,stillKey).data[0]==21);
+    waiting.end_frame();waiting.end_frame();waiting.end_frame();
+    assert(!waiting.lookup(5,stillKey).data && waiting.bytes()==0);
+    waiting.clear();waiting.end_frame();
+    // An animated model: two buffers in turn (two keys), their bytes new every frame. Eager stores
+    // one packet every frame; patient stores each key once per pause. A still model on two
+    // buffers: eager stores every frame, patient hits. The grass: a new key every frame; eager
+    // stores every frame, patient never. Whatever is returned is the packet's current output.
+    for(int kind=0;kind<3;++kind) {
+        const auto eagerOwner=std::make_unique<GeometryCacheImpl<4>>(1<<20);
+        const auto patientOwner=std::make_unique<GeometryCacheImpl<4>>(1<<20);
+        auto& a=*eagerOwner;auto& b=*patientOwner;b.set_patient(true);
+        uint8_t input[2][8]{},output[16]{};
+        uint64_t eagerHits=0,patientHits=0;
+        for(unsigned frame=0;frame<200;++frame) {
+            const unsigned buffer=frame&1;
+            GeometryKey k=key;k.pipeline=500+kind;
+            if(kind==2)k.vertexCount=1000+frame;else k.arrays[0]=7000+buffer;
+            if(kind!=1)input[buffer][0]=uint8_t(frame); // animated or rebuilt: new bytes
+            output[0]=uint8_t(kind==1?77:frame);
+            SourceSpan in{input[buffer],8};
+            const auto visit=[&](auto& c,uint64_t& hits) {
+                auto found=c.lookup(9,k);
+                if(found.data){assert(found.data[0]==output[0]);++hits;}
+                else if(found.mayStore)assert(c.store(9,k,&in,1,output,16));
+            };
+            visit(a,eagerHits);visit(b,patientHits);
+            a.end_frame();b.end_frame();
+        }
+        if(kind==0) assert(a.stats.stores==200 && !eagerHits && b.stats.stores<=16 && !patientHits);
+        if(kind==1) assert(a.stats.stores==200 && !eagerHits && b.stats.stores==2 && patientHits==196);
+        if(kind==2) assert(a.stats.stores==200 && !eagerHits && b.stats.stores==0 && !patientHits);
+    }
+
     GeometryCache tiny(31);
     assert(!tiny.store(0,key,spans,2,packet,16) && tiny.bytes()==0);
     assert(!tiny.lookup(0,key).mayStore); // Rejected spans must not be rescanned every frame.
