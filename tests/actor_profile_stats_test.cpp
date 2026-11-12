@@ -34,7 +34,7 @@ int main() {
     TypeStats t; t.execUs = 1200; t.drawUs = 340; t.execCalls = 8; t.drew = 6; t.culledFrustum = 1;
     t.culledFar = 1; t.actor = true;
     type_text(text, sizeof text, "Npc_ne", 254, t);
-    CHECK(std::strcmp(text, "n=Npc_ne;p=254;a=1;ex=1200;dw=340;ce=8;cd=6;cf=1;cr=1;cs=0") == 0);
+    CHECK(std::strcmp(text, "n=Npc_ne;p=254;a=1;ex=1200;dw=340;ce=8;cd=6;cf=1;cr=1;cs=0;dh=0") == 0);
     PartStats s; s.us[PartCalc] = 900; s.calls[PartCalc] = 30; s.us[PartView] = 100; s.calls[PartView] = 30;
     part_text(text, sizeof text, WhereNames[WhereDrawNonfinal], s);
     CHECK(std::strcmp(text, "w=draw_nonfinal;us=900,0,0,0,100;n=30,0,0,0,30") == 0);

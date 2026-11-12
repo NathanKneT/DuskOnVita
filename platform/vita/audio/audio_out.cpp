@@ -51,6 +51,9 @@ struct State {
     std::atomic<std::int32_t> deviceError{0};
     std::atomic<std::uint64_t> renderWallUs{0}, renderRunClocks{0}, lateWallUs{0}, lateRunClocks{0};
     std::atomic<bool> highPriority{false};
+    std::atomic<bool> subframePull{false};
+    std::atomic<std::uint32_t> pulls{0}, buffersWithoutPull{0}, renderHist[8];
+    std::atomic<std::uint64_t> putFrames{0};
 };
 State gState;
 
@@ -70,9 +73,11 @@ std::int16_t to_s16(float v) {
 // Fills one device buffer from the FIFO, pulling more frames first if needed.
 void render(std::int16_t* out) {
     constexpr std::size_t want = kFrames * kChannels;
+    if (gState.fifo.size() - gState.fifoRead >= want) gState.buffersWithoutPull.fetch_add(1, std::memory_order_relaxed);
     while (gState.fifo.size() - gState.fifoRead < want) {
         const std::size_t have = gState.fifo.size() - gState.fifoRead;
         const std::size_t before = gState.fifo.size();
+        gState.pulls.fetch_add(1, std::memory_order_relaxed);
         gState.pull(static_cast<int>((want - have) * sizeof(float)));
         if (gState.fifo.size() == before) {
             // The renderer produced nothing: pad with silence rather than spin.
@@ -111,6 +116,9 @@ int worker(SceSize, void*) {
                 gState.maxRenderUs.store(took, std::memory_order_relaxed);
             }
             gState.renderWallUs.fetch_add(took, std::memory_order_relaxed);
+            const unsigned bin = took < 2000 ? 0 : took < 4000 ? 1 : took < 6000 ? 2 : took < 8000 ? 3 :
+                                 took <= bufferUs ? 4 : took < 13000 ? 5 : took < 16000 ? 6 : 7;
+            gState.renderHist[bin].fetch_add(1, std::memory_order_relaxed);
             gState.renderRunClocks.fetch_add(ran, std::memory_order_relaxed);
             if (took > bufferUs) {
                 gState.late.fetch_add(1, std::memory_order_relaxed);
@@ -177,6 +185,7 @@ bool open(int sampleRate, int channels, PullFn pull) {
 void put(const float* interleaved, std::size_t bytes) {
     const std::size_t count = bytes / sizeof(float);
     gState.fifo.insert(gState.fifo.end(), interleaved, interleaved + count);
+    gState.putFrames.fetch_add(count / kChannels, std::memory_order_relaxed);
 }
 
 void resume() { gState.paused.store(false, std::memory_order_release); }
@@ -218,10 +227,19 @@ Stats stats() {
     s.renderRunClocks = gState.renderRunClocks.load(std::memory_order_relaxed);
     s.lateWallUs = gState.lateWallUs.load(std::memory_order_relaxed);
     s.lateRunClocks = gState.lateRunClocks.load(std::memory_order_relaxed);
+    s.pulls = gState.pulls.load(std::memory_order_relaxed);
+    s.buffersWithoutPull = gState.buffersWithoutPull.load(std::memory_order_relaxed);
+    s.putFrames = gState.putFrames.load(std::memory_order_relaxed);
+    for (int i = 0; i < 8; ++i) s.renderHist[i] = gState.renderHist[i].load(std::memory_order_relaxed);
     return s;
 }
 void setHighPriority(bool on) { gState.highPriority.store(on, std::memory_order_relaxed); }
 bool highPriority() { return gState.highPriority.load(std::memory_order_relaxed); }
+void setSubframePull(bool on) { gState.subframePull.store(on, std::memory_order_relaxed); }
+bool subframePull() { return gState.subframePull.load(std::memory_order_relaxed); }
 std::int32_t threadId() { return gState.thread; }
 
 }  // namespace twv::vita::audio
+
+// patches/dusklight/0067 (DuskAudioSystem.cpp, on the audio thread): 1 with --vita-audio-pull=subframe.
+extern "C" int twv_vita_audio_subframe_pull(void) { return twv::vita::audio::subframePull() ? 1 : 0; }

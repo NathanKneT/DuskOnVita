@@ -570,6 +570,8 @@ int main(int, char**) {
     int syncLoadsChoice = -1;
     // --vita-audio-priority=default|high (audio/audio_out.hpp): the sound thread's priority.
     int audioPriorityChoice = -1;
+    // --vita-audio-pull=frame|subframe (audio/audio_out.hpp): how much sound one render call makes.
+    int audioPullChoice = -1;
     // --vita-place=X,Y,Z,ANGLE (runtime/visual_skips.hpp): bench lines only.
     bool placeChosen = false;
     float placeX = 0.0f, placeY = 0.0f, placeZ = 0.0f;
@@ -627,6 +629,13 @@ int main(int, char**) {
                     argsExit();
                 }
                 placeChosen = true;
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-audio-pull=", "frame", "subframe", audioPullChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-audio-pull needs frame or subframe, once");
+                    argsExit();
+                }
                 continue;
             }
             if (const int choice = wordOption(token, "--vita-audio-priority=", "default", "high", audioPriorityChoice)) {
@@ -991,6 +1000,8 @@ int main(int, char**) {
     if (stateDigestChoice == 1) twv::vita::telemetryText("state_digest", "on");
     twv_vita_sync_loads_select(syncLoadsChoice == 1);
     twv::vita::audio::setHighPriority(audioPriorityChoice == 1);
+    twv::vita::audio::setSubframePull(audioPullChoice == 1);
+    if (audioPullChoice == 1) twv::vita::telemetryText("audio_pull", "subframe");
     if (placeChosen) {
         twv_vita_place_select(placeX, placeY, placeZ, placeAngle);
         twv::vita::telemetryText("place", "on");

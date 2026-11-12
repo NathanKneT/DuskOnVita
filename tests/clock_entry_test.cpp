@@ -271,6 +271,7 @@ extern "C" void twv_vita_place_select(float, float, float, int) {}
 // audio/audio_out.hpp: --vita-audio-priority.
 namespace twv::vita::audio {
 void setHighPriority(bool) {}
+void setSubframePull(bool) {}
 }
 extern "C" void twv_vita_fast_present_bg_select(int) {}
 extern "C" void twv_vita_fast_particle_palette_select(int) {}

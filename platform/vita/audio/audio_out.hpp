@@ -25,6 +25,12 @@ struct Stats {
     // and over the late ones alone. A late buffer with few run clocks for its wall time waited
     // (another thread had core 2, or a lock was held); one with the usual rate was real work.
     std::uint64_t renderWallUs = 0, renderRunClocks = 0, lateWallUs = 0, lateRunClocks = 0;
+    // How the rendering is chunked: calls of the pull function, the frames it handed to put(),
+    // rendered buffers that needed no pull, and the buffers' render wall time by bin
+    // (under 2, 4, 6, 8 ms, under one buffer period of 10.67 ms, under 13, 16 ms, and above).
+    std::uint32_t pulls = 0, buffersWithoutPull = 0;
+    std::uint64_t putFrames = 0;
+    std::uint32_t renderHist[8] = {};
 };
 
 // "--vita-audio-priority=default|high" (before open()): high puts the worker 16 steps above the
@@ -32,6 +38,13 @@ struct Stats {
 // while a buffer is due. Default keeps the priority every console run so far has used.
 void setHighPriority(bool on);
 bool highPriority();
+
+// "--vita-audio-pull=frame|subframe" (before open(); patches/dusklight/0067): how much the pull
+// function renders per call. frame (the default, as upstream): a whole sound frame, 800 samples
+// at 48 kHz, so two device buffers in three carry a frame's work and the third none. subframe:
+// 80 samples per call, the same subframes in the same order, spread evenly over the buffers.
+void setSubframePull(bool on);
+bool subframePull();
 
 // Opens the port and starts the worker, paused (silence) until resume().
 // Only 48000 Hz stereo is accepted (the MAIN port's fixed rate; the Vita has stereo output).

@@ -122,6 +122,15 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     twv::vita::telemetryEvent("audio_render_run_clocks",(long long)audio.renderRunClocks);
     twv::vita::telemetryEvent("audio_late_wall_us",(long long)audio.lateWallUs);
     twv::vita::telemetryEvent("audio_late_run_clocks",(long long)audio.lateRunClocks);
+    // How the rendering is chunked (audio/audio_out.hpp): pulls, frames per pull, the render time by bin.
+    twv::vita::telemetryEvent("audio_pulls",audio.pulls);
+    twv::vita::telemetryEvent("audio_put_frames",(long long)audio.putFrames);
+    twv::vita::telemetryEvent("audio_buffers_without_pull",audio.buffersWithoutPull);
+    {char hist[128];
+     std::snprintf(hist,sizeof hist,"%u,%u,%u,%u,%u,%u,%u,%u",(unsigned)audio.renderHist[0],(unsigned)audio.renderHist[1],
+         (unsigned)audio.renderHist[2],(unsigned)audio.renderHist[3],(unsigned)audio.renderHist[4],(unsigned)audio.renderHist[5],
+         (unsigned)audio.renderHist[6],(unsigned)audio.renderHist[7]);
+     twv::vita::telemetryText("audio_render_hist_ms_2_4_6_8_period_13_16_more",hist);}
     twv::vita::telemetryFlush();
 }
 void memory_receipts() {

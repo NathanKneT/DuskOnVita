@@ -1,0 +1,45 @@
+Vita: --vita-audio-pull=frame|subframe (frame by default). At 48 kHz the sound renderer makes
+16.7 ms of sound per call for a 10.7 ms device buffer, so two buffers in three carry a whole
+frame's work and the third none; where a frame costs more than a buffer lasts, buffers are late
+(Palace of Twilight on the console, 13 Nov: a third of them). subframe renders one 80-sample
+subframe per call: the same subframes in the same order, spread evenly over the buffers.
+
+--- a/src/dusk/audio/DuskAudioSystem.cpp
++++ b/src/dusk/audio/DuskAudioSystem.cpp
+@@ -220,9 +220,36 @@ void SDLCALL GetNewAudio(
+     FrameMarkEnd(FrameName);
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0067): --vita-audio-pull=frame|subframe (twilight-vita:
++// platform/vita/audio/audio_out.hpp). At 48 kHz a sound frame is ten subframes of 80 samples:
++// 16.7 ms of sound per call, for a device buffer of 10.7 ms. Two buffers in three then render a
++// whole frame and the third none, and in rooms where a frame costs more than a buffer lasts the
++// buffer is late (Palace of Twilight on the console, 13 Nov: 2,132 of 6,652 buffers). subframe:
++// one call renders one subframe, so every buffer renders six or seven of them. The subframes,
++// their order and the counter they read (snIntCount) are the same; the critical section is held
++// per subframe instead of per frame, which is how the console's own DSP interrupts pace them.
++extern "C" int twv_vita_audio_subframe_pull(void);
++static u32 s_twvSubframesLeft = 0; // of the sound frame in progress (audio thread only)
++#endif
++
+ int RenderNewAudioFrame() {
+     ZoneScoped;
+     JASCriticalSection section;
++#if TARGET_VITA
++    if (twv_vita_audio_subframe_pull() != 0 || s_twvSubframesLeft != 0) {
++        if (s_twvSubframesLeft == 0) {
++            s_twvSubframesLeft = JASDriver::getSubFrames();
++            JASAudioThread::setDSPSyncCount(s_twvSubframesLeft);
++        }
++        if (s_twvSubframesLeft != 0) {
++            const int bytes = RenderAudioSubframe();
++            JASAudioThread::snIntCount -= 1;
++            --s_twvSubframesLeft;
++            return bytes;
++        }
++    }
++#endif
+     const u32 countSubframes = JASDriver::getSubFrames();
+     int bytesWritten = 0;
+ 

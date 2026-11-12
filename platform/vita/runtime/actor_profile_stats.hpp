@@ -36,6 +36,8 @@ constexpr const char* WhereNames[WhereCount] = {"execute", "draw_final", "draw_n
 
 struct TypeStats {
     uint32_t execUs = 0, drawUs = 0;
+    // Of drawUs: in a tick that another tick follows before the frame is painted (a hidden step).
+    uint32_t drawHiddenUs = 0;
     uint32_t execCalls = 0, drew = 0, culledFrustum = 0, culledFar = 0, skipped = 0;
     int argument = 0;
     bool actor = false;
@@ -69,10 +71,10 @@ inline std::size_t top_types(const TypeStats* types, std::size_t count, unsigned
 
 // One receipt line per type: name, profile, execute/draw us, and the counts over the sampled ticks.
 inline int type_text(char* out, std::size_t size, const char* name, unsigned slot, const TypeStats& t) {
-    return std::snprintf(out, size, "n=%s;p=%u;a=%d;ex=%lu;dw=%lu;ce=%lu;cd=%lu;cf=%lu;cr=%lu;cs=%lu",
+    return std::snprintf(out, size, "n=%s;p=%u;a=%d;ex=%lu;dw=%lu;ce=%lu;cd=%lu;cf=%lu;cr=%lu;cs=%lu;dh=%lu",
         name, slot, t.actor ? 1 : 0, (unsigned long)t.execUs, (unsigned long)t.drawUs,
         (unsigned long)t.execCalls, (unsigned long)t.drew, (unsigned long)t.culledFrustum,
-        (unsigned long)t.culledFar, (unsigned long)t.skipped);
+        (unsigned long)t.culledFar, (unsigned long)t.skipped, (unsigned long)t.drawHiddenUs);
 }
 
 inline int part_text(char* out, std::size_t size, const char* where, const PartStats& s) {

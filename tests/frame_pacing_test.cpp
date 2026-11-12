@@ -24,14 +24,18 @@ namespace twv::vita {
 void telemetryEvent(const char* key,int64_t value){receipts[key]=value;}
 void telemetryText(const char* key,const char* value){
     assert(std::string(value).size()<=254);
-    textReceipts[key]=value;histogramOrder.emplace_back(key);
+    textReceipts[key]=value;
+    // The order check is about the frame-interval histogram's records; the report's other text
+    // receipts (the sound render time by bin) are not part of it.
+    if(std::string(key).rfind("prof_interval_hist",0)==0)histogramOrder.emplace_back(key);
 }
 void telemetryFlush(){++flushes;}
 // Free-play thinning (telemetry.hpp) is off in this seam: every window reports.
 constexpr unsigned QuietReceiptFrames=300;
 bool telemetryIsQuiet(){return false;}
 namespace audio {
-struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0,renderWallUs=0,renderRunClocks=0,lateWallUs=0,lateRunClocks=0;};
+struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0,renderWallUs=0,renderRunClocks=0,lateWallUs=0,lateRunClocks=0;
+              uint32_t pulls=0,buffersWithoutPull=0;uint64_t putFrames=0;uint32_t renderHist[8]={};};
 Stats stats(){return {};}
 }
 }

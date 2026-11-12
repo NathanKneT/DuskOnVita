@@ -78,8 +78,27 @@ ACTPROF_COUNTS = ('frames', 'frames_0tick', 'frames_1tick', 'frames_2tick', 'tic
                   'nonactor_draw_self_us', 'handler_exec_us', 'handler_draw_us', 'drew', 'culled_frustum',
                   'culled_far', 'skipped', 'j3d_frames', 'j3d_ticks', 'j3d_exec_us', 'j3d_draw_final_us',
                   'j3d_draw_final_ticks', 'j3d_draw_nonfinal_us', 'j3d_draw_nonfinal_ticks', 'painter_frames',
-                  'painter_us', 'painter_j3d_us', 'painter_j3d_calls', 'reads')
+                  'painter_us', 'painter_j3d_us', 'painter_j3d_calls', 'reads',
+                  # Hidden steps (ticks another tick follows before the paint), actor frames only.
+                  'actor_hidden_ticks', 'handler_draw_hidden_us', 'actor_draw_hidden_us',
+                  'nonactor_draw_self_hidden_us')
 J3D_PARTS = ('calc', 'material', 'diff', 'entry', 'view')
+
+
+def hidden_split(total, types, top=6):
+    """The draw handler in hidden steps (actor frames), ms per hidden tick; None without any."""
+    ht = total['actor_hidden_ticks']
+    if not ht:
+        return None
+    shown = max(1, total['actor_ticks'] - ht)
+    ms = lambda v, n: round(v / n / 1000.0, 3)
+    ranked = sorted(types.items(), key=lambda kv: -kv[1]['dh'])[:top]
+    return {'ticks': ht, 'handler_ms': ms(total['handler_draw_hidden_us'], ht),
+            'inside_ms': ms(total['actor_draw_hidden_us'], ht),
+            'nonactor_ms': ms(total['nonactor_draw_self_hidden_us'], ht),
+            'shown_handler_ms': ms(total['handler_draw_us'] - total['handler_draw_hidden_us'], shown),
+            'shown_inside_ms': ms(total['actor_draw_us'] - total['actor_draw_hidden_us'], shown),
+            'types': [{'name': n, 'ms': ms(t['dh'], ht)} for (n, _), t in ranked if t['dh']]}
 DIST_BINS = ('<1000', '1000-3000', '3000-6000', '>=6000')
 
 
@@ -120,8 +139,8 @@ def actor_profile(boot, t0, t1):
             clock_ns = r.get('value')
         elif key == 'type' and 'text' in r:
             f = _fields(r['text'])
-            t = types.setdefault((f['n'], int(f['p'])), {k: 0 for k in ('ex', 'dw', 'ce', 'cd', 'cf', 'cr', 'cs')})
-            for k in ('ex', 'dw', 'ce', 'cd', 'cf', 'cr', 'cs'):
+            t = types.setdefault((f['n'], int(f['p'])), {k: 0 for k in ('ex', 'dw', 'ce', 'cd', 'cf', 'cr', 'cs', 'dh')})
+            for k in ('ex', 'dw', 'ce', 'cd', 'cf', 'cr', 'cs', 'dh'):
                 t[k] += int(f.get(k, 0))
             t['actor'] = f.get('a') == '1'
         elif key == 'dist' and 'text' in r:
@@ -158,6 +177,9 @@ def actor_profile(boot, t0, t1):
         'exec_ms': per(total['actor_exec_us'], af), 'draw_ms': per(total['actor_draw_us'], af),
         'handler_exec_ms': per(total['handler_exec_us'], af), 'handler_draw_ms': per(total['handler_draw_us'], af),
         'nonactor_draw_self_ms': per(total['nonactor_draw_self_us'], af),
+        # Hidden steps of actor frames: ms per hidden tick (handler, inside draw methods, non-actor self)
+        # and the same per shown tick.
+        'hidden': hidden_split(total, types),
         'per_tick': {k: per_tick(total[k]) for k in ('drew', 'culled_frustum', 'culled_far', 'skipped')},
         'types': [{'name': n, 'profile': p, 'actor': t.get('actor', False),
                    'exec_ms': per(t['ex'], af), 'draw_ms': per(t['dw'], af),
@@ -400,6 +422,12 @@ def actor_markdown(rows, top=10):
                    f"{fmt(a['present_ms'])} ms/frame")
         out.append(f"- actor frames: execute {fmt(a['exec_ms'])} ms, draw {fmt(a['draw_ms'])} ms "
                    f"(non-actor draw self {fmt(a['nonactor_draw_self_ms'])}); per tick {a['per_tick']}")
+        h = a.get('hidden')
+        if h:
+            out.append(f"- hidden steps ({h['ticks']} sampled): draw handler {fmt(h['handler_ms'])} ms per hidden tick, "
+                       f"of which inside draw methods {fmt(h['inside_ms'])} (non-actor self {fmt(h['nonactor_ms'])}); "
+                       f"shown tick: handler {fmt(h['shown_handler_ms'])}, inside {fmt(h['shown_inside_ms'])}; largest in "
+                       f"a hidden tick: " + ', '.join(f"{t['name']} {fmt(t['ms'])}" for t in h['types']))
         out.append('| Type | profile | exec ms | draw ms | exec/tick | drew/tick | culled frustum | culled far | skipped |')
         out.append('|---|---:|---:|---:|---:|---:|---:|---:|---:|')
         for t in a['types'][:top]:

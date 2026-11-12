@@ -14,6 +14,7 @@
 #include "f_pc/f_pc_base.h"
 #include "m_Do/m_Do_lib.h"
 #include "d/d_stage.h"
+#include "dusk/game_clock.h"
 #include "JSystem/J3DGraphBase/J3DSys.h"
 #include "telemetry.hpp"
 #include "actor_profile_stats.hpp"
@@ -60,6 +61,9 @@ struct Window {
     // Actor frames.
     uint32_t actorFrames = 0, actorTicks = 0;
     uint64_t actorExecUs = 0, actorDrawUs = 0, nonActorDrawSelfUs = 0, handlerExecUs = 0, handlerDrawUs = 0;
+    // Of the three draw totals: in hidden steps (ticks that another tick follows before the paint).
+    uint64_t actorDrawHiddenUs = 0, nonActorDrawSelfHiddenUs = 0, handlerDrawHiddenUs = 0;
+    uint32_t actorHiddenTicks = 0;
     uint32_t drew = 0, culledFrustum = 0, culledFar = 0, skipped = 0;
     uint32_t distCount[DistanceBins] = {};
     uint64_t distUs[DistanceBins] = {};
@@ -155,6 +159,10 @@ void publish() {
     telemetryEvent("actprof_nonactor_draw_self_us", (long long)w.nonActorDrawSelfUs);
     telemetryEvent("actprof_handler_exec_us", (long long)w.handlerExecUs);
     telemetryEvent("actprof_handler_draw_us", (long long)w.handlerDrawUs);
+    telemetryEvent("actprof_actor_hidden_ticks", w.actorHiddenTicks);
+    telemetryEvent("actprof_handler_draw_hidden_us", (long long)w.handlerDrawHiddenUs);
+    telemetryEvent("actprof_actor_draw_hidden_us", (long long)w.actorDrawHiddenUs);
+    telemetryEvent("actprof_nonactor_draw_self_hidden_us", (long long)w.nonActorDrawSelfHiddenUs);
     telemetryEvent("actprof_drew", w.drew);
     telemetryEvent("actprof_culled_frustum", w.culledFrustum);
     telemetryEvent("actprof_culled_far", w.culledFar);
@@ -245,6 +253,7 @@ void frame_end() {
         if (gMode == ModeActors) {
             w.handlerExecUs += gFrame.execUs[i];
             w.handlerDrawUs += gFrame.drawUs[i];
+            if (k == 1) {w.handlerDrawHiddenUs += gFrame.drawUs[i]; ++w.actorHiddenTicks;}
         } else if (gMode == ModeJ3D) {
             w.j3dDrawUs[k] += gFrame.drawUs[i];
             ++w.j3dDrawTicks[k];
@@ -408,6 +417,7 @@ extern "C" int __wrap__Z13fpcDw_ExecuteP18base_process_class(base_process_class*
     f.slot = type_slot(proc->profname);
     f.childUs = 0;
     f.cull = 0;
+    const bool hidden = dusk::game_clock::vita_tick_has_successor();
     f.start = now_us();
     const int ret = __real__Z13fpcDw_ExecuteP18base_process_class(proc);
     const uint64_t end = now_us();
@@ -416,9 +426,10 @@ extern "C" int __wrap__Z13fpcDw_ExecuteP18base_process_class(base_process_class*
     const uint64_t incl = end - f.start;
     const uint64_t self = incl > f.childUs ? incl - f.childUs : 0;
     if (gDepth) gStack[gDepth - 1].childUs += incl;
-    else gWin.actorDrawUs += incl;
+    else {gWin.actorDrawUs += incl; if (hidden) gWin.actorDrawHiddenUs += incl;}
     TypeStats& t = gWin.types[f.slot];
     t.drawUs += uint32_t(self);
+    if (hidden) t.drawHiddenUs += uint32_t(self);
     if (fopAc_IsActor(proc)) {
         auto* actor = reinterpret_cast<fopAc_ac_c*>(proc);
         t.actor = true;
@@ -435,6 +446,7 @@ extern "C" int __wrap__Z13fpcDw_ExecuteP18base_process_class(base_process_class*
         }
     } else {
         gWin.nonActorDrawSelfUs += self;
+        if (hidden) gWin.nonActorDrawSelfHiddenUs += self;
     }
     return ret;
 }
