@@ -78,6 +78,11 @@ bool read(int key, bool wantDefault, int& out) {
         out = v == "gamecube" ? 1 : 0;
         return true;
     }
+    case TwvGameHudButtons: {
+        const std::string& v = wantDefault ? g.hudButtonLayout.getDefaultValue() : g.hudButtonLayout.getValue();
+        out = v == "original" ? 1 : 0;
+        return true;
+    }
     case TwvGameConfirm:
         register_confirm();
         out = confirm_index(wantDefault ? g_confirmButton.getDefaultValue() : g_confirmButton.getValue());
@@ -122,6 +127,9 @@ extern "C" int twv_dusk_setting_set(int key, int value) {
     switch (key) {
     case TwvGameButtonPrompts:
         g.buttonPrompts.setValue(std::string(value ? "gamecube" : "playstation"));
+        return 1;
+    case TwvGameHudButtons:
+        g.hudButtonLayout.setValue(std::string(value ? "original" : "vita"));
         return 1;
     case TwvGameConfirm:
         if (value < 0 || value > 2) {

@@ -39,7 +39,7 @@ static int opaque_count(const GlyphTexture& g) {
 int main() {
     // Every glyph: a valid big-endian ResTIMG, 32-byte aligned, image right after the header.
     const std::size_t count = twv::ui::ps_glyph_count();
-    CHECK(count == 25);
+    CHECK(count == 30); // 15 layout glyphs, 10 in-text icons, 5 HUD variants
     for (std::size_t i = 0; i < count; ++i) {
         const GlyphTexture* g = twv::ui::ps_glyph_at(i);
         CHECK(g && g->timg);
@@ -73,9 +73,12 @@ int main() {
     const GlyphTexture* a = twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "main2d", aText);
     CHECK(a && a->width == 64 && a->height == 92 && a->format == 3);
     CHECK(twv::ui::ps_layout_glyph("TT_ZELDA_BUTTON_A_TEXT.BTI", "Main2D", aText) == a); // case-insensitive
-    CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "saveres", aText) == a);
+    // The main HUD's archive (main2d) gets its own variant of the face symbols; menus share the plain one.
+    const GlyphTexture* am = twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "saveres", aText);
+    CHECK(am && am != a && am->width == 64 && am->height == 92 && am->format == 3);
+    CHECK(a && std::string(a->label) == "hud_tt_zelda_button_a_text.bti");
     // File select, save and name entry: /res/Object/fileSel.arc (root "filesel").
-    CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "filesel", aText) == a);
+    CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "filesel", aText) == am);
     CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_b_text.bti", "filesel", original(0, 24, 40)) != nullptr);
     CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_8ia.bti", "filesel", original(1, 32, 46)) != nullptr);
     CHECK(twv::ui::ps_layout_glyph("tt_zelda_button_a_text.bti", "e3_2006", aText) == nullptr); // E3 demo
@@ -96,7 +99,8 @@ int main() {
     CHECK(!twv::ui::ps_layout_listed("tt_start_00.bti"));
     CHECK(!twv::ui::ps_layout_listed(nullptr));
     CHECK(twv_ps_glyph_layout_listed("tt_ia4_3d_btn.bti") == 1);
-    CHECK(twv_ps_glyph_layout("tt_zelda_button_a_text.bti", "button", aText) == a->timg);
+    CHECK(am && twv_ps_glyph_layout("tt_zelda_button_a_text.bti", "button", aText) == am->timg);
+    CHECK(a && twv_ps_glyph_layout("tt_zelda_button_a_text.bti", "main2d", aText) == a->timg);
     CHECK(twv_ps_glyph_layout("tt_zelda_button_a_text.bti", "stage", aText) == nullptr);
     if (a) {
         // The cross: white where the diagonals cross, clear between the arms.
@@ -105,6 +109,28 @@ int main() {
         CHECK(p[3] == 255 && p[0] == 255);
         texel(*a, 32, 20, p);
         CHECK(p[3] == 0);
+    }
+    if (a && am) {
+        // The HUD variant carries a dark edge around the white symbol (opaque texels of low intensity,
+        // which the layout draws in the pane's "black"); the menu variant is white wherever it is opaque.
+        auto dark = [](const GlyphTexture& g) {
+            int n = 0;
+            std::uint8_t p[4];
+            for (int y = 0; y < g.height; ++y)
+                for (int x = 0; x < g.width; ++x) {
+                    texel(g, x, y, p);
+                    n += p[3] > 200 && p[0] < 64;
+                }
+            return n;
+        };
+        CHECK(dark(*a) > 200 && dark(*am) == 0);
+        // Walking right from the cross's centre along its row: white, then the edge, then clear.
+        std::uint8_t p[4];
+        int x = 32;
+        for (texel(*a, x, 46, p); x < 63 && p[3] == 255 && p[0] > 200; texel(*a, ++x, 46, p)) {}
+        int edge = 0;
+        for (; x < 63 && p[3] > 0; texel(*a, ++x, 46, p)) edge += p[0] < 64;
+        CHECK(edge >= 1 && p[3] == 0);
     }
     const GlyphTexture* xb = twv::ui::ps_layout_glyph("tt_zelda_button_x_base.bti", "button", original(2, 32, 48));
     CHECK(xb != nullptr);
@@ -127,14 +153,44 @@ int main() {
         CHECK(twv_ps_glyph_layout("tt_zelda_button_ab_maru.bti", "main2d", original(2, 40, 41)) == nullptr);
         CHECK(twv_ps_glyph_layout("tt_zelda_button_ab_maru.bti", "main2d", maru) == nullptr); // art kept
         CHECK(twv::ui::ps_hud_tint(maru, &rgb) && rgb == twv::ui::kHudBase);
-        CHECK(twv_ps_glyph_hud_tint(maru, &rgb) == 1);
+        CHECK(twv_ps_glyph_hud_tint(maru, &rgb) == 1); // a base
         const GlyphTexture* yb = twv::ui::ps_layout_glyph("tt_zelda_button_y_base.bti", "main2d", original(2, 48, 32));
         CHECK(yb && twv::ui::ps_hud_tint(yb->timg, &rgb) && rgb == twv::ui::kHudBase);
         CHECK(a && twv::ui::ps_hud_tint(a->timg, &rgb) && rgb == twv::ui::kHudCross);
+        CHECK(a && twv_ps_glyph_hud_tint(a->timg, &rgb) == 2);  // a symbol
+        CHECK(am && twv::ui::ps_hud_tint(am->timg, &rgb) && rgb == twv::ui::kHudCross);
         const GlyphTexture* bt = twv::ui::ps_layout_glyph("tt_zelda_button_b_text.bti", "main2d", original(0, 24, 40));
         CHECK(bt && twv::ui::ps_hud_tint(bt->timg, &rgb) && rgb == twv::ui::kHudCircle);
         const GlyphTexture* sel = twv::ui::ps_layout_glyph("im_zelda_button_z_text.bti", "main2d", original(2, 24, 40));
-        CHECK(sel && !twv::ui::ps_hud_tint(sel->timg, &rgb));                       // SELECT stays white
+        bool symbol = false;
+        CHECK(sel && twv::ui::ps_hud_tint(sel->timg, &rgb, &symbol) && rgb == twv::ui::kHudSelect && symbol);
+        if (sel) {
+            // SELECT is the button's own shape: a white oval across the pane's middle, clear above it.
+            std::uint8_t p[4];
+            texel(*sel, 24, 40, p);
+            CHECK(p[3] == 255 && p[0] == 255);
+            texel(*sel, 6, 40, p);
+            CHECK(p[3] == 255 && p[0] == 255);
+            texel(*sel, 24, 20, p);
+            CHECK(p[3] == 0);
+        }
+        // The main HUD's Z key holds the oval, large: a dark face with a white oval in the middle,
+        // tinted near white (not the other bases' dark tint). Other archives keep the plain key.
+        const GlyphTexture* key = twv::ui::ps_layout_glyph("im_zelda_button_z_base.bti", "main2d", original(2, 48, 48));
+        const GlyphTexture* keyMenu = twv::ui::ps_layout_glyph("im_zelda_button_z_base.bti", "optres", original(2, 48, 48));
+        CHECK(key && keyMenu && key != keyMenu);
+        CHECK(key && twv::ui::ps_hud_tint(key->timg, &rgb, &symbol) && rgb == twv::ui::kHudSelect && symbol);
+        CHECK(keyMenu && twv::ui::ps_hud_tint(keyMenu->timg, &rgb, &symbol) && rgb == twv::ui::kHudBase && !symbol);
+        if (key) {
+            std::uint8_t p[4];
+            texel(*key, 48, 48, p);
+            CHECK(p[3] == 255 && p[0] == 255);   // the oval
+            texel(*key, 48, 24, p);
+            CHECK(p[3] == 255 && p[0] < 64);     // the key's dark face above it
+            texel(*key, 24, 48, p);
+            CHECK(p[3] == 255 && p[0] == 255);   // the oval is wide
+        }
+        CHECK(yb && twv::ui::ps_hud_tint(yb->timg, &rgb, &symbol) && !symbol);
         CHECK(!twv::ui::ps_hud_tint(aText, &rgb) && !twv::ui::ps_hud_tint(nullptr, &rgb));
         CHECK(twv_ps_glyph_hud_tint(aText, nullptr) == 0);
     }
@@ -168,9 +224,11 @@ int main() {
         if (sa) {
             std::uint8_t p[4];
             texel(*sa, 32, 46, p);
-            CHECK(p[3] == 0);                  // the ring's hollow middle (the cross filled it)
-            texel(*sa, 3, 46, p);
+            CHECK(p[3] == 255 && p[0] < 64);   // the ring's middle: the HUD variant's dark backing
+            texel(*sa, 8, 46, p);
             CHECK(p[3] == 255 && p[0] == 255); // the ring's left side
+            texel(*sa, 2, 46, p);
+            CHECK(p[3] == 255 && p[0] < 64);   // and its dark edge
         }
         unsigned rgb = 0;
         CHECK(sa && twv::ui::ps_hud_tint(sa->timg, &rgb) && rgb == twv::ui::kHudCircle);

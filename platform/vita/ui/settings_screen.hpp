@@ -35,7 +35,8 @@ enum : int {
     TwvGameCameraInvertX = 7, // 0/1                                 (game.invertCameraXAxis)
     TwvGameCameraInvertY = 8, // 0/1                                 (game.invertCameraYAxis)
     TwvGameFreeCamera = 9,    // 0/1                                 (game.freeCamera)
-    TwvGameKeyCount = 10
+    TwvGameHudButtons = 10,   // 0 vita, 1 original                  (game.hudButtonLayout)
+    TwvGameKeyCount = 11
 };
 
 extern "C" {

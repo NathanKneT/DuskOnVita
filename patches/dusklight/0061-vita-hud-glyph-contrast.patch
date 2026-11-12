@@ -1,0 +1,49 @@
+HUD glyph contrast (game.buttonPrompts=playstation): the main HUD's face symbols read on a
+bright background as on a dark one.
+
+The symbols were thin pastel strokes over a translucent base, at the size of the GameCube
+letters they replace (the B letter's pane is 8 layout units wide): on a bright wall they faded
+into it. twilight-vita now gives the main HUD (archive main2d) its own variant of those symbols,
+a little bolder and on a dark backing of their own outline (platform/vita/ui/ps_glyphs.cpp); the
+backing is texels of intensity 0, which a layout picture draws in its "black" colour.
+recolor_panes therefore sets a symbol's "black" dark and its "white" to full alpha; bases keep
+theirs. The pane's own alpha, with which the game fades a button it does not offer, still
+applies.
+
+Colours of HUD pictures only: no texture, pane position or game state changes here.
+
+--- a/src/dusk/button_prompts.hpp
++++ b/src/dusk/button_prompts.hpp
+@@ -62,7 +62,11 @@
+ 
+ #if TARGET_VITA
+ // Pictures whose texture has a HUD colour take it as their "white" (the colour a white texel
+-// draws in), keeping its alpha and the "black". Returns how many panes changed.
++// draws in). A base keeps its alpha and its "black". A symbol is drawn at full alpha, and its
++// "black" turns dark: the HUD's symbols carry a dark backing of their own outline, which the
++// layout draws in that colour, so they read on a bright wall as on a dark one. The pane's own
++// alpha (how the game fades a button it does not offer) still applies. Returns how many panes
++// changed.
+ inline int recolor_panes(J2DPane* pane) {
+     int changed = 0;
+     for (J2DPane* child = pane->getFirstChildPane(); child != NULL; child = child->getNextChildPane()) {
+@@ -70,10 +74,16 @@
+             J2DPicture* picture = static_cast<J2DPicture*>(child);
+             const JUTTexture* texture = picture->getTexture(0);
+             unsigned rgb = 0;
+-            if (texture != NULL && twv_ps_glyph_hud_tint(texture->getTexInfo(), &rgb)) {
++            const int kind = texture != NULL ? twv_ps_glyph_hud_tint(texture->getTexInfo(), &rgb) : 0;
++            if (kind != 0) {
++                const bool symbol = kind == 2;
+                 const JUtility::TColor white = picture->getWhite();
+-                const JUtility::TColor tint(u8(rgb >> 16), u8(rgb >> 8), u8(rgb), white.a);
+-                changed += picture->setBlackWhite(picture->getBlack(), tint) ? 1 : 0;
++                JUtility::TColor black = picture->getBlack();
++                if (symbol) {
++                    black = JUtility::TColor(0x10, 0x10, 0x14, black.a);
++                }
++                const JUtility::TColor tint(u8(rgb >> 16), u8(rgb >> 8), u8(rgb), symbol ? u8(255) : white.a);
++                changed += picture->setBlackWhite(black, tint) ? 1 : 0;
+             }
+         }
+         changed += recolor_panes(child);

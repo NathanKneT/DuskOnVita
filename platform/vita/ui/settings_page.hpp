@@ -13,7 +13,7 @@
 namespace twv::ui::settings {
 
 enum class Id : uint8_t {
-    Preset, RenderScale, Performance, SpeedUps, SkipUnseen, StillAnimals, RestingAnimals, Crowd, ShowFps, ButtonPrompts, ConfirmButton, Language, GyroAim, GyroSensitivity,
+    Preset, RenderScale, Performance, SpeedUps, SkipUnseen, StillAnimals, RestingAnimals, Crowd, ShowFps, ButtonPrompts, HudButtons, ConfirmButton, Language, GyroAim, GyroSensitivity,
     GyroInvertYaw, GyroInvertPitch, GyroRecentre, FreeCamera, CameraInvertX, CameraInvertY, OpenGesture, ResetDefaults,
     Close, Count
 };
@@ -57,6 +57,7 @@ constexpr const char* SpeedUps[] = {"Original", "Performance", "Custom"};
 constexpr const char* Crowd[] = {"Full", "Half", "Low"};
 constexpr const char* OffOn[] = {"Off", "On"};
 constexpr const char* Prompts[] = {"PlayStation", "GameCube"};
+constexpr const char* HudButtons[] = {"Vita pad", "Original"};
 constexpr const char* Confirm[] = {"System", "Cross", "Circle"};
 constexpr const char* Language[] = {"English", "German", "French", "Spanish", "Italian", "Japanese"};
 constexpr const char* Sensitivity[] = {"0.25", "0.50", "0.75", "1.00", "1.25", "1.50", "2.00", "2.50", "3.00"};
@@ -94,6 +95,10 @@ constexpr Entry Entries[EntryCount] = {
     {Id::ButtonPrompts, Kind::Choice, "Button prompts",
      "Button icons in the HUD and in texts. HUD icons change at the next door or area.", Applies::NextArea,
      text::Prompts, 2, 0},
+    {Id::HudButtons, Kind::Choice, "HUD button positions",
+     "Vita pad: Square left of Cross and Circle right, as on the console. Original: the GameCube's "
+     "places (also used when Circle confirms). Changes at the next door or area.", Applies::NextArea,
+     text::HudButtons, 2, 0},
     {Id::ConfirmButton, Kind::Choice, "Confirm button",
      "The button that confirms (A). System follows the Vita's own setting.", Applies::Restart, text::Confirm,
      3, 0},
@@ -127,7 +132,7 @@ constexpr Entry Entries[EntryCount] = {
     {Id::Close, Kind::Action, "Close and resume", "Back to the game. Changes are saved now.", Applies::Now,
      nullptr, 0, 0},
 };
-static_assert(EntryCount == 23);
+static_assert(EntryCount == 24);
 static_assert(Presets[1].renderScale == 2 && Presets[1].performance == 0, "Balanced is the default size and clock");
 constexpr const Entry& entry(Id id) { return Entries[int(id)]; }
 

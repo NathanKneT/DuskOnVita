@@ -2,7 +2,8 @@
 // PlayStation-style button glyphs for game.buttonPrompts=playstation (patches/dusklight/0016).
 //
 // Every glyph is drawn here in code at first use: plain geometric shapes (cross, circle, square,
-// triangle, keys, sticks) and a 5x7 pixel font. No Sony, Nintendo or firmware artwork is used.
+// triangle, keys, sticks, the SELECT button's oval) and a 5x7 pixel font for L and R. No Sony,
+// Nintendo or firmware artwork is used.
 // The result is a GameCube texture (ResTIMG header + tiled image) that goes through the game's
 // normal texture path, so vitaGL and GXM draw it like any texture from the disc.
 //
@@ -39,8 +40,9 @@ const GlyphTexture* ps_text_glyph(int index, int layer);
 // The A/B base (tt_zelda_button_ab_maru) keeps its art but is remembered, when it resolves from
 // the HUD archives with its expected format and size, so the HUD can recolour its panes.
 bool ps_tint_only_note(const char* name, const char* volume, const void* original);
-// The HUD colour for a picture's texture (see twv_ps_glyph_hud_tint below).
-bool ps_hud_tint(const void* timg, unsigned* rgb);
+// The HUD colour for a picture's texture (see twv_ps_glyph_hud_tint below). symbol (optional): the
+// texture is a face-button symbol, the SELECT oval or the HUD's key that holds it, not a plain base.
+bool ps_hud_tint(const void* timg, unsigned* rgb, bool* symbol = nullptr);
 // Every generated glyph, for tests and receipts.
 std::size_t ps_glyph_count();
 const GlyphTexture* ps_glyph_at(std::size_t i);
@@ -56,9 +58,15 @@ extern "C" const void* twv_ps_glyph_text(int index, int layer);
 // the RGB its "white" colour takes, or 0 to leave it. Button bases (the A/B disc, kept from the
 // disc and remembered when a layout resolves it, and the X/Y/Z base glyphs) turn dark; the
 // face-button symbols take their own colours.
+// Returns 1 for a base and 2 for a symbol. The main HUD gets its symbols from archive main2d, where
+// they are bolder and carry a dark edge that the pane's "black" colour draws: for a symbol the HUD
+// sets that colour dark and gives the symbol full alpha (patches/dusklight/0061).
 extern "C" int twv_ps_glyph_hud_tint(const void* timg, unsigned* rgb);
 extern "C" void twv_ps_glyph_hud_tinted(const char* screen, int panes);
+// HUD arrangement (patches/dusklight/0060, game.hudButtonLayout): the receipt of what the main HUD
+// did when it was built. traded 1: the B and X groups traded places, by (dx, dy) layout units.
+extern "C" void twv_hud_button_layout(int traded, float dx, float dy);
 namespace twv::ui {
 constexpr unsigned kHudBase = 0x2C2C30, kHudCross = 0x7CB4F0, kHudCircle = 0xFF6A6E, kHudSquare = 0xF09CD0,
-                   kHudTriangle = 0x40E0B0;
+                   kHudTriangle = 0x40E0B0, kHudSelect = 0xF0F0F0;
 }

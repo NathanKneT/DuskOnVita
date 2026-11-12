@@ -139,6 +139,7 @@ int index_of(const int* values, int count, int value) {
 int game_key(st::Id id) {
     switch (id) {
     case st::Id::ButtonPrompts: return TwvGameButtonPrompts;
+    case st::Id::HudButtons: return TwvGameHudButtons;
     case st::Id::ConfirmButton: return TwvGameConfirm;
     case st::Id::Language: return TwvGameLanguage;
     case st::Id::GyroAim: return TwvGameGyroAim;

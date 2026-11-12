@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #if defined(__vita__)
@@ -24,6 +25,7 @@ constexpr Color kOutline{0.16f, 0.16f, 0.16f, 1.0f}; // layout bases: the dark r
 constexpr Color kFill{0.82f, 0.82f, 0.82f, 1.0f};    // layout full icons: light face
 constexpr Color kInk{0.20f, 0.20f, 0.20f, 1.0f};     // layout full icons: dark symbol
 constexpr Color kBlack{0.06f, 0.06f, 0.07f, 1.0f};
+constexpr Color kEdge{0.0f, 0.0f, 0.0f, 1.0f};       // HUD symbols: the edge, drawn in the pane's "black"
 // In-text icons: dark key or disc, light rim, coloured symbols.
 constexpr Color kKey{0.10f, 0.10f, 0.12f, 1.0f};
 constexpr Color kRim{0.46f, 0.46f, 0.50f, 1.0f};
@@ -95,26 +97,28 @@ void rounded(Canvas& c, float cx, float cy, float hw, float hh, float r, Color c
 }
 
 // Face-button symbols inside a square of side s centred on (cx, cy).
-void cross(Canvas& c, float cx, float cy, float s, Color col) {
+// `extra` widens every stroke by that much on each side (bolder symbols, or the edge under them).
+void cross(Canvas& c, float cx, float cy, float s, Color col, float extra = 0.0f) {
     const float w = s * 0.21f, e = s * 0.5f - w * 0.5f;
     c.fill([=](float x, float y) {
-        return std::min(seg(x, y, cx - e, cy - e, cx + e, cy + e), seg(x, y, cx - e, cy + e, cx + e, cy - e)) - w * 0.5f;
+        return std::min(seg(x, y, cx - e, cy - e, cx + e, cy + e), seg(x, y, cx - e, cy + e, cx + e, cy - e)) -
+               w * 0.5f - extra;
     }, col);
 }
-void circle(Canvas& c, float cx, float cy, float s, Color col) {
+void circle(Canvas& c, float cx, float cy, float s, Color col, float extra = 0.0f) {
     const float w = s * 0.19f;
-    ring(c, cx, cy, s * 0.5f - w * 0.5f, w, col);
+    ring(c, cx, cy, s * 0.5f - w * 0.5f, w + 2.0f * extra, col);
 }
-void square(Canvas& c, float cx, float cy, float s, Color col) {
+void square(Canvas& c, float cx, float cy, float s, Color col, float extra = 0.0f) {
     const float w = s * 0.18f, e = s * 0.5f - w * 0.5f;
-    c.fill([=](float x, float y) { return std::fabs(box(x, y, cx, cy, e, e, w * 0.35f)) - w * 0.5f; }, col);
+    c.fill([=](float x, float y) { return std::fabs(box(x, y, cx, cy, e, e, w * 0.35f)) - w * 0.5f - extra; }, col);
 }
-void triangle(Canvas& c, float cx, float cy, float s, Color col) {
+void triangle(Canvas& c, float cx, float cy, float s, Color col, float extra = 0.0f) {
     const float w = s * 0.15f, half = s * 0.5f - w * 0.5f, height = half * 1.7320508f;
     const float top = cy - height * 0.58f, bottom = cy + height * 0.42f;
     c.fill([=](float x, float y) {
         return std::min({seg(x, y, cx, top, cx - half, bottom), seg(x, y, cx - half, bottom, cx + half, bottom),
-                         seg(x, y, cx + half, bottom, cx, top)}) - w * 0.5f;
+                         seg(x, y, cx + half, bottom, cx, top)}) - w * 0.5f - extra;
     }, col);
 }
 
@@ -124,12 +128,8 @@ struct Letter {
     const char* rows[7];
 };
 constexpr Letter kFont[] = {
-    {'C', {".####", "#....", "#....", "#....", "#....", "#....", ".####"}},
-    {'E', {"#####", "#....", "#....", "####.", "#....", "#....", "#####"}},
     {'L', {"#....", "#....", "#....", "#....", "#....", "#....", "#####"}},
     {'R', {"####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"}},
-    {'S', {".####", "#....", "#....", ".###.", "....#", "....#", "####."}},
-    {'T', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}},
 };
 const Letter* letter(char ch) {
     for (const Letter& l : kFont) {
@@ -138,7 +138,7 @@ const Letter* letter(char ch) {
     return nullptr;
 }
 // One fill per string so neighbouring cells join without seams. (x0, y0) is the top-left corner.
-void text(Canvas& c, const char* str, float x0, float y0, float cw, float ch, Color col) {
+void text(Canvas& c, const char* str, float x0, float y0, float cw, float ch, Color col, float grow = 0.0f) {
     struct Cell {
         float cx, cy;
     };
@@ -152,7 +152,7 @@ void text(Canvas& c, const char* str, float x0, float y0, float cw, float ch, Co
             }
         }
     }
-    const float hw = cw * 0.56f, hh = ch * 0.56f; // a little overlap: bolder strokes
+    const float hw = cw * 0.56f + grow, hh = ch * 0.56f + grow; // a little overlap: bolder strokes
     c.fill_sampled([&](float x, float y) {
         float d = 1e9f;
         for (const Cell& cell : cells) d = std::min(d, box(x, y, cell.cx, cell.cy, hw, hh, 0.0f));
@@ -168,6 +168,8 @@ enum Kind {
     // Layout: white symbols and white bases (the layout tints them), IA8.
     SymCross, SymCircle, SymSquare, SymTriangle, SymSelect,
     BaseDisc, BaseKey, FullSquare, FullTriangle, DarkCircle, DarkCross, LeftStick, RightStick,
+    // The main HUD's symbols (archive main2d): bolder, with a dark edge, IA8.
+    HudCross, HudCircle, HudSquare, HudTriangle, HudSelectKey,
     // In-text: full colour, RGBA8.
     TextCross, TextCircle, TextSquare, TextTriangle, TextL, TextR, TextSelect,
     TextLeftStick, TextLeftStickTilt, TextRightStick,
@@ -186,11 +188,57 @@ void draw(Canvas& c, Kind kind, float stretch) {
     case SymCircle: circle(c, cx, cy, std::min(m * 0.96f, fit), kWhite); break;
     case SymSquare: square(c, cx, cy, std::min(m * 0.84f, fit), kWhite); break;
     case SymTriangle: triangle(c, cx, cy, m * 0.96f, kWhite); break;
-    case SymSelect: { // two lines, SEL over ECT: a one-line SELECT would be unreadable at this size
-        const float cw = W * 0.92f / 17.0f, ch = cw * 1.55f, gap = ch * 1.6f;
-        const float top = cy - (14.0f * ch + gap) * 0.5f;
-        text(c, "SEL", cx - text_width("SEL", cw) * 0.5f, top, cw, ch, kWhite);
-        text(c, "ECT", cx - text_width("ECT", cw) * 0.5f, top + 7.0f * ch + gap, cw, ch, kWhite);
+    // SELECT: the shape of the button itself, the small oval under the Vita's right stick, as wide
+    // as the Z letter's narrow pane allows. (The word, even on two lines, could not be read.)
+    case SymSelect: rounded(c, cx, cy, W * 0.45f, W * 0.17f, W * 0.17f, kWhite); break;
+    // The main HUD draws its symbols small (the B letter's pane is 8 layout units wide) over a
+    // translucent base, on whatever the game shows behind. There they are thicker and sit on a dark
+    // backing of their own outline, filled (the ring, the square and the triangle keep their
+    // middle dark): texels of intensity 0, which the layout draws in the pane's "black" colour (the
+    // HUD sets it dark, patches/dusklight/0061). The backing stays inside the plain symbol's size.
+    case HudCross:
+    case HudCircle:
+    case HudSquare:
+    case HudTriangle: {
+        // The symbol with its backing is as large as the plain symbol: the backing takes `edge`
+        // texels all round, and every stroke is 0.03 of the size thicker on each side.
+        const float edge = 1.5f;
+        const auto sized = [=](float plain) { return (plain - 2.0f * edge) / 1.06f; };
+        if (kind == HudCross) {
+            const float s = sized(std::min(m * 0.86f, fit)), bold = s * 0.03f, out = bold + edge;
+            cross(c, cx, cy, s, kEdge, out);
+            cross(c, cx, cy, s, kWhite, bold);
+        } else if (kind == HudCircle) {
+            const float s = sized(std::min(m * 0.96f, fit)), bold = s * 0.03f, out = bold + edge;
+            disc(c, cx, cy, s * 0.5f + out, kEdge);
+            circle(c, cx, cy, s, kWhite, bold);
+        } else if (kind == HudSquare) {
+            const float s = sized(std::min(m * 0.84f, fit)), bold = s * 0.03f, out = bold + edge;
+            rounded(c, cx, cy, s * 0.5f + out, s * 0.5f + out, s * 0.18f * 0.85f + out, kEdge);
+            square(c, cx, cy, s, kWhite, bold);
+        } else {
+            // The triangle's own outline widened by `out`, with its inside filled.
+            const float s = sized(m * 0.96f), bold = s * 0.03f, out = bold + edge;
+            const float w = s * 0.15f, half = s * 0.5f - w * 0.5f;
+            const float height = half * 1.7320508f, top = cy - height * 0.58f, bottom = cy + height * 0.42f;
+            c.fill([=](float x, float y) {
+                if (y >= top && y <= bottom && std::fabs(x - cx) <= half * (y - top) / (bottom - top)) return -1.0f;
+                return std::min({seg(x, y, cx, top, cx - half, bottom), seg(x, y, cx - half, bottom, cx + half, bottom),
+                                 seg(x, y, cx + half, bottom, cx, top)}) - w * 0.5f - out;
+            }, kEdge);
+            triangle(c, cx, cy, s, kWhite, bold);
+        }
+        break;
+    }
+    // The main HUD's Z key: the key itself carries the SELECT button's oval, far larger than the Z
+    // letter's pane could show it (that pane's own oval lies inside this one). The key's face is
+    // dark already here (low intensity) and the oval white, so the HUD gives this picture a near
+    // white "white" and a dark "black" instead of the dark tint of the other bases.
+    case HudSelectKey: {
+        const float hw = W * 0.40f, hh = H * 0.40f, r = W * 0.14f;
+        rounded(c, cx, cy, hw, hh, r, kEdge);
+        rounded(c, cx, cy, hw - 3.5f, hh - 3.5f, r - 2.0f, Color{0.12f, 0.12f, 0.12f, 1.0f});
+        rounded(c, cx, cy, W * 0.29f, H * 0.115f, H * 0.115f, kWhite);
         break;
     }
     case BaseDisc: {
@@ -274,9 +322,7 @@ void draw(Canvas& c, Kind kind, float stretch) {
         rounded(c, cx, cy, hw, hh, r, kRim);
         rounded(c, cx, cy, hw - m * 0.045f, hh - m * 0.045f, r - m * 0.03f, kKey);
         if (select) {
-            const float cw = m * 0.048f, ch = cw, gap = ch * 1.3f, top = cy - (14.0f * ch + gap) * 0.5f;
-            text(c, "SEL", cx - text_width("SEL", cw) * 0.5f, top, cw, ch, kWhite);
-            text(c, "ECT", cx - text_width("ECT", cw) * 0.5f, top + 7.0f * ch + gap, cw, ch, kWhite);
+            rounded(c, cx, cy, m * 0.29f, m * 0.115f, m * 0.115f, kWhite); // the SELECT button's oval
         } else {
             const float cw = m * 0.065f;
             text_centred(c, kind == TextL ? "L" : "R", cx, cy, cw, cw * 1.05f, kWhite);
@@ -349,6 +395,7 @@ std::uint32_t image_bytes(int w, int h, std::uint8_t format) {
 struct Owned {
     std::vector<std::uint8_t> storage; // over-allocated for 32-byte alignment
     GlyphTexture tex;
+    std::string name;                  // the label of a HUD variant ("hud_" + the texture name)
 };
 
 void encode(const Canvas& c, std::uint8_t format, std::uint8_t* out) {
@@ -473,13 +520,34 @@ Kind confirm_swapped(Kind k) {
     }
 }
 
+// The main HUD's variant of a layout symbol (the same kind when it has none).
+Kind hud_kind(Kind k) {
+    switch (k) {
+    case SymCross: return HudCross;
+    case SymCircle: return HudCircle;
+    case SymSquare: return HudSquare;
+    case SymTriangle: return HudTriangle;
+    case BaseKey: return HudSelectKey;
+    default: return k;
+    }
+}
+constexpr const char* kHudArchive = "main2d"; // the HUD's layouts (zelda_game_image, button_info, ...)
+bool in_list(const char* list, const char* volume);
+
 struct Set {
     bool circleConfirms;
     Owned layout[kLayoutCount];
+    Owned hud[kLayoutCount]; // drawn only for symbols that archive main2d holds (tex.timg set)
     Owned text[TextCount];
     explicit Set(bool circle) : circleConfirms(circle) {
-        for (int i = 0; i < kLayoutCount; ++i)
+        for (int i = 0; i < kLayoutCount; ++i) {
             make(layout[i], kLayout[i].name, kLayout[i].w * 2, kLayout[i].h * 2, layout_kind(i), kLayout[i].stretch);
+            const Kind h = hud_kind(layout_kind(i));
+            if (h != layout_kind(i) && in_list(kLayout[i].archives, kHudArchive)) {
+                hud[i].name = std::string("hud_") + kLayout[i].name;
+                make(hud[i], hud[i].name.c_str(), kLayout[i].w * 2, kLayout[i].h * 2, h, kLayout[i].stretch);
+            }
+        }
         for (int i = 0; i < TextCount; ++i) {
             const bool traded = circle && (i == TCross || i == TCircle); // the label names what is drawn
             make(text[i], kTextLabel[traded ? TCross + TCircle - i : i], 48, 48,
@@ -555,20 +623,28 @@ bool ps_tint_only_note(const char* name, const char* volume, const void* origina
     return true;
 }
 
-bool ps_hud_tint(const void* timg, unsigned* rgb) {
+bool ps_hud_tint(const void* timg, unsigned* rgb, bool* symbol) {
+    if (symbol) *symbol = false;
     if (!timg) return false;
     for (int k = 0; k < gTintOnlyCount; ++k) {
         if (gTintOnly[k] == timg) { *rgb = kHudBase; return true; }
     }
+    const Set& set = glyphs();
     for (int i = 0; i < kLayoutCount; ++i) {
-        if (glyphs().layout[i].tex.timg != timg) continue;
-        switch (glyphs().layout_kind(i)) {
-        case BaseDisc: case BaseKey: *rgb = kHudBase; return true;
+        const bool hud = set.hud[i].tex.timg == timg;
+        if (!hud && set.layout[i].tex.timg != timg) continue;
+        const Kind kind = set.layout_kind(i);
+        if (symbol) *symbol = kind == SymCross || kind == SymCircle || kind == SymSquare || kind == SymTriangle ||
+                              kind == SymSelect || (hud && kind == BaseKey);
+        switch (kind) {
+        case BaseDisc: *rgb = kHudBase; return true;
+        case BaseKey: *rgb = hud ? kHudSelect : kHudBase; return true; // the HUD's key holds the oval
         case SymCross: *rgb = kHudCross; return true;
         case SymCircle: *rgb = kHudCircle; return true;
         case SymSquare: *rgb = kHudSquare; return true;
         case SymTriangle: *rgb = kHudTriangle; return true;
-        default: return false; // SELECT lettering, sticks and whole icons keep their colours
+        case SymSelect: *rgb = kHudSelect; return true;
+        default: return false; // sticks and whole icons keep their colours
         }
     }
     return false;
@@ -577,7 +653,9 @@ bool ps_hud_tint(const void* timg, unsigned* rgb) {
 const GlyphTexture* ps_layout_glyph(const char* name, const char* volume, const void* original) {
     const int i = listed(name);
     if (i < 0 || !matches(kLayout[i], volume, original)) return nullptr;
-    return &glyphs().layout[i].tex;
+    const Set& set = glyphs();
+    if (set.hud[i].tex.timg != nullptr && in_list(kHudArchive, volume)) return &set.hud[i].tex;
+    return &set.layout[i].tex;
 }
 
 const GlyphTexture* ps_text_glyph(int index, int layer) {
@@ -602,12 +680,24 @@ const GlyphTexture* ps_text_glyph(int index, int layer) {
     return slot < 0 ? nullptr : &glyphs().text[slot].tex;
 }
 
-std::size_t ps_glyph_count() { return std::size_t(kLayoutCount + TextCount); }
+std::size_t ps_glyph_count() {
+    std::size_t hud = 0;
+    for (int i = 0; i < kLayoutCount; ++i) hud += glyphs().hud[i].tex.timg != nullptr;
+    return std::size_t(kLayoutCount + TextCount) + hud;
+}
 
+// Layout glyphs, then the in-text icons, then the HUD variants.
 const GlyphTexture* ps_glyph_at(std::size_t i) {
     if (i < std::size_t(kLayoutCount)) return &glyphs().layout[i].tex;
     i -= std::size_t(kLayoutCount);
-    return i < std::size_t(TextCount) ? &glyphs().text[i].tex : nullptr;
+    if (i < std::size_t(TextCount)) return &glyphs().text[i].tex;
+    i -= std::size_t(TextCount);
+    for (int k = 0; k < kLayoutCount; ++k) {
+        if (glyphs().hud[k].tex.timg == nullptr) continue;
+        if (i == 0) return &glyphs().hud[k].tex;
+        --i;
+    }
+    return nullptr;
 }
 
 void ps_glyph_texel(const GlyphTexture& g, int x, int y, std::uint8_t rgba[4]) {
@@ -676,7 +766,9 @@ extern "C" const void* twv_ps_glyph_layout(const char* name, const char* volume,
 }
 
 extern "C" int twv_ps_glyph_hud_tint(const void* timg, unsigned* rgb) {
-    return rgb && twv::ui::ps_hud_tint(timg, rgb) ? 1 : 0;
+    bool symbol = false;
+    if (!rgb || !twv::ui::ps_hud_tint(timg, rgb, &symbol)) return 0;
+    return symbol ? 2 : 1;
 }
 
 extern "C" void twv_ps_glyph_hud_tinted(const char* screen, int panes) {
@@ -687,6 +779,18 @@ extern "C" void twv_ps_glyph_hud_tinted(const char* screen, int panes) {
 #else
     (void)screen;
     (void)panes;
+#endif
+}
+
+extern "C" void twv_hud_button_layout(int traded, float dx, float dy) {
+#if defined(__vita__)
+    char text[64];
+    std::snprintf(text, sizeof text, "%s dx=%.1f dy=%.1f", traded ? "vita" : "original", double(dx), double(dy));
+    twv::vita::telemetryText("hud_button_layout", text);
+#else
+    (void)traded;
+    (void)dx;
+    (void)dy;
 #endif
 }
 

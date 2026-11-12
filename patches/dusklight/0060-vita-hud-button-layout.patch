@@ -1,0 +1,140 @@
+HUD button arrangement setting, game.hudButtonLayout = original | vita (the Vita defaults to
+vita). With vita, the B button and the X button of the main HUD (zelda_game_image) trade places
+once, when the HUD is built: with A on cross, B on circle and X on square the icons then sit as
+the buttons do on the console (square left, circle right, triangle on top) instead of the
+GameCube pad's places (B lower left, X right). When circle confirms (A on circle, B on cross) the
+original arrangement already has the cross below and left of the circle, and is kept.
+
+Each button is three children of the button parent: the letter (bbtn_n, xbtn_n), the item
+(item_b_n, item_x_n) and the action text (b_text_n, x_text_n). Each B pane goes where its X
+counterpart was and the reverse. The item panes are only shown and hidden by the game, so they
+are translated once; the letter and text panes are placed on every draw from their CPaneMgr's
+start position, so that start position moves. Every distance is the one between the two panes
+of a pair, read from the layout: no number from the disc is in the code. Item icons, counts, the
+lantern meter and the sparkles follow because they are children of, or measured from, those
+panes.
+
+Presentation only: the pad mapping, what each button does and every other screen are untouched.
+With original, or on other platforms (default original), nothing moves.
+
+--- a/src/d/d_meter2_draw.cpp
++++ b/src/d/d_meter2_draw.cpp
+@@ -228,6 +228,39 @@
+ #endif
+ 
+     init();
++#if TARGET_PC
++    // game.hudButtonLayout=vita: the B button and the X button trade places (dusk/button_prompts.hpp).
++    // Each button is three children of the button parent: the letter, the item and the action text;
++    // each B pane goes where its X counterpart was and the reverse, by the distance between the
++    // two read from the layout itself. The item panes are only shown and hidden, so they move here
++    // once; the letter and text panes are placed on every draw from their manager's start position,
++    // so that start position moves.
++    {
++        J2DPane* itemB = mpScreen->search(MULTI_CHAR('item_b_n'));
++        J2DPane* itemX = mpScreen->search(MULTI_CHAR('item_x_n'));
++        const bool trade = dusk::button_prompts::hud_trades_b_and_x() && itemB != NULL && itemX != NULL;
++        f32 dx = 0.0f;
++        f32 dy = 0.0f;
++        if (trade) {
++            dx = itemX->getTranslateX() - itemB->getTranslateX();
++            dy = itemX->getTranslateY() - itemB->getTranslateY();
++            itemB->translate(itemB->getTranslateX() + dx, itemB->getTranslateY() + dy);
++            itemX->translate(itemX->getTranslateX() - dx, itemX->getTranslateY() - dy);
++            CPaneMgr* const pairs[2][2] = {{mpButtonB, mpButtonXY[0]}, {mpTextB, mpTextXY[0]}};
++            for (CPaneMgr* const* pair : pairs) {
++                const f32 px = pair[1]->getPanePtr()->getTranslateX() - pair[0]->getPanePtr()->getTranslateX();
++                const f32 py = pair[1]->getPanePtr()->getTranslateY() - pair[0]->getPanePtr()->getTranslateY();
++                pair[0]->mInitPos.x += px;
++                pair[0]->mInitPos.y += py;
++                pair[0]->paneTrans(0.0f, 0.0f);
++                pair[1]->mInitPos.x -= px;
++                pair[1]->mInitPos.y -= py;
++                pair[1]->paneTrans(0.0f, 0.0f);
++            }
++        }
++        dusk::button_prompts::hud_layout_done(trade, dx, dy);
++    }
++#endif
+     field_0xa8 = 0;
+     field_0x1e4 = 0;
+     field_0x2fc = 0;
+--- a/src/dusk/button_prompts.hpp
++++ b/src/dusk/button_prompts.hpp
+@@ -17,6 +17,8 @@
+ extern "C" const void* twv_ps_glyph_text(int index, int layer);
+ extern "C" int twv_ps_glyph_hud_tint(const void* timg, unsigned* rgb);
+ extern "C" void twv_ps_glyph_hud_tinted(const char* screen, int panes);
++extern "C" int twv_vita_confirm_circle(void);
++extern "C" void twv_hud_button_layout(int traded, float dx, float dy);
+ #endif
+ 
+ namespace dusk::button_prompts {
+@@ -95,6 +97,34 @@
+ #endif
+ }
+ 
++// HUD button arrangement, setting game.hudButtonLayout: "original" (the GameCube's: B at the lower
++// left of A, X at its right) or "vita": the B group and the X group of the main HUD trade places, so
++// that with A on cross, B on circle and X on square the icons sit as the buttons do on the Vita
++// (square left, circle right, triangle on top). When circle confirms (A on circle, B on cross) the
++// original arrangement already has the cross below and left of the circle, and is kept. Presentation
++// only: the pad mapping and what each button does are untouched.
++inline bool hud_trades_b_and_x() {
++    if (getSettings().game.hudButtonLayout.getValue() != "vita") {
++        return false;
++    }
++#if TARGET_VITA
++    return twv_vita_confirm_circle() == 0;
++#else
++    return true;
++#endif
++}
++
++// Receipt of what the HUD did (twilight-vita: platform/vita/ui/ps_glyphs.cpp).
++inline void hud_layout_done(bool traded, float dx, float dy) {
++#if TARGET_VITA
++    twv_hud_button_layout(traded ? 1 : 0, dx, dy);
++#else
++    (void)traded;
++    (void)dx;
++    (void)dy;
++#endif
++}
++
+ // Replacement for in-text icon `index` (layer 1: the texture it blends with), or nullptr.
+ inline void* text_icon(int index, int layer) {
+ #if TARGET_VITA
+--- a/src/dusk/settings.cpp
++++ b/src/dusk/settings.cpp
+@@ -42,6 +42,11 @@
+ #else
+         .buttonPrompts {"game.buttonPrompts", std::string("gamecube")},
+ #endif
++#if TARGET_VITA
++        .hudButtonLayout {"game.hudButtonLayout", std::string("vita")},
++#else
++        .hudButtonLayout {"game.hudButtonLayout", std::string("original")},
++#endif
+ 
+         // Quality of Life
+         .enableQuickTransform {"game.enableQuickTransform", false},
+@@ -285,6 +290,7 @@
+     // Game
+     Register(g_userSettings.game.language);
+     Register(g_userSettings.game.buttonPrompts);
++    Register(g_userSettings.game.hudButtonLayout);
+     Register(g_userSettings.game.enableQuickTransform);
+     Register(g_userSettings.game.hideTvSettingsScreen);
+     Register(g_userSettings.game.biggerWallets);
+--- a/src/dusk/settings.h
++++ b/src/dusk/settings.h
+@@ -204,6 +204,8 @@
+         ConfigVar<GameLanguage> language;
+         // "gamecube" or "playstation" (dusk/button_prompts.hpp)
+         ConfigVar<std::string> buttonPrompts;
++        // "original" or "vita" (dusk/button_prompts.hpp)
++        ConfigVar<std::string> hudButtonLayout;
+ 
+         // QoL
+         ConfigVar<bool> enableQuickTransform;
