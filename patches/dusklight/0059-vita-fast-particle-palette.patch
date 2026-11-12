@@ -1,0 +1,195 @@
+Vita (--vita-fast-particle-palette=off|on, platform/vita/runtime/visual_skips.hpp): off by
+default. Dusklight's particle batch never takes child particles: each child is its own draw, one
+position matrix loaded into slot 0 and then the quad's display list. In Kakariko that is 135
+draws per frame (Vita3K count). The console has ten position-matrix slots and a per-vertex slot
+index, the path every skinned model uses. On, an emitter whose children need nothing but their
+matrix keeps the matrices back and sends up to ten children at once: matrix k into slot k, then
+one display list with the same quads in the same order, each vertex carrying its slot index.
+Every vertex is still transformed by its own particle's matrix with the same shader arithmetic;
+the colour, texture and blend state are the emitter's, as before. Emitters with a per-child
+colour, texture or size call, point or line shapes, a projected texture or a particle callback
+keep the one-draw-each path.
+
+--- a/libs/JSystem/include/JSystem/JParticle/JPABaseShape.h
++++ b/libs/JSystem/include/JSystem/JParticle/JPABaseShape.h
+@@ -13,6 +13,14 @@ struct ParticleDrawCtx {
+     Mtx texMtx;
+     GXColor clr0;
+     GXColor clr1;
++#if TARGET_VITA
++    // Vita (patches/dusklight/0059, JPABaseShape.cpp): child particles kept back to go out up to ten
++    // per draw, each through its own position-matrix slot.
++    bool palette;       // this emitter's children take that path
++    u8 paletteCount;    // matrices waiting
++    u8 paletteCross;    // 1: the two-quad cross shape (jpa_dl_x)
++    Mtx paletteMtx[10];
++#endif
+ };
+ #endif
+ 
+@@ -219,6 +227,10 @@ void JPADrawDBillboard(JPA_DRAW_PARTICLE_ARGS);
+ void JPADrawRotYBillboard(JPA_DRAW_PARTICLE_ARGS);
+ void JPADrawYBillboard(JPA_DRAW_PARTICLE_ARGS);
+ void JPADrawParticleCallBack(JPA_DRAW_PARTICLE_ARGS);
++#if TARGET_VITA
++// patches/dusklight/0059: sends the child particles kept back in ctx (JPABaseShape.cpp).
++void JPAFlushParticlePalette(JPAEmitterWorkData* work, ParticleDrawCtx* ctx);
++#endif
+ void JPALoadTexAnm(JPA_DRAW_PARTICLE_ARGS);
+ void JPASetPointSize(JPA_DRAW_PARTICLE_ARGS);
+ void JPASetLineWidth(JPA_DRAW_PARTICLE_ARGS);
+--- a/libs/JSystem/src/JParticle/JPABaseShape.cpp
++++ b/libs/JSystem/src/JParticle/JPABaseShape.cpp
+@@ -537,12 +537,84 @@ static void emit_batch_quad(JPAEmitterWorkData* work, const ParticleDrawCtx* ctx
+     }
+ }
+ 
++#if TARGET_VITA
++extern "C" void twv_vita_particle_batch_note(int outcome, int particles);
++// Vita (patches/dusklight/0059): --vita-fast-particle-palette (platform/vita/runtime/
++// visual_skips.hpp). The game draws each child particle as its own draw: one position matrix
++// loaded into slot 0, then the quad's display list. The console has ten position-matrix slots and
++// a per-vertex slot index (the path every skinned model uses). On, an emitter whose children need
++// nothing but their matrix (JPAResource.cpp checks the function list) keeps the matrices back and
++// sends up to ten children at once: matrix k into slot k, then one display list holding the same
++// quads, in the same order, each vertex with its slot index. Every vertex is still transformed by
++// its own particle's matrix, by the same shader arithmetic; only the number of draws changes.
++namespace {
++constexpr int kPaletteSlots = 10;
++struct PaletteLists {
++    alignas(32) u8 dl[2][kPaletteSlots][256];
++    u32 size[2][kPaletteSlots];
++    PaletteLists() {
++        // The quad's corners as jpa_dl and jpa_dl_x index them: position index, texcoord index.
++        static const u8 corners[2][8][2] = {
++            {{0, 0}, {1, 1}, {2, 2}, {3, 3}},
++            {{0, 0}, {1, 1}, {2, 2}, {3, 3}, {0x48, 0}, {0x49, 1}, {0x4A, 2}, {0x4B, 3}},
++        };
++        for (int cross = 0; cross < 2; cross++) {
++            const int perParticle = cross ? 8 : 4;
++            for (int n = 1; n <= kPaletteSlots; n++) {
++                u8* p = dl[cross][n - 1];
++                memset(p, 0, sizeof dl[cross][n - 1]);
++                const u32 count = (u32)(perParticle * n);
++                u32 at = 0;
++                p[at++] = 0x80; // GX_QUADS, GX_VTXFMT0
++                p[at++] = (u8)(count >> 8);
++                p[at++] = (u8)count;
++                for (int k = 0; k < n; k++) {
++                    for (int v = 0; v < perParticle; v++) {
++                        p[at++] = (u8)(3 * k); // GX_PNMTX0 + 3 * k
++                        p[at++] = corners[cross][v][0];
++                        p[at++] = corners[cross][v][1];
++                    }
++                }
++                size[cross][n - 1] = (at + 31) & ~31u;
++            }
++        }
++    }
++};
++} // namespace
++
++void JPAFlushParticlePalette(JPAEmitterWorkData* work, ParticleDrawCtx* ctx) {
++    (void)work;
++    if (ctx->paletteCount == 0) {
++        return;
++    }
++    static const PaletteLists lists;
++    for (int k = 0; k < ctx->paletteCount; k++) {
++        GXLoadPosMtxImm(ctx->paletteMtx[k], GX_PNMTX0 + 3 * k);
++    }
++    GXCallDisplayList(lists.dl[ctx->paletteCross][ctx->paletteCount - 1],
++                      lists.size[ctx->paletteCross][ctx->paletteCount - 1]);
++    twv_vita_particle_batch_note(6, ctx->paletteCount);
++    ctx->paletteCount = 0;
++}
++#endif
++
+ static void submit_particle_quad(
+     JPAEmitterWorkData* work, ParticleDrawCtx* ctx, const Mtx posMtx, const u8* dl, u32 dlSize) {
+     if (ctx->batch) {
+         emit_batch_quad(work, ctx, posMtx);
+         return;
+     }
++#if TARGET_VITA
++    if (ctx->palette) {
++        const u8 cross = dl == jpa_dl_x ? 1 : 0;
++        if (ctx->paletteCount == kPaletteSlots || (ctx->paletteCount != 0 && ctx->paletteCross != cross)) {
++            JPAFlushParticlePalette(work, ctx);
++        }
++        ctx->paletteCross = cross;
++        MTXCopy(posMtx, ctx->paletteMtx[ctx->paletteCount++]);
++        return;
++    }
++#endif
+ 
+     GXLoadPosMtxImm(posMtx, GX_PNMTX0);
+     p_prj[work->mPrjType](work, posMtx);
+--- a/libs/JSystem/src/JParticle/JPAResource.cpp
++++ b/libs/JSystem/src/JParticle/JPAResource.cpp
+@@ -1163,6 +1163,38 @@ void JPAResource::drawP(JPAEmitterWorkData* work) {
+     }
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0059): --vita-fast-particle-palette. Children whose draw needs nothing
++// but their position matrix go out up to ten per draw (JPABaseShape.cpp). That is the case when
++// the child function list holds only quad draw functions that load one matrix and call the quad's
++// display list, and the particle callback hook with no callback set: no per-child colour, texture
++// or size call, no point or line shape.
++extern "C" int twv_fast_particle_palette_mode;
++
++static bool child_palette_ok(JPAEmitterWorkData* work, JPAResource::DrawParticleFunc* list, int count) {
++    if (twv_fast_particle_palette_mode == 0 || list == NULL || work->mPrjType != 0) {
++        return false;
++    }
++    bool hasDraw = false;
++    for (int i = 0; i < count; i++) {
++        JPAResource::DrawParticleFunc func = list[i];
++        if (func == JPADrawBillboard || func == JPADrawRotBillboard || func == JPADrawYBillboard ||
++            func == JPADrawRotYBillboard || func == JPADrawDirection || func == JPADrawRotDirection ||
++            func == JPADrawRotation)
++        {
++            hasDraw = true;
++        } else if (func == JPADrawParticleCallBack) {
++            if (work->mpEmtr->mpPtclCallBack != NULL) {
++                return false;
++            }
++        } else {
++            return false;
++        }
++    }
++    return hasDraw;
++}
++#endif
++
+ void JPAResource::drawC(JPAEmitterWorkData* work) {
+     ZoneScoped;
+     work->mpEmtr->setStatus(0x80);
+@@ -1203,6 +1235,12 @@ void JPAResource::drawC(JPAEmitterWorkData* work) {
+ #if TARGET_PC
+     ParticleDrawCtx ctx{}; // immediate mode
+ #endif
++#if TARGET_VITA
++    ctx.palette = child_palette_ok(work, mpDrawParticleChildFuncList, mpDrawParticleChildFuncListNum);
++    if (ctx.palette) {
++        GXSetVtxDesc(GX_VA_PNMTXIDX, GX_DIRECT);
++    }
++#endif
+ 
+     if (pBsp->isDrawFwdAhead()) {
+         JPANode<JPABaseParticle>* node = work->mpEmtr->mAlivePtclChld.getLast();
+@@ -1234,6 +1272,13 @@ void JPAResource::drawC(JPAEmitterWorkData* work) {
+         }
+     }
+ 
++#if TARGET_VITA
++    if (ctx.palette) {
++        JPAFlushParticlePalette(work, &ctx);
++        GXSetVtxDesc(GX_VA_PNMTXIDX, GX_NONE);
++    }
++#endif
++
+     GXSetMisc(GX_MT_XF_FLUSH, 0);
+ 
+     if (work->mpEmtr->mpEmtrCallBack != NULL) {

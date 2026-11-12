@@ -14,6 +14,14 @@ extern "C" int twv_gx_fast_static_dl_stats(uint32_t* counts, unsigned n) noexcep
 // verify candidates, decode mismatches, pipeline rebuilds checked, rebuilds that gave another pipeline).
 extern "C" int twv_gx_fast_gen_mode_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
 
+// patches/aurora/0025 (regs.cpp): the reg-repeats switch's mode and counts (BP writes not decoded,
+// light loads not decoded, BP mismatches, light mismatches).
+extern "C" int twv_gx_fast_reg_repeats_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
+
+// patches/aurora/0026 (command_processor.cpp): the draw-runs switch's mode and counts (runs, draws
+// joined, verify candidates, verify mismatches).
+extern "C" int twv_gx_fast_draw_runs_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
+
 // gfx_vgl/backend.cpp: 1 while the backend drops every draw into an offscreen framebuffer.
 extern "C" int twv_vita_offscreen_draws_dropped(void) __attribute__((weak));
 
@@ -22,8 +30,10 @@ uint32_t sUnseenMaps = 0; // maps left out (on) or that would have been (verify)
 int sModes[twv::vita::FastPainterOptionCount] = {};
 constexpr unsigned ReceiptFrames = 300;
 unsigned sFrames = 0;
-uint32_t sLostReported = 0, sMismatchReported = 0, sGenModeReported = 0;
+uint32_t sLostReported = 0, sMismatchReported = 0, sGenModeReported = 0, sRegRepeatsReported = 0,
+         sDrawRunsReported = 0;
 
+uint32_t sShadowLists[3]; // patches/dusklight/0066: joined, plain, verify mismatches
 void receipts() {
     if (sModes[twv::vita::FastUnseenMap] != twv::vita::FastOff) {
         twv::vita::telemetryEvent("fast_unseen_map_mode", sModes[twv::vita::FastUnseenMap]);
@@ -39,6 +49,32 @@ void receipts() {
         twv::vita::telemetryEvent("fast_gen_mode_rebuilds_checked", g[3]);
         twv::vita::telemetryEvent("fast_gen_mode_pipeline_mismatches", g[4]);
         sGenModeReported = g[2] + g[4];
+    }
+    if (sModes[twv::vita::FastShadowLists] != twv::vita::FastOff) {
+        twv::vita::telemetryEvent("fast_shadow_lists_mode", sModes[twv::vita::FastShadowLists]);
+        twv::vita::telemetryEvent("fast_shadow_lists_joined", sShadowLists[0]);
+        twv::vita::telemetryEvent("fast_shadow_lists_plain", sShadowLists[1]);
+        twv::vita::telemetryEvent("fast_shadow_lists_mismatches", sShadowLists[2]);
+    }
+    if (twv_gx_fast_draw_runs_stats && sModes[twv::vita::FastDrawRuns] != twv::vita::FastOff) {
+        uint32_t d[4] = {};
+        const int mode = twv_gx_fast_draw_runs_stats(d, 4);
+        twv::vita::telemetryEvent("fast_draw_runs_mode", mode);
+        twv::vita::telemetryEvent("fast_draw_runs_runs", d[0]);
+        twv::vita::telemetryEvent("fast_draw_runs_joined", d[1]);
+        twv::vita::telemetryEvent("fast_draw_runs_candidates", d[2]);
+        twv::vita::telemetryEvent("fast_draw_runs_mismatches", d[3]);
+        sDrawRunsReported = d[3];
+    }
+    if (twv_gx_fast_reg_repeats_stats && sModes[twv::vita::FastRegRepeats] != twv::vita::FastOff) {
+        uint32_t r[4] = {};
+        const int mode = twv_gx_fast_reg_repeats_stats(r, 4);
+        twv::vita::telemetryEvent("fast_reg_repeats_mode", mode);
+        twv::vita::telemetryEvent("fast_reg_repeats_bp", r[0]);
+        twv::vita::telemetryEvent("fast_reg_repeats_lights", r[1]);
+        twv::vita::telemetryEvent("fast_reg_repeats_bp_mismatches", r[2]);
+        twv::vita::telemetryEvent("fast_reg_repeats_light_mismatches", r[3]);
+        sRegRepeatsReported = r[2] + r[3];
     }
     if (twv_gx_fast_static_dl_stats) {
         uint32_t s[4] = {};
@@ -77,6 +113,13 @@ extern "C" int twv_vita_fast_painter_mode(unsigned option) {
 extern "C" int twv_gx_fast_wake_mode(void) noexcept {return sModes[twv::vita::FastGxWake];}
 extern "C" int twv_gx_fast_static_dl_mode(void) noexcept {return sModes[twv::vita::FastStaticDl];}
 extern "C" int twv_gx_fast_gen_mode(void) noexcept {return sModes[twv::vita::FastGenMode];}
+extern "C" int twv_gx_fast_reg_repeats(void) noexcept {return sModes[twv::vita::FastRegRepeats];}
+extern "C" int twv_gx_fast_draw_runs(void) noexcept {return sModes[twv::vita::FastDrawRuns];}
+// patches/dusklight/0066: the shadow-lists switch and its counts.
+extern "C" int twv_vita_fast_shadow_lists(void) {return sModes[twv::vita::FastShadowLists];}
+extern "C" void twv_vita_shadow_list_note(int what) {
+    if (what >= 0 && what < 3) ++sShadowLists[what];
+}
 extern "C" int twv_vita_unseen_map_skip(void) {
     const int mode = sModes[twv::vita::FastUnseenMap];
     if (mode == twv::vita::FastOff || !twv_vita_offscreen_draws_dropped || !twv_vita_offscreen_draws_dropped())
@@ -102,6 +145,16 @@ extern "C" void twv_vita_fast_painter_frame(void) {
         uint32_t g[5] = {};
         twv_gx_fast_gen_mode_stats(g, 5);
         now = g[2] + g[4] != sGenModeReported;
+    }
+    if (!now && twv_gx_fast_draw_runs_stats && sModes[twv::vita::FastDrawRuns] == twv::vita::FastVerify) {
+        uint32_t d[4] = {};
+        twv_gx_fast_draw_runs_stats(d, 4);
+        now = d[3] != sDrawRunsReported;
+    }
+    if (!now && twv_gx_fast_reg_repeats_stats && sModes[twv::vita::FastRegRepeats] == twv::vita::FastVerify) {
+        uint32_t r[4] = {};
+        twv_gx_fast_reg_repeats_stats(r, 4);
+        now = r[2] + r[3] != sRegRepeatsReported;
     }
     if (now) receipts();
 }

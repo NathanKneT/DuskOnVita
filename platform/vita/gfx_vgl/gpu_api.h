@@ -148,6 +148,8 @@ constexpr uint32_t TwvGpuFeatureUniformDirectVerify=65536u; // with it: written 
 constexpr uint32_t TwvGpuFeatureDrawSplit=131072u; // diagnostic: each draw's backend time split into its steps
 constexpr uint32_t TwvGpuFeatureSubmitThread=262144u; // draws are handed to a third thread that makes the backend's draw calls
 constexpr uint32_t TwvGpuFeatureSubmitVerify=524288u; // with it: each draw is waited for before the worker continues (no overlap)
+constexpr uint32_t TwvGpuFeatureDrawMerge=1048576u; // neighbouring quad/list draws with the same state and adjoining vertices become one draw
+constexpr uint32_t TwvGpuFeatureDrawMergeVerify=2097152u; // with it: decided and counted, every draw still sent on its own
 uint32_t twv_gpu_features(void);
 uint32_t twv_gpu_split_scenes(void);              // 0 without the split
 // GPU memory for cached geometry that the backend retires only after the GPU is done with it

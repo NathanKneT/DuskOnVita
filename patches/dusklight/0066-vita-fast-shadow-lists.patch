@@ -1,0 +1,89 @@
+Vita: --vita-fast-shadow-lists=off|on|verify (off by default). A simple shadow draws its volume
+three times, and the volume's display list is eight triangle strips: 24 draws per shadow on the GX
+worker, 358 of the 905 draws per frame in the Ordon village overview (Vita3K census, 12 Nov). On,
+the volume is drawn from a list in which Aurora's own load-time joiner has made the eight strips
+one indexed draw of the same triangles in the same order, called by reference. Off, nothing
+changes.
+
+--- a/src/d/d_drawlist.cpp
++++ b/src/d/d_drawlist.cpp
+@@ -1434,6 +1434,58 @@ static MtxP get_simple_shadow_mtx(Mtx worldMtx, const void* key, Mtx storage) {
+ }
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0066): --vita-fast-shadow-lists=off|on|verify (twilight-vita:
++// platform/vita/runtime/fast_painter.hpp). A simple shadow draws its volume three times (front
++// faces, back faces, clear), and l_shadowVolumeDL is eight triangle strips of 3 to 5 vertices:
++// 24 draws per shadow on the GX worker with nothing changed between them. In the Ordon village
++// overview that is 358 of 905 draws per frame for 13 shadows (Vita3K census, 12 Nov).
++// On: the volume is drawn from a list in which Aurora's load-time joiner (the one every J3D
++// shape's list goes through, aurora::gx::dl::optimize) has made the eight strips one indexed draw
++// of the same 16 triangles in the same order. The list is made once and called by reference.
++// If the joiner returns nothing the game's own list is drawn. verify: the joined list is made
++// and its size checked (32 vertices, 48 indices), and the game's own list is drawn.
++#include <aurora/dl.hpp>
++#include <vector>
++extern "C" int twv_vita_fast_shadow_lists(void);
++extern "C" void twv_vita_shadow_list_note(int what);
++static void twv_shadow_volume() {
++    static std::vector<u8> s_joined;
++    static int s_state = 0; // 0 not made yet, 1 made, -1 could not be made
++    const int mode = twv_vita_fast_shadow_lists();
++    if (mode == 0) {
++        GXCallDisplayList(l_shadowVolumeDL, 0x40);
++        return;
++    }
++    if (s_state == 0) {
++        static const GXVtxDescList desc[] = {{GX_VA_POS, GX_INDEX8}, {GX_VA_NULL, GX_NONE}};
++        s_state = -1;
++        if (auto joined = aurora::gx::dl::optimize(l_shadowVolumeDL, 0x40, desc, nullptr)) {
++            // One draw command: opcode and counts, 32 one-byte vertices, 48 two-byte indices.
++            if (joined->size() >= 32 + 96 && joined->size() < 0x100) {
++                s_joined = std::move(*joined);
++                s_joined.resize((s_joined.size() + 31) & ~size_t(31), 0); // NOP padding, as a list has
++                s_state = 1;
++            } else {
++                twv_vita_shadow_list_note(2);
++            }
++        }
++    }
++    if (s_state != 1 || mode == 2) {
++        if (s_state != 1) {
++            twv_vita_shadow_list_note(1);
++        }
++        GXCallDisplayList(l_shadowVolumeDL, 0x40);
++        return;
++    }
++    twv_vita_shadow_list_note(0);
++    GXCallDisplayListStatic(s_joined.data(), (u32)s_joined.size());
++}
++#define TWV_SHADOW_VOLUME() twv_shadow_volume()
++#else
++#define TWV_SHADOW_VOLUME() GXCallDisplayList(l_shadowVolumeDL, 0x40)
++#endif
++
+ void dDlst_shadowSimple_c::draw() {
+     static GXColor l_color = {0, 0, 0, 64};
+     l_color.a = mAlpha;
+@@ -1449,9 +1501,9 @@ void dDlst_shadowSimple_c::draw() {
+ #endif
+     GXSetCurrentMtx(GX_PNMTX0);
+     GXCallDisplayList(l_frontMat, 0x40);
+-    GXCallDisplayList(l_shadowVolumeDL, 0x40);
++    TWV_SHADOW_VOLUME();
+     GXCallDisplayList(l_backSubMat, 0x20);
+-    GXCallDisplayList(l_shadowVolumeDL, 0x40);
++    TWV_SHADOW_VOLUME();
+ #if TARGET_PC
+     Mtx shadowMtx;
+     GXLoadPosMtxImm(get_simple_shadow_mtx(mMtx, mMtxKey, shadowMtx), GX_PNMTX1);
+@@ -1484,7 +1536,7 @@ void dDlst_shadowSimple_c::draw() {
+     GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+     GXSetCurrentMtx(GX_PNMTX0);
+     GXCallDisplayList(l_clearMat, 0x40);
+-    GXCallDisplayList(l_shadowVolumeDL, 0x40);
++    TWV_SHADOW_VOLUME();
+ }
+ 
+ void dDlst_shadowSimple_c::set(cXyz* param_0, f32 param_1, f32 param_2, cXyz* param_3,

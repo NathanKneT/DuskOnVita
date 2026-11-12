@@ -3,6 +3,7 @@
 // decodes GX commands and builds each draw, and the submit thread, which makes the backend's draw
 // calls. One producer, one consumer, no lock. A command is taken off the queue only after it has
 // been executed, so "empty" means that everything handed over has been drawn.
+#include "draw_merge.hpp"
 #include "gpu_api.h"
 #include <atomic>
 #include <cstdint>
@@ -22,6 +23,9 @@ struct SubmitCommand {
     // SamplerUnit: the backend's texture_sampler_unit arguments.
     uint32_t unit = 0;
     int min = 0, mag = 0, s = 0, t = 0;
+    // Draw, with --vita-gxm-draw-merge: the sampler-unit requests that belong to this draw, made
+    // just before it (without the merge they travel as SamplerUnit commands and the mask is 0).
+    DrawUnits units;
     TwvVitaDrawState state;
 };
 

@@ -31,6 +31,23 @@
 //     Packets whose key is new every frame (an animated model's two vertex buffers in turn, the
 //     grass) are then no longer stored and thrown away every frame. verify: as on, and every
 //     cache hit is decoded again by the reference decoder and compared.
+// The GX worker's register decode:
+//   reg-repeats (patches/aurora/0025): a TEV colour or konst write of the value last decoded for
+//     its address and kind, and a light load of the words last decoded, do not go to their
+//     handlers (J3D sends both with every material). verify: the handler still runs and the state
+//     it writes is compared before and after.
+//   draw-runs (patches/aurora/0026): quad or triangle-list draw commands that follow each other
+//     with nothing changed between them (snow, rain, twilight squares, text: one quad per draw in
+//     the game) are sent to the backend as one draw. verify: nothing is joined, and each draw that
+//     would have joined is checked against Aurora's own change flags.
+//   shadow-lists (patches/dusklight/0066): a simple (blob) shadow draws its volume three times,
+//     and the volume's display list is eight triangle strips of 3 to 5 vertices, so one shadow is
+//     24 draws on the GX worker with nothing changed between them: 358 of the 905 draws per frame
+//     in the Ordon village overview (13 shadows; Vita3K census, 12 Nov). On: the volume is drawn
+//     from a list in which Aurora's own load-time joiner (aurora::gx::dl::optimize, the one every
+//     J3D shape goes through) has made the eight strips one indexed draw of the same 16 triangles
+//     in the same order, called by reference. verify: the joined list is built and its size
+//     checked, and the game's own list is drawn.
 // The vertex decode of large packets:
 //   decode-blocks (gfx_vgl/vertex.cpp build_gpu_vertices): a packet of more than 256 vertices is
 //     decoded 256 vertices at a time by the same decoder, so each block's output stays in the
@@ -44,12 +61,13 @@ enum : int { FastOff = 0, FastOn = 1, FastVerify = 2 };
 constexpr const char* FastModeNames[] = {"off", "on", "verify"};
 enum FastPainterOption : unsigned {
     FastGxWake, FastStaticDl, FastGenMode, FastPipelineInfo, FastUnseenMap, FastWideCache,
-    FastDecodeBlocks, FastPatientCache, FastPainterOptionCount
+    FastDecodeBlocks, FastPatientCache, FastRegRepeats, FastDrawRuns, FastShadowLists, FastPainterOptionCount
 };
 constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake", "static-dl", "gen-mode",
                                                                         "pipeline-info", "unseen-map",
                                                                         "wide-cache", "decode-blocks",
-                                                                        "patient-cache"};
+                                                                        "patient-cache", "reg-repeats",
+                                                                        "draw-runs", "shadow-lists"};
 // Play-profile defaults: the first five on since the console session of 10 Nov
 // (docs/benchmarks.csv). Vita3K verify in the six bench-v2 places found no lost wakeup, no
 // different list id, no different pipeline and no differing draw digest; on the console the GX
@@ -60,8 +78,9 @@ constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake
 // ms in Ordon centre. patient-cache: on since the console session of 11 Nov: verify compared 29,981
 // cache hits on the console without a difference; Kakariko stores 16 packets per frame instead of
 // 77 and its worker fell by 1.3 to 1.6 ms.
+// reg-repeats, draw-runs and shadow-lists: off until a console run has verified them.
 constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn, FastOn,
-                                                         FastOn, FastOn};
+                                                         FastOn, FastOn, FastOff, FastOff, FastOff};
 
 // "--vita-fast-<name>=off|on|verify" for a name above: 1 (choices[option] set), -1 for another
 // value or a second time, 0 for any other token.
@@ -94,6 +113,15 @@ int twv_gx_fast_wake_mode(void) noexcept;
 int twv_gx_fast_static_dl_mode(void) noexcept;
 // patches/aurora/0023: read at the GX worker's first genMode / numChans / numTexGens write.
 int twv_gx_fast_gen_mode(void) noexcept;
+// patches/aurora/0025: read at the GX worker's first register write.
+int twv_gx_fast_reg_repeats(void) noexcept;
+// patches/aurora/0026: read at the GX worker's first draw.
+int twv_gx_fast_draw_runs(void) noexcept;
+// patches/dusklight/0066 (d_drawlist.cpp): the shadow-lists mode, and a count per shadow volume
+// drawn: 0 joined list drawn, 1 the game's list drawn because no joined list could be made,
+// 2 verify found a joined list of an unexpected size.
+int twv_vita_fast_shadow_lists(void);
+void twv_vita_shadow_list_note(int what);
 // patches/dusklight/0052: 1 when the map's path is to be left out of this painter.
 int twv_vita_unseen_map_skip(void);
 // After every painter (actor_profile.cpp): receipts once in ReceiptFrames painted frames.

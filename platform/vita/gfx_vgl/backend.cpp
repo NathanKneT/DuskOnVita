@@ -69,6 +69,11 @@ struct DrawSplit {
  // state of the draw just before them, which was small too: what merging neighbours could save.
  uint64_t smallDraws=0,smallSameState=0,sameStateRuns=0;
  bool previousSmall=false,previousSame=false;
+ // When the states differ, what separates a small draw from the small draw before it: only the
+ // position and normal matrix rows (what one draw with a matrix palette could take), those and
+ // the colour registers, or anything else.
+ uint64_t smallMatrixOnly=0,smallMatrixColour=0,smallOther=0,matrixRuns=0;
+ bool previousMatrix=false;
 } sDrawSplit;
 }
 // gfx_vgl/pipeline_fast.cpp: whether the last pipeline_ref call returned `pipeline` for `config`.
@@ -461,6 +466,10 @@ void end_frame() noexcept {
    twv::vita::telemetryEvent("gfx_draw_split_small_draws",sDrawSplit.smallDraws);
    twv::vita::telemetryEvent("gfx_draw_split_small_same_state",sDrawSplit.smallSameState);
    twv::vita::telemetryEvent("gfx_draw_split_same_state_runs",sDrawSplit.sameStateRuns);
+   twv::vita::telemetryEvent("gfx_draw_split_small_matrix_only",sDrawSplit.smallMatrixOnly);
+   twv::vita::telemetryEvent("gfx_draw_split_small_matrix_colour",sDrawSplit.smallMatrixColour);
+   twv::vita::telemetryEvent("gfx_draw_split_small_other",sDrawSplit.smallOther);
+   twv::vita::telemetryEvent("gfx_draw_split_matrix_runs",sDrawSplit.matrixRuns);
   }
   vgl::flush_hot_counters();
   for(const auto& [key,value]:vgl::counters) twv::vita::telemetryEvent(("gfx_"+key).c_str(),value);
@@ -739,6 +748,21 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
   const bool same=small && sDrawSplit.previousSmall && std::memcmp(&previousState,&state,sizeof state)==0;
   sDrawSplit.smallDraws+=small;sDrawSplit.smallSameState+=same;
   if(same && !sDrawSplit.previousSame)++sDrawSplit.sameStateRuns;
+  bool matrix=false;
+  if(small && sDrawSplit.previousSmall && !same) {
+   const auto equal=[&](size_t from,size_t to) {
+    return std::memcmp(reinterpret_cast<const char*>(&previousState)+from,
+                       reinterpret_cast<const char*>(&state)+from,to-from)==0;
+   };
+   const size_t colours=offsetof(TwvVitaDrawState,color_regs),fog=offsetof(TwvVitaDrawState,fog);
+   const size_t pn=offsetof(TwvVitaDrawState,pn_pos),lights=offsetof(TwvVitaDrawState,light_pos);
+   const bool rest=equal(0,colours) && equal(fog,pn) && equal(lights,sizeof state);
+   if(rest && equal(colours,fog)){matrix=true;++sDrawSplit.smallMatrixOnly;}
+   else if(rest)++sDrawSplit.smallMatrixColour;
+   else ++sDrawSplit.smallOther;
+  }
+  if(matrix && !sDrawSplit.previousMatrix)++sDrawSplit.matrixRuns;
+  sDrawSplit.previousMatrix=matrix;
   previousState=state;sDrawSplit.previousSmall=small;sDrawSplit.previousSame=same;
  }
  if(trace) twv::vita::telemetryEvent("gfx_draw_return",data.pipeline);

@@ -1,0 +1,205 @@
+Vita (--vita-fast-reg-repeats=off|on|verify, platform/vita/runtime/fast_painter.hpp): register
+loads that reach their handlers although they change nothing. The register census counted, per frame in Kakariko, 7,900 BP writes decoded of
+which 1,600 were needed by the next draw, and 2,100 light loads of which 4 % carried new values.
+- BP 0xE0-0xE7 hold a TEV colour register or a konst colour (bit 23 of the value says which). The
+  BP shadow keeps one value per address; J3D sends the colour and the konst of an address with
+  every material, so each write differs from the other kind's and is decoded again. The last
+  decoded value is now kept per address and kind.
+- Light loads (XF 0x600-0x67F) are decoded and compared field by field. The raw words last decoded
+  are now kept and compared first.
+On: a write equal to the kept value does not go to its handler (for BP the shadow, its valid bit
+and the uniform flag are set as the handler would set them). Verify: the handler still runs and
+the colour registers, konst colours or lights are compared before and after. Off by default.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -418,6 +418,13 @@ static ProcessResult process_fast(const u8* data, u32 size) noexcept {
+         pos += 5;
+         taken = true;
+         if (!bp_write_unchanged(value)) {
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++          // patches/aurora/0025: a TEV colour or konst write of the value last decoded for its kind.
++          if (reg_repeats_on() && bp_tev_reg_repeat(value)) {
++            bp_tev_repeat_done(value);
++            break;
++          }
++#endif
+           handle_bp(value);
+           drawDone = (value >> 24) == GX_BP_REG_DRAWDONE;
+         }
+@@ -432,6 +439,13 @@ static ProcessResult process_fast(const u8* data, u32 size) noexcept {
+           pos += 5 + count * sizeof(u32);
+           taken = true;
+           if (count != 1 || !xf_write_unchanged(addr, read_bits<u32>(p + 5))) {
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++            // patches/aurora/0025: a light load of the words last decoded.
++            if (reg_repeats_on() && xf_light_repeat(addr, p + 5, count)) {
++              xf_light_repeat_done(addr, {p + 5, count * sizeof(u32)});
++              break;
++            }
++#endif
+             handle_xf(addr, {p + 5, count * sizeof(u32)});
+           }
+         }
+--- a/lib/gx/regs.cpp
++++ b/lib/gx/regs.cpp
+@@ -1159,6 +1159,18 @@ bool copy_xf_data_impl(u32 addr, const u8* data, u32 len) noexcept {
+     CHECK(startOffset + len <= 0x10, "XF: Light copy that crosses across light boundaries unsupported: offs={}, len={}",
+           startOffset, len);
+     changed = store_xf_light<Swap>(g_gxState.lights[lightIdx], startOffset, data, len);
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++    // patches/aurora/0025: the raw words now decoded. Only words that came in FIFO byte order are
++    // kept (the order the filter compares in); any other load forgets them.
++    for (u32 i = 0; i < len && lightBase + i < 0x80; ++i) {
++      if (Swap == (std::endian::big != std::endian::native)) {
++        std::memcpy(&gRegRepeats.light[lightBase + i], data + i * 4, 4);
++        gRegRepeats.lightValid[lightBase + i] = 1;
++      } else {
++        gRegRepeats.lightValid[lightBase + i] = 0;
++      }
++    }
++#endif
+   } else {
+     return false;
+   }
+@@ -1243,6 +1255,56 @@ inline bool xf_gen_mode_short(u32 reg, u32 val, bool& revalidated) noexcept {
+ 
+ #if defined(__vita__)
+ // patches/aurora/0023: receipts (platform/vita/runtime/fast_painter.cpp) and the draw's check.
++#if TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// patches/aurora/0025 (regs.hpp): --vita-fast-reg-repeats.
++extern "C" int twv_gx_fast_reg_repeats(void) noexcept __attribute__((weak));
++RegRepeats gRegRepeats;
++
++int reg_repeats_mode() noexcept {
++  if (gRegRepeats.mode < 0) {
++    gRegRepeats.mode = twv_gx_fast_reg_repeats ? twv_gx_fast_reg_repeats() : 0;
++  }
++  return gRegRepeats.mode;
++}
++
++void bp_tev_repeat_done(u32 value) noexcept {
++  ++gRegRepeats.counts[0];
++  if (gRegRepeats.mode == 2) {
++    const auto colorRegs = g_gxState.colorRegs;
++    const auto kcolors = g_gxState.kcolors;
++    handle_bp(value);
++    if (std::memcmp(&colorRegs, &g_gxState.colorRegs, sizeof colorRegs) != 0 ||
++        std::memcmp(&kcolors, &g_gxState.kcolors, sizeof kcolors) != 0) {
++      ++gRegRepeats.counts[2];
++    }
++    return;
++  }
++  // What handle_bp leaves besides the decoded fields, which already hold these values.
++  const u32 regId = value >> 24;
++  g_gxState.bpRegValid.set(regId);
++  g_gxState.bpRegCache[regId] = value;
++  g_gxState.dirty |= DirtyUniform;
++}
++
++void xf_light_repeat_done(u16 addr, std::span<const u8> data) noexcept {
++  ++gRegRepeats.counts[1];
++  if (gRegRepeats.mode == 2) {
++    const auto lights = g_gxState.lights;
++    handle_xf(addr, data);
++    if (std::memcmp(&lights, &g_gxState.lights, sizeof lights) != 0) {
++      ++gRegRepeats.counts[3];
++    }
++  }
++}
++
++extern "C" int twv_gx_fast_reg_repeats_stats(uint32_t* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 4; ++i) {
++    counts[i] = gRegRepeats.counts[i];
++  }
++  return gRegRepeats.mode < 0 ? 0 : gRegRepeats.mode;
++}
++#endif
++
+ extern "C" int twv_gx_fast_gen_mode_stats(uint32_t* counts, unsigned n) noexcept {
+   for (unsigned i = 0; i < n && i < 5; ++i) {
+     counts[i] = sGenModeCounts[i];
+@@ -1295,6 +1357,14 @@ void handle_bp(u32 value) noexcept {
+   g_gxState.bpRegValid.set(regId);
+   cache[regId] = value;
+   g_gxState.dirty |= reg.dirty;
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  if ((regId & 0xF8) == 0xE0) {
++    // patches/aurora/0025: the value now decoded, per address and kind.
++    const u32 kind = (value >> 23) & 1;
++    gRegRepeats.tev[kind][regId & 7] = value;
++    gRegRepeats.tevValid[kind] |= static_cast<u8>(1u << (regId & 7));
++  }
++#endif
+   if (reg.decode != nullptr) {
+     reg.decode(static_cast<u8>(regId), value);
+   }
+--- a/lib/gx/regs.hpp
++++ b/lib/gx/regs.hpp
+@@ -72,6 +72,66 @@ ALWAYS_INLINE bool xf_write_unchanged(u32 addr, u32 value) noexcept {
+   return reg < XfRegCount && reg - 0x1A > 0x26 - 0x1A && state.xfRegCache[reg] == value && state.xfRegValid[reg];
+ }
+ 
++#if defined(__vita__)
++// Vita (patches/aurora/0025): --vita-fast-reg-repeats=off|on|verify (platform/vita/runtime/
++// fast_painter.hpp). Two kinds of register load reach their handlers although they change nothing
++// (register census: 2,400 of 7,900 BP writes and 2,100 of
++// 5,200 XF loads per frame in Kakariko):
++//  - BP 0xE0-0xE7 hold a TEV colour register or a konst colour, told apart by bit 23 of the value.
++//    The BP shadow keeps one value per address, and J3D sends the colour and then the konst of the
++//    same address with every material, so each write differs from the other kind's and is decoded
++//    again. Here the last decoded value is kept per address and kind.
++//  - Light loads (XF 0x600-0x67F, several words) are decoded and compared field by field; the same
++//    lights are sent with every material. Here the raw words last decoded are kept.
++// On: a write equal to the kept value is not handed to its handler. For BP the shadow, its valid
++// bit and the uniform flag are set as the handler would; for a light load the handler changes
++// nothing when the values are equal. Verify: the handler still runs and the colour registers,
++// konst colours or lights are compared before and after; a change is counted as a mismatch.
++struct RegRepeats {
++  int mode = -1;        // -1 not read yet, 0 off, 1 on, 2 verify
++  u32 tev[2][8] = {};   // [kind][address - 0xE0]: value as handle_bp decoded it (register in the top byte)
++  u8 tevValid[2] = {};  // one bit per address
++  u32 light[0x80] = {}; // raw words in FIFO byte order
++  u8 lightValid[0x80] = {};
++  u32 counts[4] = {};   // BP writes not decoded, light loads not decoded, BP mismatches, light mismatches
++};
++extern RegRepeats gRegRepeats;
++int reg_repeats_mode() noexcept;
++// The write or load was dealt with (on: nothing to do; verify: handler run and checked).
++void bp_tev_repeat_done(u32 value) noexcept;
++void xf_light_repeat_done(u16 addr, std::span<const u8> data) noexcept;
++
++ALWAYS_INLINE bool reg_repeats_on() noexcept {
++  const int mode = gRegRepeats.mode;
++  return (mode < 0 ? reg_repeats_mode() : mode) != 0;
++}
++ALWAYS_INLINE bool bp_tev_reg_repeat(u32 value) noexcept {
++  const u32 regId = value >> 24;
++  if ((regId & 0xF8) != 0xE0) {
++    return false;
++  }
++  const auto& r = gRegRepeats;
++  const u32 kind = (value >> 23) & 1;
++  const u32 i = regId & 7;
++  return g_gxState.bpRegCache[0xFE] == 0x00FFFFFF && ((r.tevValid[kind] >> i) & 1) != 0 && r.tev[kind][i] == value;
++}
++ALWAYS_INLINE bool xf_light_repeat(u32 addr, const u8* words, u32 count) noexcept {
++  const u32 base = addr - 0x600;
++  if (base >= 0x80 || count > 0x80 - base) {
++    return false;
++  }
++  const auto& r = gRegRepeats;
++  for (u32 i = 0; i < count; ++i) {
++    u32 w;
++    std::memcpy(&w, words + i * 4, 4);
++    if (r.lightValid[base + i] == 0 || r.light[base + i] != w) {
++      return false;
++    }
++  }
++  return true;
++}
++#endif
++
+ #endif
+ 
+ } // namespace aurora::gx::fifo

@@ -1,0 +1,38 @@
+Vita (--vita-sync-loads=off|on, platform/vita/runtime/visual_skips.hpp): a test switch for
+emulator comparison runs, off by default. The game's loader thread finishes a request a tick
+earlier or later from run to run; the scene then starts on another tick with another random
+sequence, and two runs of the same build cannot be compared frame by frame. On, the thread that
+queues a load request waits until the loader has finished it, so loading takes the same number of
+game ticks in every run. The loader does the same work on its own thread; with the switch off
+nothing changes.
+
+--- a/src/m_Do/m_Do_dvd_thread.cpp
++++ b/src/m_Do/m_Do_dvd_thread.cpp
+@@ -135,11 +135,27 @@ mDoDvdThd_command_c* mDoDvdThd_param_c::getFirstCommand() {
+     return (mDoDvdThd_command_c*)mNodeList.mpHead;
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0057): --vita-sync-loads=on, for emulator comparison runs only. The
++// loader thread finishes a request a tick earlier or later from run to run, so two runs of the
++// same build reach the same place with another random sequence and their frames cannot be paired.
++// On, the thread that queues a request waits here until the loader has finished it (the loader
++// still does the work, on its own thread), so loading takes the same number of game ticks in every
++// run. Off (the default) nothing changes.
++extern "C" int twv_sync_loads_mode;
++extern "C" void twv_vita_sync_load_wait(const bool* done);
++#endif
++
+ void mDoDvdThd_param_c::addition(mDoDvdThd_command_c* pCommand) {
+     OSLockMutex(&mMutext);
+     cLs_Addition(&mNodeList, pCommand);
+     OSUnlockMutex(&mMutext);
+     this->kick();
++#if TARGET_VITA
++    if (twv_sync_loads_mode != 0) {
++        twv_vita_sync_load_wait(&pCommand->mIsDone);
++    }
++#endif
+ }
+ 
+ void mDoDvdThd_param_c::cut(mDoDvdThd_command_c* param_0) {

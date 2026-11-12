@@ -266,6 +266,14 @@ extern "C" int twv_vita_visual_skip_select(int which, int on) {
     return which >= 0 && which < twv::vita::VisualSkipCount && (on == 0 || on == 1);
 }
 extern "C" void twv_vita_state_digest_select(int) {}
+extern "C" void twv_vita_sync_loads_select(int) {}
+extern "C" void twv_vita_place_select(float, float, float, int) {}
+// audio/audio_out.hpp: --vita-audio-priority.
+namespace twv::vita::audio {
+void setHighPriority(bool) {}
+}
+extern "C" void twv_vita_fast_present_bg_select(int) {}
+extern "C" void twv_vita_fast_particle_palette_select(int) {}
 extern "C" int twv_vita_crowd_select(int level) {
     return level >= 0 && level < twv::vita::CrowdLevelCount;
 }

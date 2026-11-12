@@ -1,0 +1,163 @@
+Vita: measurement only. The painter profile (platform/vita/runtime/painter_profile.cpp, full
+receipts, one painted frame in four) now times the parts of every J3D material packet's draw: the
+material's load, its display list, the vertex arrays and format, and the shapes; inside the shapes,
+each shape's prepareDraw, its format, arrays and pipeline, its matrix loads and its geometry calls.
+The object lists are the largest block of the main thread's frame in the villages (10 to 12 ms of
+47 in Ordon centre on the console, 12 Nov) and had never been split. The parts come out in the
+paintprof_hud receipts under names starting with "j3d:". On frames that are not sampled the begin
+call returns 0 and nothing is timed. No game call, order or result changes.
+
+--- a/libs/JSystem/src/J3DGraphBase/J3DPacket.cpp
++++ b/libs/JSystem/src/J3DGraphBase/J3DPacket.cpp
+@@ -210,12 +210,35 @@ bool J3DMatPacket::isSame(J3DMatPacket* pOther) const {
+     return mMaterialID == pOther->mMaterialID && (mMaterialID & 0x80000000) == 0;
+ }
+ 
++#if defined(__vita__)
++// Vita (patches/dusklight/0063): measurement only. The painter profile (platform/vita/runtime/
++// painter_profile.cpp, full receipts, one painted frame in four) times the parts of a material
++// packet's draw: the object lists are the largest block of the main thread's frame in the villages
++// (10 to 12 ms of 47 in Ordon centre, console 12 Nov) and had never been split. begin returns 0 on
++// every other frame, and nothing is timed then. No call, order or result changes.
++extern "C" unsigned long long twv_paintprof_hud_begin(void);
++extern "C" void twv_paintprof_hud_end(const char* name, unsigned long long start);
++#define TWV_J3D_PART(name) \
++    do { \
++        if (twvPart_ != 0) { \
++            twv_paintprof_hud_end((name), twvPart_); \
++            twvPart_ = twv_paintprof_hud_begin(); \
++        } \
++    } while (0)
++#else
++#define TWV_J3D_PART(name) ((void)0)
++#endif
++
+ void J3DMatPacket::draw() {
+     ZoneScoped;
++#if defined(__vita__)
++    unsigned long long twvPart_ = twv_paintprof_hud_begin();
++#endif
+ #if TARGET_PC 
+     j3dSys.setTexture(mpTexture);
+ #endif
+     mpMaterial->load();
++    TWV_J3D_PART("j3d:material_load");
+ 
+ #if DEBUG && TARGET_PC
+     if (mpMaterial->mMaterialName != nullptr) {
+@@ -226,12 +249,14 @@ void J3DMatPacket::draw() {
+ #endif
+ 
+     callDL();
++    TWV_J3D_PART("j3d:material_list");
+ 
+     J3DShapePacket* packet = getShapePacket();
+ #if TARGET_PC
+     packet->mpModel->getVertexBuffer()->setArray();
+ #endif
+     packet->getShape()->loadPreDrawSetting();
++    TWV_J3D_PART("j3d:arrays_and_format");
+ 
+     while (packet != NULL) {
+         if (packet->getDisplayListObj() != NULL) {
+@@ -241,6 +266,10 @@ void J3DMatPacket::draw() {
+         packet->drawFast();
+         packet = (J3DShapePacket*)packet->getNextPacket();
+     }
++    // The shapes: their per-shape lists and, timed again inside this part, prepareDraw
++    // ("j3d:shape_prepare"), format, arrays and pipeline ("j3d:shape_setup"), matrix loads
++    // ("j3d:shape_matrix") and geometry ("j3d:shape_geometry"), the last three in J3DShape.cpp.
++    TWV_J3D_PART("j3d:shapes");
+ 
+     J3DShape::resetVcdVatCache();
+ 
+@@ -400,7 +429,15 @@ void J3DShapePacket::draw() {
+ void J3DShapePacket::drawFast() {
+     ZoneScoped;
+     if (!checkFlag(J3DShpFlag_Hidden) && mpShape != NULL) {
++#if defined(__vita__)
++        const unsigned long long twvPrepare = twv_paintprof_hud_begin();
+         prepareDraw();
++        if (twvPrepare != 0) {
++            twv_paintprof_hud_end("j3d:shape_prepare", twvPrepare);
++        }
++#else
++        prepareDraw();
++#endif
+ 
+         if (mpTexMtxObj != NULL) {
+             J3DDifferedTexMtx::sTexGenBlock = mpShape->getMaterial()->getTexGenBlock();
+--- a/libs/JSystem/src/J3DGraphBase/J3DShape.cpp
++++ b/libs/JSystem/src/J3DGraphBase/J3DShape.cpp
+@@ -333,8 +333,18 @@ void J3DShape::setArrayAndBindPipeline() const {
+     J3DShapeMtx::sTexMtxLoadType = getTexMtxLoadType();
+ }
+ 
++#if defined(__vita__)
++// Vita (patches/dusklight/0063): measurement only, see J3DPacket.cpp. The geometry calls of a
++// shape, on sampled painter frames.
++extern "C" unsigned long long twv_paintprof_hud_begin(void);
++extern "C" void twv_paintprof_hud_end(const char* name, unsigned long long start);
++#endif
++
+ void J3DShape::drawFast() const {
+     ZoneScoped;
++#if defined(__vita__)
++    unsigned long long twvStep = twv_paintprof_hud_begin();
++#endif
+     if (sOldVcdVatCmd != mVcdVatCmd) {
+ #if defined(__vita__)
+         GXCallDisplayListStatic(mVcdVatCmd, kVcdVatDLSize);
+@@ -348,22 +358,50 @@ void J3DShape::drawFast() const {
+         mCurrentMtx.load();
+ 
+     setArrayAndBindPipeline();
++#if defined(__vita__)
++    if (twvStep != 0) {
++        twv_paintprof_hud_end("j3d:shape_setup", twvStep);
++    }
++#endif
+     if (!checkFlag(J3DShpFlag_NoMtx)) {
+         if (J3DShapeMtx::getLODFlag())
+             J3DShapeMtx::resetMtxLoadCache();
+ 
+         for (u16 n = mMtxGroupNum, i = 0; i < n; i++) {
+-            if (mShapeMtx[i] != NULL)
++            if (mShapeMtx[i] != NULL) {
++#if defined(__vita__)
++                twvStep = twv_paintprof_hud_begin();
+                 mShapeMtx[i]->load();
+-            if (mShapeDraw[i] != NULL)
++                if (twvStep != 0)
++                    twv_paintprof_hud_end("j3d:shape_matrix", twvStep);
++#else
++                mShapeMtx[i]->load();
++#endif
++            }
++            if (mShapeDraw[i] != NULL) {
++#if defined(__vita__)
++                const unsigned long long twvPart = twv_paintprof_hud_begin();
++                mShapeDraw[i]->draw();
++                if (twvPart != 0)
++                    twv_paintprof_hud_end("j3d:shape_geometry", twvPart);
++#else
+                 mShapeDraw[i]->draw();
++#endif
++            }
+         }
+     } else {
+         J3DFifoLoadPosMtxImm(*j3dSys.getShapePacket()->getBaseMtxPtr(), GX_PNMTX0);
+         J3DFifoLoadNrmMtxImm(*j3dSys.getShapePacket()->getBaseMtxPtr(), GX_PNMTX0);
++#if defined(__vita__)
++        const unsigned long long twvPart = twv_paintprof_hud_begin();
++#endif
+         for (u16 n = mMtxGroupNum, i = 0; i < n; i++)
+             if (mShapeDraw[i] != NULL)
+                 mShapeDraw[i]->draw();
++#if defined(__vita__)
++        if (twvPart != 0)
++            twv_paintprof_hud_end("j3d:shape_geometry", twvPart);
++#endif
+     }
+ }
+ 

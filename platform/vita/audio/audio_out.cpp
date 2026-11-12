@@ -30,6 +30,10 @@ constexpr int kChannels = 2;
 constexpr SceUInt kJoinTimeoutUs = 2000000;
 // Core 2, below the game's threads in importance but above loaders (PORT_DESIGN 3.3).
 constexpr int kPriority = 0x10000100;
+// --vita-audio-priority=high: 16 steps above the priority of the thread that opens the port (the
+// game's main thread, at the default), as an absolute value like the timing and telemetry threads
+// use. Lower numbers are higher priorities; 64 is the highest a user thread may have.
+constexpr int kHighPrioritySteps = 16;
 constexpr int kAffinity = 0x40000; // SCE_KERNEL_CPU_MASK_USER_2
 constexpr int kStackSize = 256 * 1024; // the DSP render (64 voices, reverb) runs on this thread
 
@@ -45,8 +49,17 @@ struct State {
     alignas(64) std::int16_t device[2][kFrames * kChannels]{};
     std::atomic<std::uint32_t> buffers{0}, late{0}, maxRenderUs{0}, silent{0};
     std::atomic<std::int32_t> deviceError{0};
+    std::atomic<std::uint64_t> renderWallUs{0}, renderRunClocks{0}, lateWallUs{0}, lateRunClocks{0};
+    std::atomic<bool> highPriority{false};
 };
 State gState;
+
+// The calling thread's run clocks so far (kernel units), 0 when unavailable.
+std::uint64_t run_clocks() {
+    SceKernelThreadInfo info{};
+    info.size = sizeof info;
+    return sceKernelGetThreadInfo(sceKernelGetThreadId(), &info) == 0 ? static_cast<std::uint64_t>(info.runClocks) : 0;
+}
 
 std::int16_t to_s16(float v) {
     if (!(v == v)) return 0; // NaN
@@ -89,14 +102,20 @@ int worker(SceSize, void*) {
             std::memset(out, 0, sizeof gState.device[which]);
             gState.silent.fetch_add(1, std::memory_order_relaxed);
         } else {
+            const std::uint64_t clocks = run_clocks();
             const std::uint64_t start = processTimeUs();
             render(out);
             const auto took = static_cast<std::uint32_t>(processTimeUs() - start);
+            const std::uint64_t ran = run_clocks() - clocks;
             if (took > gState.maxRenderUs.load(std::memory_order_relaxed)) {
                 gState.maxRenderUs.store(took, std::memory_order_relaxed);
             }
+            gState.renderWallUs.fetch_add(took, std::memory_order_relaxed);
+            gState.renderRunClocks.fetch_add(ran, std::memory_order_relaxed);
             if (took > bufferUs) {
                 gState.late.fetch_add(1, std::memory_order_relaxed);
+                gState.lateWallUs.fetch_add(took, std::memory_order_relaxed);
+                gState.lateRunClocks.fetch_add(ran, std::memory_order_relaxed);
             }
         }
         const int rc = sceAudioOutOutput(gState.port, out);
@@ -124,7 +143,10 @@ bool open(int sampleRate, int channels, PullFn pull) {
     int volume[2] = {SCE_AUDIO_OUT_MAX_VOL, SCE_AUDIO_OUT_MAX_VOL}; // master volume is applied by the DSP
     sceAudioOutSetVolume(port, static_cast<SceAudioOutChannelFlag>(SCE_AUDIO_VOLUME_FLAG_L_CH | SCE_AUDIO_VOLUME_FLAG_R_CH),
                          volume);
-    const SceUID thread = sceKernelCreateThread("twv_audio_out", worker, kPriority, kStackSize, 0, kAffinity, nullptr);
+    const bool high = gState.highPriority.load(std::memory_order_relaxed);
+    const int opener = sceKernelGetThreadCurrentPriority();
+    const int priority = !high || opener < 64 + kHighPrioritySteps ? kPriority : opener - kHighPrioritySteps;
+    const SceUID thread = sceKernelCreateThread("twv_audio_out", worker, priority, kStackSize, 0, kAffinity, nullptr);
     if (thread < 0) {
         telemetryEvent("audio_thread_error", thread);
         sceAudioOutReleasePort(port);
@@ -147,6 +169,8 @@ bool open(int sampleRate, int channels, PullFn pull) {
         return false;
     }
     telemetryEvent("audio_open_hz", sampleRate);
+    telemetryEvent("audio_opener_priority", opener);
+    telemetryEvent("audio_priority", priority);
     return true;
 }
 
@@ -190,8 +214,14 @@ Stats stats() {
     s.maxRenderUs = gState.maxRenderUs.load(std::memory_order_relaxed);
     s.silentBuffers = gState.silent.load(std::memory_order_relaxed);
     s.deviceError = gState.deviceError.load(std::memory_order_relaxed);
+    s.renderWallUs = gState.renderWallUs.load(std::memory_order_relaxed);
+    s.renderRunClocks = gState.renderRunClocks.load(std::memory_order_relaxed);
+    s.lateWallUs = gState.lateWallUs.load(std::memory_order_relaxed);
+    s.lateRunClocks = gState.lateRunClocks.load(std::memory_order_relaxed);
     return s;
 }
+void setHighPriority(bool on) { gState.highPriority.store(on, std::memory_order_relaxed); }
+bool highPriority() { return gState.highPriority.load(std::memory_order_relaxed); }
 std::int32_t threadId() { return gState.thread; }
 
 }  // namespace twv::vita::audio

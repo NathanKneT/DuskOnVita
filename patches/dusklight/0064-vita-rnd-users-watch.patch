@@ -1,0 +1,131 @@
+Vita: test only (--vita-state-digest=on). Two Vita3K runs of Kakariko with fixed game ticks end up
+with different random sequences although nothing differs between them (12 Nov); actors' draw
+methods, the painter and the weather effects are ruled out. To find who draws random numbers
+differently, both generators count their calls, and each game tick's receipt tick_rnd
+(platform/vita/runtime/visual_skips.cpp) lists the numbers drawn in the tick and since the tick
+before, and per actor type in execute. Around Link's execute the callers' return addresses of the
+first generator are kept as well (receipt alink_rnd, written when their number changes). Without
+the test switch the only change is one counter increment and one flag test per random number.
+
+--- a/src/SSystem/SComponent/c_math.cpp
++++ b/src/SSystem/SComponent/c_math.cpp
+@@ -222,7 +222,33 @@ void cM_initRnd(int s0, int s1, int s2) {
+  * Gets a random value
+  * @return a random value
+  */
++#if TARGET_VITA
++// Vita (patches/dusklight/0064, test only): how many numbers both generators have given, for the
++// per-tick list of who drew them (--vita-state-digest=on, receipt tick_rnd).
++// While twv_rnd_trace is set (f_op_actor.cpp sets it around Link's execute in that test mode),
++// the callers' return addresses are kept, so the receipt alink_rnd can name the code that drew.
++extern "C" {
++unsigned twv_rnd_calls = 0;
++int twv_rnd_trace = 0;
++unsigned twv_rnd_trace_n = 0;
++const void* twv_rnd_trace_ra[16];
++const void* twv_rnd_trace_base(void) {
++    return (const void*)&cM_initRnd;
++}
++}
++static int s_twvRndNested = 0; // a wrapper below has noted its own caller
++static inline void twv_rnd_note(const void* ra) {
++    if (twv_rnd_trace != 0 && s_twvRndNested == 0 && twv_rnd_trace_n < 16) {
++        twv_rnd_trace_ra[twv_rnd_trace_n++] = ra;
++    }
++}
++#endif
++
+ f32 cM_rnd() {
++#if TARGET_VITA
++    ++twv_rnd_calls;
++    twv_rnd_note(__builtin_return_address(0));
++#endif
+     r0 = (r0 * 171) % 30269;
+     r1 = (r1 * 172) % 30307;
+     r2 = (r2 * 170) % 30323;
+@@ -241,7 +267,15 @@ f32 cM_rnd() {
+  * @return a random value between 0 and `max`
+  */
+ f32 cM_rndF(f32 max) {
++#if TARGET_VITA
++    twv_rnd_note(__builtin_return_address(0));
++    ++s_twvRndNested;
++    const f32 twvValue = cM_rnd() * max;
++    --s_twvRndNested;
++    return twvValue;
++#else
+     return cM_rnd() * max;
++#endif
+ }
+ 
+ /**
+@@ -250,7 +284,15 @@ f32 cM_rndF(f32 max) {
+  * @return a random value between -`max` and +`max`
+  */
+ f32 cM_rndFX(f32 max) {
++#if TARGET_VITA
++    twv_rnd_note(__builtin_return_address(0));
++    ++s_twvRndNested;
++    const f32 twvValue = max * (cM_rnd() - 0.5f) * 2.0f;
++    --s_twvRndNested;
++    return twvValue;
++#else
+     return max * (cM_rnd() - 0.5f) * 2.0f;
++#endif
+ }
+ 
+ static s32 r02;
+@@ -266,6 +308,9 @@ void cM_initRnd2(int s0, int s1, int s2) {
+ }
+ 
+ f32 cM_rnd2() {
++#if TARGET_VITA
++    ++twv_rnd_calls;
++#endif
+     r02 = (r02 * 171) % 30269;
+     r12 = (r12 * 172) % 30307;
+     r22 = (r22 * 170) % 30323;
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -240,6 +240,15 @@ extern "C" void twv_cM_rnd_state(int* out);
+ extern "C" void twv_cM_rnd2_state(int* out);
+ extern "C" void twv_vita_draw_rnd_note(int name);
+ static u32 s_twvDrawLearned[32]; // one bit per actor type seen drawing random numbers
++// Vita (patches/dusklight/0064, test only): with --vita-state-digest=on each actor type's random
++// numbers drawn in execute are listed per game tick (receipt tick_rnd), so two runs that end up
++// with different random sequences show which type drew differently, and in which tick.
++extern "C" unsigned twv_rnd_calls;
++extern "C" void twv_vita_exec_rnd_note(int name, unsigned calls);
++extern "C" int twv_rnd_trace;
++extern "C" unsigned twv_rnd_trace_n;
++extern "C" const void* twv_rnd_trace_ra[16];
++extern "C" void twv_vita_exec_rnd_trace(const void* const* callers, unsigned n);
+ 
+ // Draw methods that advance something per call or keep state the game reads, so they run on every
+ // tick: grass (dGrass_packet_c::update advances some kinds' sway phase per draw and settles each
+@@ -562,10 +571,25 @@ static int fopAc_Execute(void* i_this) {
+ #if TARGET_VITA
+             fopAc_ac_c* const twvPrevExec = s_twvExecActor;
+             s_twvExecActor = actor;
++#endif
++#if TARGET_VITA
++            const unsigned twvRndBefore = twv_rnd_calls;
++            const bool twvTrace = twv_draw_rnd_watch != 0 && fopAcM_GetName(actor) == fpcNm_ALINK_e;
++            if (twvTrace) {
++                twv_rnd_trace_n = 0;
++                twv_rnd_trace = 1;
++            }
+ #endif
+             ret = fpcMtd_Execute((process_method_class DUSK_CONST*)actor->sub_method, actor);
+ #if TARGET_VITA
+             s_twvExecActor = twvPrevExec;
++            if (twvTrace) {
++                twv_rnd_trace = 0;
++                twv_vita_exec_rnd_trace(twv_rnd_trace_ra, twv_rnd_trace_n);
++            }
++            if (twv_draw_rnd_watch != 0 && twv_rnd_calls != twvRndBefore) {
++                twv_vita_exec_rnd_note(fopAcM_GetName(actor), twv_rnd_calls - twvRndBefore);
++            }
+ #endif
+ 
+             #if DEBUG

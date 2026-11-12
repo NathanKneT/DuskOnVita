@@ -6,16 +6,21 @@
 #include "runtime/telemetry.hpp"
 #if TWV_VITA_DECODE_PROBE
 #include "decode_probe.hpp"
+#include "register_census.hpp"
 #include "gfx/recording.hpp"
 #include "gx/gx.hpp"
 #include "gx/pipeline.hpp"
 #include "runtime/telemetry.hpp"
 #include <bit>
+#include <cstdio>
 #include <span>
 #include <string>
 #include <utility>
 namespace {
 twv::vgl::DecodeProbe sDecode;
+// register_census.hpp: counted on the frame halfway between two timed frames (never a timed one).
+twv::vgl::RegisterCensus sCensus;
+bool sCensusFrame=false,sCensusBegun=false;
 // FIFO-driven calls only: RmlUi also pushes vertices, from the game thread between frames.
 inline void decode_mark(twv::vgl::DecodeClass c) noexcept {
     if(!sDecode.inFifo)return;
@@ -31,6 +36,7 @@ extern "C" ProcessResult __wrap__ZN6aurora2gx4fifo7processEPKhj(const uint8_t* d
     twv::vgl::ProfileScope timer(TWV_PROFILE_FIFO);
 #if TWV_VITA_DECODE_PROBE
     sDecode.inFifo=true; // the outermost call: static lists are processed by an unwrapped inner call
+    if(sCensusFrame && !sCensusBegun){sCensus.frame_begin();sCensusBegun=true;}
     if(sDecode.sampled) {
         const uint64_t start=twv_vgl_time_us();
         sDecode.fifo_begin(start);
@@ -54,6 +60,7 @@ extern "C" void __real__ZN6aurora3gfx17push_draw_commandINS_2gx8DrawDataEEEvT_(a
 extern "C" void __wrap__ZN6aurora3gfx17push_draw_commandINS_2gx8DrawDataEEEvT_(aurora::gx::DrawData data) {
     if(!sDecode.timing()) {
         if(sDecode.inFifo)++sDecode.calls[twv::vgl::DecBackend];
+        if(sCensusFrame && sDecode.inFifo)sCensus.draw();
         __real__ZN6aurora3gfx17push_draw_commandINS_2gx8DrawDataEEEvT_(std::move(data));
         return;
     }
@@ -82,21 +89,25 @@ extern "C" void __wrap_twv_gfx_static_dl(const uint8_t* list,uint32_t size,uint3
 extern "C" void __real__ZN6aurora2gx4fifo9handle_bpEj(uint32_t) noexcept;
 extern "C" void __wrap__ZN6aurora2gx4fifo9handle_bpEj(uint32_t value) noexcept {
     decode_mark(twv::vgl::DecBp);
+    if(sCensusFrame && sDecode.inFifo)sCensus.bp(value);
     __real__ZN6aurora2gx4fifo9handle_bpEj(value);
 }
 extern "C" void __real__ZN6aurora2gx4fifo9handle_cpEhj(uint8_t,uint32_t) noexcept;
 extern "C" void __wrap__ZN6aurora2gx4fifo9handle_cpEhj(uint8_t addr,uint32_t value) noexcept {
     decode_mark(twv::vgl::DecCp);
+    if(sCensusFrame && sDecode.inFifo)sCensus.cp(addr,value);
     __real__ZN6aurora2gx4fifo9handle_cpEhj(addr,value);
 }
 extern "C" void __real__ZN6aurora2gx4fifo9handle_xfEtSt4spanIKhLj4294967295EE(uint16_t,std::span<const uint8_t>) noexcept;
 extern "C" void __wrap__ZN6aurora2gx4fifo9handle_xfEtSt4spanIKhLj4294967295EE(uint16_t addr,std::span<const uint8_t> data) noexcept {
     decode_mark(twv::vgl::DecXf);
+    if(sCensusFrame && sDecode.inFifo)sCensus.xf(addr,data.data(),data.size());
     __real__ZN6aurora2gx4fifo9handle_xfEtSt4spanIKhLj4294967295EE(addr,data);
 }
 extern "C" bool __real__ZN6aurora2gx4fifo12copy_xf_dataEjPKhjSt6endian(uint32_t,const uint8_t*,uint32_t,std::endian) noexcept;
 extern "C" bool __wrap__ZN6aurora2gx4fifo12copy_xf_dataEjPKhjSt6endian(uint32_t addr,const uint8_t* data,uint32_t len,std::endian e) noexcept {
     decode_mark(twv::vgl::DecXf); // indexed matrix loads (LOAD_INDX); handle_xf's own calls are not wrapped
+    if(sCensusFrame && sDecode.inFifo)sCensus.xf_indexed();
     return __real__ZN6aurora2gx4fifo12copy_xf_dataEjPKhjSt6endian(addr,data,len,e);
 }
 extern "C" void __real_twv_gfx_array_base(uint32_t) noexcept;
@@ -130,6 +141,7 @@ extern "C" bool twv_decode_probe_timing() noexcept {return sDecode.timing();}
 // Game thread, after the FIFO drain (aurora_vita.cpp end_frame).
 extern "C" void twv_decode_probe_frame_end() noexcept {
     sDecode.frame_end();
+    sCensusFrame=sDecode.frames%twv::vgl::DecodeProbe::Period==twv::vgl::DecodeProbe::Period/2;sCensusBegun=false;
     if(sDecode.frames%60)return;
     static long long clockNs=-1; // cost of one clock read: each timed class change pays one
     if(clockNs<0) {
@@ -150,6 +162,35 @@ extern "C" void twv_decode_probe_frame_end() noexcept {
         const std::string base=std::string("gfx_decode_probe_")+twv::vgl::DecodeClassNames[c];
         twv::vita::telemetryEvent((base+"_us").c_str(),(long long)sDecode.classUs[c]);
         twv::vita::telemetryEvent((base+"_calls").c_str(),(long long)sDecode.calls[c]);
+    }
+    // register_census.hpp: totals over the counted frames, and the BP registers written most.
+    twv::vita::telemetryEvent("gfx_reg_census_frames",(long long)sCensus.frames);
+    twv::vita::telemetryEvent("gfx_reg_census_draws",(long long)sCensus.draws);
+    twv::vita::telemetryEvent("gfx_reg_census_bp_writes",(long long)sCensus.bp_writes());
+    twv::vita::telemetryEvent("gfx_reg_census_bp_needed",(long long)sCensus.bp_needed());
+    twv::vita::telemetryEvent("gfx_reg_census_cp_writes",(long long)sCensus.cpWrites);
+    twv::vita::telemetryEvent("gfx_reg_census_cp_needed",(long long)sCensus.cpNeeded);
+    twv::vita::telemetryEvent("gfx_reg_census_xf_indexed_calls",(long long)sCensus.xfIndexedCalls);
+    for(unsigned c=0;c<twv::vgl::RegisterCensus::XfClassCount;++c) {
+        const std::string base=std::string("gfx_reg_census_xf_")+twv::vgl::RegisterCensus::XfClassNames[c];
+        twv::vita::telemetryEvent((base+"_calls").c_str(),(long long)sCensus.xfCalls[c]);
+        twv::vita::telemetryEvent((base+"_words").c_str(),(long long)sCensus.xfWords[c]);
+        twv::vita::telemetryEvent((base+"_needed").c_str(),(long long)sCensus.xfNeeded[c]);
+    }
+    if(sDecode.frames%600==0) {
+        bool used[256]={};
+        std::string text;
+        for(int n=0;n<16;++n) {
+            int best=-1;
+            for(int r=0;r<256;++r)if(!used[r] && sCensus.bpWrites[r] && (best<0 || sCensus.bpWrites[r]>sCensus.bpWrites[best]))best=r;
+            if(best<0)break;
+            used[best]=true;
+            char item[64];
+            std::snprintf(item,sizeof item,"%s%02X=%llu/%llu",n?" ":"",unsigned(best),
+                static_cast<unsigned long long>(sCensus.bpWrites[best]),static_cast<unsigned long long>(sCensus.bpNeeded[best]));
+            text+=item;
+        }
+        twv::vita::telemetryText("gfx_reg_census_bp_top",text.c_str());
     }
 }
 #endif

@@ -1,0 +1,169 @@
+Vita (--vita-fast-draw-runs=off|on|verify, platform/vita/runtime/fast_painter.hpp): draws that
+follow each other with nothing changed between them are sent as one. The game draws snow, rain,
+twilight squares, cloud shadows and text one quad per draw command; a Vita3K census of 12 Nov
+counted 2,498 such draws of 3,016 per frame in the Palace of Twilight and 2,029 of 2,524 in
+Snowpeak Ruins, each costing the GX worker a whole draw. When a quad or triangle-list draw is
+read, the commands after it are looked at: unchanged register writes and NOPs are passed over,
+and every following draw of the same primitive and vertex format joins it (up to 1,020
+vertices). The look stops at the first other command, so no state can change inside a run. Only
+direct-attribute vertex descriptors are taken, so static display lists and the geometry cache
+are not involved. Verify joins nothing and checks, at each draw that would have joined, that
+Aurora's own change flags say nothing changed. Off by default.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -703,6 +703,140 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+   push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
+ }
+ 
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++// Vita (patches/aurora/0026): --vita-fast-draw-runs=off|on|verify (platform/vita/runtime/
++// fast_painter.hpp). The game draws its snow, rain, twilight squares, cloud shadows and text one
++// quad per draw command, hundreds or thousands in a row with nothing changed between them: a
++// Vita3K census of 12 Nov counted 2,498 such draws of 3,016 per frame in the Palace of Twilight and
++// 2,029 of 2,524 in Snowpeak Ruins. Each one costs the GX worker a whole draw. Upstream merges
++// neighbouring draws when no state changed, but only through a command list this backend does not
++// keep (it draws at once).
++// On: when a quad or triangle-list draw is read, the commands that follow it in the same stream
++// are looked at. Register writes that the fast decoder would skip as unchanged and NOPs are
++// passed over; every following draw command of the same primitive and vertex format joins this
++// one (its vertices are appended), up to RunVertexLimit vertices. The look stops at the first
++// command that is anything else, so no state can change inside a run. Only vertex descriptors
++// with direct attributes are taken (the game's immediate draws), never indexed ones, so the
++// geometry of static display lists and the geometry cache are not involved. The backend then
++// receives one draw holding the same quads, in the same order, with the same state.
++// Verify: nothing is joined; each draw that would have joined is checked when it is reached:
++// Aurora's own change flags must then say that nothing changed since the previous draw.
++extern "C" int twv_gx_fast_draw_runs(void) noexcept __attribute__((weak));
++namespace {
++constexpr u32 RunVertexLimit = 1020; // a multiple of 4 and of 3
++constexpr u32 RunMaxVtxSize = 64;
++u8 sRunBuf[RunVertexLimit * RunMaxVtxSize];
++int sRunMode = -1;         // -1 not read yet, 0 off, 1 on, 2 verify
++u32 sRunCounts[4];         // runs, draws joined, verify candidates, verify mismatches
++const u8* sRunExpect = nullptr; // verify: where the next joining draw command starts
++
++inline int draw_runs_mode() noexcept {
++  if (sRunMode < 0) {
++    sRunMode = twv_gx_fast_draw_runs ? twv_gx_fast_draw_runs() : 0;
++  }
++  return sRunMode;
++}
++
++bool run_direct_only() noexcept {
++  for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7; ++i) {
++    const auto type = g_gxState.vtxDesc[i];
++    if (type != GX_NONE && type != GX_DIRECT) {
++      return false;
++    }
++  }
++  return true;
++}
++} // namespace
++
++extern "C" int twv_gx_fast_draw_runs_stats(uint32_t* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 4; ++i) {
++    counts[i] = sRunCounts[i];
++  }
++  return sRunMode < 0 ? 0 : sRunMode;
++}
++
++static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange) noexcept;
++
++// The reader stands on this draw's vertex bytes. True when the draw and the draws that follow it
++// were sent as one (the reader is then past all of them).
++static bool draw_run(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, ByteReader& reader) noexcept {
++  const u32 per = prim == GX_QUADS ? 4 : 3;
++  const u8* const base = reader.data() + reader.offset();
++  const size_t avail = reader.remaining();
++  const size_t own = static_cast<size_t>(vtxCount) * vtxSize;
++  if (sRunMode == 2 && sRunExpect != nullptr) {
++    // This draw was announced as one that would join the previous draw.
++    if (base - 3 == sRunExpect && (g_gxState.dirty != 0 || fmt != sDrawCache.lastDrawFmt)) {
++      ++sRunCounts[3];
++    }
++    sRunExpect = nullptr;
++  }
++  // A reader without a known end (unbounded) gives nothing to look ahead in safely.
++  if (vtxCount % per != 0 || vtxCount > RunVertexLimit || own > avail ||
++      reader.size() == std::numeric_limits<size_t>::max()) {
++    return false;
++  }
++  const u8 cmd = static_cast<u8>(prim) | static_cast<u8>(fmt);
++  u32 total = vtxCount;
++  u32 joined = 0;
++  size_t end = own; // past the last draw taken
++  for (;;) {
++    size_t p = end;
++    for (;;) { // commands that change nothing
++      if (p >= avail) {
++        break;
++      }
++      const u32 op = base[p] >> 3;
++      if (op == (CP_CMD_NOP >> 3)) {
++        ++p;
++      } else if (op == (CP_CMD_LOAD_BP_REG >> 3) && avail - p >= 5 && bp_write_unchanged(read_bits<u32>(base + p + 1))) {
++        p += 5;
++      } else if (op == (CP_CMD_LOAD_CP_REG >> 3) && avail - p >= 6 &&
++                 cp_write_unchanged(base[p + 1], read_bits<u32>(base + p + 2))) {
++        p += 6;
++      } else if (op == (CP_CMD_LOAD_XF_REG >> 3) && avail - p >= 9 &&
++                 (read_bits<u32>(base + p + 1) >> 16) == 0 &&
++                 xf_write_unchanged(read_bits<u32>(base + p + 1) & 0xFFFF, read_bits<u32>(base + p + 5))) {
++        p += 9;
++      } else {
++        break;
++      }
++    }
++    if (avail - p < 3 || base[p] != cmd) {
++      break;
++    }
++    const u32 n = read_bits<u16>(base + p + 1);
++    if (n == 0 || n % per != 0 || total + n > RunVertexLimit || avail - p - 3 < static_cast<size_t>(n) * vtxSize) {
++      break;
++    }
++    if (joined == 0 && !run_direct_only()) {
++      break;
++    }
++    if (sRunMode == 2) {
++      ++sRunCounts[2];
++      sRunExpect = base + p;
++      return false;
++    }
++    if (joined == 0) {
++      std::memcpy(sRunBuf, base, own);
++    }
++    std::memcpy(sRunBuf + static_cast<size_t>(total) * vtxSize, base + p + 3, static_cast<size_t>(n) * vtxSize);
++    total += n;
++    ++joined;
++    end = p + 3 + static_cast<size_t>(n) * vtxSize;
++  }
++  if (joined == 0) {
++    return false;
++  }
++  reader.skip(end);
++  ++sRunCounts[0];
++  sRunCounts[1] += joined;
++  const gfx::Range vertRange = gfx::push_verts(sRunBuf, static_cast<size_t>(total) * vtxSize, 4);
++  handle_draw_unmerged(prim, fmt, static_cast<u16>(total), vertRange);
++  return true;
++}
++#endif
++
+ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& reader) noexcept {
+   ZoneScoped;
+   u32 vtxSize;
+@@ -710,6 +844,13 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+     LIKELY { vtxSize = g_gxState.lastVtxSize; }
+   else
+     UNLIKELY { vtxSize = calc_vtx_size(fmt); }
++#if defined(__vita__) && TWV_VITA_GX_FAST_DECODE && !TWV_GX_DECODE_REF
++  // patches/aurora/0026: this draw and the same draws that follow it, as one.
++  if (draw_runs_mode() != 0 && (prim == GX_QUADS || prim == GX_TRIANGLES) && vtxCount != 0 && vtxSize != 0 &&
++      vtxSize <= RunMaxVtxSize && draw_run(prim, fmt, vtxCount, vtxSize, reader)) {
++    return;
++  }
++#endif
+ 
+   u32 totalVtxBytes = vtxCount * vtxSize;
+   if (totalVtxBytes > reader.remaining())

@@ -9,6 +9,7 @@
 // the same queue and thread run with no overlap at all (a picture that differs between on and
 // verify is an ordering fault; one that differs between verify and off is a hand-over fault).
 #include "gpu_backend.h"
+#include "submit_queue.hpp"
 
 namespace twv::gpu::submit {
 // After the backend's init: starts the queue and the thread. False when it could not start; the
@@ -18,6 +19,11 @@ bool active() noexcept;
 void draw(const TwvVitaDrawState* state, const void* vertices, uint32_t count, const uint16_t* indices,
           uint32_t indexCount);
 void sampler_unit(uint32_t unit, int min, int mag, int s, int t);
+// --vita-gxm-draw-merge: a draw command the caller fills in itself (kind, vertices, indices, counts,
+// state, units) and may keep back; nothing reaches the thread before end_draw(). At most one at a
+// time, and no drain() between the two calls would wait for it.
+twv::gpu::SubmitCommand* begin_draw();
+void end_draw();
 // Returns once everything handed over has been executed.
 void drain();
 void stop();

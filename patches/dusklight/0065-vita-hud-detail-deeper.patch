@@ -1,0 +1,18 @@
+Vita: measurement only. The HUD pane timing of 0043 goes four levels below the meter screen instead
+of two. On the console the HUD costs 3.5 to 3.7 ms of the main thread's frame in every place, and
+2.5 ms of it sit in one group (n_all) whose children were not timed. Sampled painter frames only.
+No call, order or result changes.
+
+--- a/libs/JSystem/src/J2DGraph/J2DPane.cpp
++++ b/libs/JSystem/src/J2DGraph/J2DPane.cpp
+@@ -358,7 +358,9 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
+         for (JSUTreeIterator<J2DPane> iter = mPaneTree.getFirstChild(); iter != mPaneTree.getEndChild(); ++iter) {
+ #if TARGET_VITA
+             const int twvDepth = s_twvHudDepth;
+-            const unsigned long long twvStart = twvDepth == 0 || twvDepth == 1 ? twv_paintprof_hud_begin() : 0;
++            // patches/dusklight/0065: four levels down instead of two, so that the elements inside
++            // the HUD's main group are timed too (the group alone is 2.5 of the HUD's 3.7 ms).
++            const unsigned long long twvStart = twvDepth >= 0 && twvDepth <= 3 ? twv_paintprof_hud_begin() : 0;
+             if (twvDepth >= 0) {
+                 s_twvHudDepth = twvDepth + 1;
+             }

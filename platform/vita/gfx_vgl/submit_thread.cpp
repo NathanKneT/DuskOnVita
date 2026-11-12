@@ -1,6 +1,5 @@
 // SDK domain: the submit thread of --vita-gxm-submit-thread (submit_thread.hpp).
 #include "submit_thread.hpp"
-#include "submit_queue.hpp"
 #include "runtime/telemetry.hpp"
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -9,11 +8,17 @@
 
 namespace twv::gpu::submit {
 namespace {
-// 256 commands of about 3 KB: a frame's draws pass through several times over.
-constexpr uint32_t Capacity = 256;
+// 32 commands of about 3 KB. On the console on 12 Nov (256 slots), handing a draw over cost the worker about
+// 11 us where 3 us was estimated, and the queue was never full. The thread keeps up, so a few
+// slots are enough, and 100 KB that is written and read again every few draws stays in the cache
+// where 800 KB did not.
+constexpr uint32_t Capacity = 32;
 constexpr int Priority = 0x10000100;  // the default user priority, as the main thread and the GX worker
 constexpr int StackBytes = 512 * 1024;
-constexpr int Core2 = 0x40000;  // SCE_KERNEL_CPU_MASK_USER_2 (main: core 0, GX worker: core 1)
+// Core 3 where the system gives it to a user thread, else core 2 (main: core 0, GX worker:
+// core 1; audio, the telemetry writer and the GXM timing thread are on core 2).
+constexpr int Core3 = 0x80000;
+constexpr int Core2 = 0x40000;  // SCE_KERNEL_CPU_MASK_USER_2
 constexpr SceUInt64 SpinUs = 200;  // how long the thread looks for the next command before it sleeps
 
 std::unique_ptr<SubmitQueue> queue;
@@ -27,9 +32,13 @@ uint64_t draws = 0, samplers = 0, drains = 0, drainWaits = 0, fullWaits = 0, wak
 int thread_main(SceSize, void*) {
     for (;;) {
         while (SubmitCommand* c = queue->front()) {
-            if (c->kind == SubmitCommand::Draw)
+            if (c->kind == SubmitCommand::Draw) {
+                for (unsigned i = 0; c->units.mask >> i; ++i)
+                    if (c->units.mask & (1u << i))
+                        target->texture_sampler_unit(i, c->units.params[i][0], c->units.params[i][1],
+                                                     c->units.params[i][2], c->units.params[i][3]);
                 target->draw(c->hasState ? &c->state : nullptr, c->vertices, c->count, c->indices, c->indexCount);
-            else
+            } else
                 target->texture_sampler_unit(c->unit, c->min, c->mag, c->s, c->t);
             queue->pop();
             if (draining.load(std::memory_order_seq_cst) && queue->empty()) sceKernelSignalSema(drainSema, 1);
@@ -90,7 +99,12 @@ bool start(const TwvGpuBackend& backend, bool verify) {
     target = &backend;
     verifyMode = verify;
     queue = std::move(created);
-    thread = sceKernelCreateThread("twv_gpu_submit", thread_main, Priority, StackBytes, 0, Core2, nullptr);
+    int core = 3;
+    thread = sceKernelCreateThread("twv_gpu_submit", thread_main, Priority, StackBytes, 0, Core3, nullptr);
+    if (thread < 0) {
+        core = 2;
+        thread = sceKernelCreateThread("twv_gpu_submit", thread_main, Priority, StackBytes, 0, Core2, nullptr);
+    }
     const int started = thread < 0 ? thread : sceKernelStartThread(thread, 0, nullptr);
     if (started < 0) {
         twv::vita::telemetryEvent("gfx_submit_thread_error", started);
@@ -98,6 +112,7 @@ bool start(const TwvGpuBackend& backend, bool verify) {
         return false;
     }
     twv::vita::telemetryEvent("gfx_submit_thread", verify ? 2 : 1);
+    twv::vita::telemetryEvent("gfx_submit_thread_core", core);
     return true;
 }
 
@@ -107,6 +122,14 @@ void drain() {
     if (!queue || queue->empty()) return;
     ++drains;
     draining.store(true, std::memory_order_seq_cst);
+    // The thread is usually within a few draws of the end: look for a short while before waiting
+    // on the semaphore (console, 12 Nov: four timed waits per frame).
+    wake();
+    {
+        const SceUInt64 start = sceKernelGetProcessTimeWide();
+        for (unsigned i = 0; !queue->empty(); ++i)
+            if ((i & 31) == 31 && sceKernelGetProcessTimeWide() - start > SpinUs) break;
+    }
     while (!queue->empty()) {
         wake();
         SceUInt timeout = 200;  // microseconds: a missed signal costs at most this
@@ -125,7 +148,21 @@ void draw(const TwvVitaDrawState* state, const void* vertices, uint32_t count, c
     c->count = count;
     c->indexCount = indexCount;
     c->hasState = state != nullptr;
+    c->units.mask = 0;
     if (state) c->state = *state;
+    queue->publish();
+    ++draws;
+    wake();
+    if (verifyMode) drain();
+}
+
+SubmitCommand* begin_draw() {
+    SubmitCommand* c = slot();
+    c->kind = SubmitCommand::Draw;
+    return c;
+}
+
+void end_draw() {
     queue->publish();
     ++draws;
     wake();

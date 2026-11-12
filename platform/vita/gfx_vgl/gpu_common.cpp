@@ -117,6 +117,11 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     twv::vita::telemetryEvent("audio_buffers",audio.buffers);
     twv::vita::telemetryEvent("audio_late_buffers",audio.late);
     twv::vita::telemetryEvent("audio_max_render_us",audio.maxRenderUs);
+    // Waiting or working: wall time against the audio thread's own run clocks, all buffers and late ones.
+    twv::vita::telemetryEvent("audio_render_wall_us",(long long)audio.renderWallUs);
+    twv::vita::telemetryEvent("audio_render_run_clocks",(long long)audio.renderRunClocks);
+    twv::vita::telemetryEvent("audio_late_wall_us",(long long)audio.lateWallUs);
+    twv::vita::telemetryEvent("audio_late_run_clocks",(long long)audio.lateRunClocks);
     twv::vita::telemetryFlush();
 }
 void memory_receipts() {

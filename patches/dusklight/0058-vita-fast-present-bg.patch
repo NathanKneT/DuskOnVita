@@ -1,0 +1,49 @@
+Vita (--vita-fast-present-bg=off|on, platform/vita/runtime/visual_skips.hpp): off by default.
+After the game ticks the main loop walks every process again for the picture (0.9 to 1.8 ms per
+frame on the console). A process draws in that walk only if it asked to; the room's background
+actor does, and runs its whole draw a second time: model calc, clipping of every shape against
+the view, material colours. Without frame interpolation the presentation camera is the last
+tick's, so the second draw should leave exactly what the tick's draw left. On, the background
+does not draw again in that walk. The check is the per-frame draw digest in fixed-tick runs: the
+same draws, frame for frame, with the switch on and off.
+
+--- a/src/f_pc/f_pc_leaf.cpp
++++ b/src/f_pc/f_pc_leaf.cpp
+@@ -3,6 +3,7 @@
+  * Framework - Process Leaf
+  */
+ 
++#include "f_pc/f_pc_name.h"
+ #include "f_pc/f_pc_leaf.h"
+ #include "f_pc/f_pc_debug_sv.h"
+ 
+@@ -18,12 +19,29 @@ int fpcLf_DrawMethod(leafdraw_method_class DUSK_CONST* i_methods, void* i_proces
+     return fpcMtd_Method(i_methods->draw_method, i_process);
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0058): --vita-fast-present-bg=off|on (platform/vita/runtime/
++// visual_skips.hpp). After the game ticks the loop walks the processes again for the picture; a
++// process draws there only if it asked to, and the room's background actor does: it runs its whole
++// draw again (model calc, clipping of every shape, material colours) for the presentation camera.
++// Without frame interpolation that camera is the last tick's, and the second draw should leave
++// what the tick's draw left. On, the background does not draw again in that walk. Whether the
++// picture's inputs stay the same is checked per frame with the draw digest; off by default.
++extern "C" int twv_fast_present_bg_mode;
++#endif
++
+ int fpcLf_Draw(leafdraw_class* i_leaf) {
+     int ret = 0;
+ #if TARGET_PC
+     if (!i_leaf->draw_interp_frame && !dusk::game_clock::is_sim_frame()) {
+         return ret;
+     }
++#endif
++#if TARGET_VITA
++    if (twv_fast_present_bg_mode != 0 && !dusk::game_clock::is_sim_frame() &&
++        !dusk::game_clock::g_frameTiming.interpolating && LEAFDRAW_BASE(i_leaf).name == fpcNm_BG_e) {
++        return ret;
++    }
+ #endif
+     if (i_leaf->unk_0xBC == 0) {
+         ret = fpcLf_DrawMethod(i_leaf->leaf_methods, i_leaf);

@@ -1,0 +1,78 @@
+Vita: the hidden draw skip of 0045 must keep on the full path every actor type whose draw method
+draws random numbers: skipped, such a draw changes the game's random sequence (a Vita3K run of
+Kakariko on 12 Nov gave another sequence from tick 177 on with the skip on). Three such types
+found by reading the actors' sources join the keep list (weather tag, cutscene actor, sky box).
+While the skip is on, or with --vita-state-digest=on (a test switch), both random generators'
+states are compared around every actor draw that runs; a type seen drawing random numbers is
+reported (receipt draw_rnd_types, platform/vita/runtime/visual_skips.cpp) and kept from then on.
+Nothing changes with the skip and the test switch off.
+
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -229,12 +229,35 @@ DUSK_GAME_DATA u32 fopAc_ac_c::stopStatus;
+ #include "f_pc/f_pc_name.h"
+ extern "C" int twv_skip_hidden_draw_mode;
+ extern "C" void twv_vita_visual_skip_count(int what);
++// Vita (patches/dusklight/0062): a draw method that draws random numbers changes the game's random
++// sequence when it is skipped, so its type must stay on the full path. While the skip is on, or
++// with --vita-state-digest=on, both generators' states are compared around every actor draw that
++// runs. A type seen drawing random numbers is reported (receipt draw_rnd_types) and, from then
++// on, kept by twv_draw_keep for the rest of the run: a type missing from the list below costs at
++// most the hidden steps before its first shown draw, and the receipt names it.
++extern "C" int twv_draw_rnd_watch;
++extern "C" void twv_cM_rnd_state(int* out);
++extern "C" void twv_cM_rnd2_state(int* out);
++extern "C" void twv_vita_draw_rnd_note(int name);
++static u32 s_twvDrawLearned[32]; // one bit per actor type seen drawing random numbers
+ 
+ // Draw methods that advance something per call or keep state the game reads, so they run on every
+ // tick: grass (dGrass_packet_c::update advances some kinds' sway phase per draw and settles each
+-// new blade's ground height and culling bits, which cutting reads).
++// new blade's ground height and culling bits, which cutting reads); and the types whose draw
++// method draws random numbers, found by reading every actor's source (12 Nov): the weather tag
++// (its type 4 runs its weather schedule from the draw method), cutscene actors (hair and reins
++// are moved in the draw method) and the sky box (the fishing hole's sun spins by a random step).
+ static bool twv_draw_keep(s16 name) {
+-    return name == fpcNm_GRASS_e;
++    switch (name) {
++    case fpcNm_GRASS_e:
++    case fpcNm_KYTAG06_e:
++    case fpcNm_DEMO00_e:
++    case fpcNm_VRBOX2_e:
++        return true;
++    default:
++        break;
++    }
++    return name >= 0 && name < 1024 && ((s_twvDrawLearned[name >> 5] >> (name & 31)) & 1) != 0;
+ }
+ 
+ static bool twv_draw_skip(fopAc_ac_c* actor) {
+@@ -427,7 +450,27 @@ static int fopAc_Draw(void* i_this) {
+                 ret = 1;
+             } else {
+                 twv_offscreen_replay(actor);
+-                ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
++                if (twv_draw_rnd_watch != 0 || twv_skip_hidden_draw_mode != 0) {
++                    int before[6];
++                    int after[6];
++                    twv_cM_rnd_state(before);
++                    twv_cM_rnd2_state(before + 3);
++                    ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
++                    twv_cM_rnd_state(after);
++                    twv_cM_rnd2_state(after + 3);
++                    for (int i = 0; i < 6; i++) {
++                        if (before[i] != after[i]) {
++                            const s16 name = fopAcM_GetName(actor);
++                            twv_vita_draw_rnd_note(name);
++                            if (name >= 0 && name < 1024) {
++                                s_twvDrawLearned[name >> 5] |= 1u << (name & 31);
++                            }
++                            break;
++                        }
++                    }
++                } else {
++                    ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
++                }
+             }
+ #else
+             ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);

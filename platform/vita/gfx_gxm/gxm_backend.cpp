@@ -1613,7 +1613,8 @@ const TwvGpuBackend gxmBackend{
     TwvGpuFeatureUniformReuse|TwvGpuFeaturePipelineMemo|  // the memo is front-end only, offered with GXM
     TwvGpuFeatureUniformSplit|TwvGpuFeatureUniformSplitVerify|TwvGpuFeatureFragmentSplit|TwvGpuFeatureFragmentSplitVerify|
     TwvGpuFeatureUniformDirect|TwvGpuFeatureUniformDirectVerify|TwvGpuFeatureDrawSplit|
-    TwvGpuFeatureSubmitThread|TwvGpuFeatureSubmitVerify};
+    TwvGpuFeatureSubmitThread|TwvGpuFeatureSubmitVerify|
+    TwvGpuFeatureDrawMerge|TwvGpuFeatureDrawMergeVerify}; // the merge is in the dispatch layer, offered with GXM
 } // namespace
 extern "C" const TwvGpuBackend* twv_gpu_backend_gxm(void) {return &gxmBackend;}
 // Settings page (ui/settings_screen.hpp): the FPS counter on or off, at any time (kept for gxm_init

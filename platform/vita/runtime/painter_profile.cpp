@@ -21,7 +21,7 @@ using namespace twv::vita::paintprof;
 
 namespace {
 constexpr unsigned WindowFrames = 30;
-constexpr unsigned TopJpa = 16, Top2D = 16;
+constexpr unsigned TopJpa = 16, Top2D = 16, TopHud = 48;
 
 inline uint64_t now_us() {return twv::vita::processTimeUs();}
 
@@ -43,12 +43,41 @@ struct Window {
     uint64_t reads = 0;
     KeyTable<256> jpa;
     KeyTable<128> d2;
-    KeyTable<64> hud; // patches/dusklight/0043: HUD parts and panes, keyed by name or pane
+    KeyTable<256> hud; // patches/dusklight/0043, 0063, 0065: HUD parts and panes, J3D packet parts
 };
 Window gWin;
 uint64_t gFrameNo = 0, gWindowNo = 0, gPaintStart = 0;
 bool gOn = false;     // this painter call is sampled
 unsigned gDepth = 0;  // wrapped sections open
+
+// The game's two random generators (c_math.cpp). In the original a painted picture is a game tick.
+// Here a picture may show two ticks, so a painter part that draws random numbers makes the game's
+// random sequence depend on frame timing (found in twilight Kakariko, 12 Nov). The painter's whole
+// run is checked on every frame, each section on sampled frames; counts are run totals.
+extern "C" void twv_cM_rnd_state(int* out);
+extern "C" void twv_cM_rnd2_state(int* out);
+uint32_t gRndFrames = 0;               // painted frames whose painter drew random numbers
+uint32_t gRndSection[SectionCount] = {};  // sampled frames in which the section did
+int gRndAtBegin[6];
+inline void rnd_state(int* s) {
+    twv_cM_rnd_state(s);
+    twv_cM_rnd2_state(s + 3);
+}
+
+// Who calls copied display lists (sampled frames, run totals): the callers' return addresses, to be
+// placed in the ELF with addr2line. Receipt paintprof_dl_callers, the 12 busiest as address:calls.
+struct DlCaller {
+    const void* address;
+    uint32_t calls;
+};
+DlCaller gDlCallers[64];
+void dl_caller(const void* address) {
+    unsigned h = unsigned(reinterpret_cast<uintptr_t>(address) >> 1) & 63;
+    for (unsigned probe = 0; probe < 64; ++probe, h = (h + 1) & 63) {
+        if (gDlCallers[h].address == address) {++gDlCallers[h].calls; return;}
+        if (gDlCallers[h].address == nullptr) {gDlCallers[h] = {address, 1}; return;}
+    }
+}
 
 void publish() {
     using twv::vita::telemetryEvent;
@@ -100,11 +129,43 @@ void publish() {
         class_text(text, sizeof text, e.name, e);
         telemetryText("paintprof_2d", text);
     }
-    used = w.hud.top(top, Top2D);
+    unsigned topHud[TopHud];
+    used = w.hud.top(topHud, TopHud);
     for (std::size_t i = 0; i < used; ++i) {
-        const Entry& e = w.hud.slots[top[i]];
+        const Entry& e = w.hud.slots[topHud[i]];
         class_text(text, sizeof text, e.name, e);
         telemetryText("paintprof_hud", text);
+    }
+    {
+        // The 12 busiest callers of copied display lists so far.
+        unsigned order[12];
+        unsigned n = 0;
+        for (unsigned i = 0; i < 64; ++i) {
+            if (!gDlCallers[i].calls) continue;
+            unsigned pos = n < 12 ? n : 12;
+            while (pos > 0 && gDlCallers[order[pos - 1]].calls < gDlCallers[i].calls) --pos;
+            if (pos >= 12) continue;
+            for (unsigned k = n < 12 ? n : 11; k > pos; --k) order[k] = order[k - 1];
+            order[pos] = i;
+            if (n < 12) ++n;
+        }
+        int at = 0;
+        text[0] = 0;
+        for (unsigned i = 0; i < n && at < 180; ++i)
+            at += std::snprintf(text + at, sizeof text - at, "%s%lx:%lu", i ? " " : "",
+                                (unsigned long)reinterpret_cast<uintptr_t>(gDlCallers[order[i]].address),
+                                (unsigned long)gDlCallers[order[i]].calls);
+        if (n) telemetryText("paintprof_dl_callers", text);
+    }
+    telemetryEvent("paintprof_rnd_frames", gRndFrames);
+    if (gRndFrames) {
+        int at = 0;
+        text[0] = 0;
+        for (unsigned s = 0; s < SectionCount && at < 170; ++s)
+            if (gRndSection[s])
+                at += std::snprintf(text + at, sizeof text - at, "%s%s:%lu", at ? " " : "", SectionNames[s],
+                                    (unsigned long)gRndSection[s]);
+        telemetryText("paintprof_rnd_parts", text);
     }
     telemetryEvent("paintprof_reads", (long long)w.reads);
     telemetryEvent("paintprof_period", Period);
@@ -121,16 +182,22 @@ void publish() {
 
 // The outermost wrapped call is charged to its section; nested wrapped calls stay in their caller's.
 struct Scope {
-    explicit Scope(unsigned s) : section(s), start(gDepth++ == 0 ? now_us() : 0) {}
+    explicit Scope(unsigned s) : section(s), start(gDepth++ == 0 ? now_us() : 0) {
+        if (gDepth == 1) rnd_state(rnd);
+    }
     ~Scope() {
         if (--gDepth == 0) {
             gWin.sectionUs[section] += now_us() - start;
             ++gWin.sectionCalls[section];
             gWin.reads += 2;
+            int now[6];
+            rnd_state(now);
+            if (std::memcmp(now, rnd, sizeof now) != 0) ++gRndSection[section];
         }
     }
     unsigned section;
     uint64_t start;
+    int rnd[6];
 };
 }  // namespace
 
@@ -158,20 +225,32 @@ extern "C" void twv_paintprof_hud_pane(const void* pane, uint64_t tag, int depth
     if (!start || !gOn) return;
     Entry& e = gWin.hud.at(reinterpret_cast<uintptr_t>(pane));
     if (!e.name) {
-        static char pool[96][16];
-        static unsigned used = 0;
-        if (used < 96) {
-            char* n = pool[used++];
-            int k = std::snprintf(n, 16, "d%d:", depth);
-            for (int shift = 56; shift >= 0 && k < 15; shift -= 8) {
-                const char c = char((tag >> shift) & 0xFF);
-                if (c) n[k++] = (c >= 32 && c < 127) ? c : '?';
+        // One name per pane for the whole run. (Until 12 Nov a name was taken from the pool again
+        // in every window, so the pool ran out after a few windows and most panes were reported
+        // under the shared name.)
+        struct Named {
+            const void* pane;
+            char name[16];
+        };
+        static Named pool[256];
+        const char* found = nullptr;
+        unsigned h = unsigned((reinterpret_cast<uintptr_t>(pane) >> 3) ^ (reinterpret_cast<uintptr_t>(pane) >> 11)) & 255;
+        for (unsigned probe = 0; probe < 16 && found == nullptr; ++probe, h = (h + 1) & 255) {
+            Named& slot = pool[h];
+            if (slot.pane == pane) {
+                found = slot.name;
+            } else if (slot.pane == nullptr) {
+                slot.pane = pane;
+                int k = std::snprintf(slot.name, sizeof slot.name, "d%d:", depth);
+                for (int shift = 56; shift >= 0 && k < 15; shift -= 8) {
+                    const char c = char((tag >> shift) & 0xFF);
+                    if (c) slot.name[k++] = (c >= 32 && c < 127) ? c : '?';
+                }
+                slot.name[k] = 0;
+                found = slot.name;
             }
-            n[k] = 0;
-            e.name = n;
-        } else {
-            e.name = "d?:more";
         }
+        e.name = found != nullptr ? found : "d?:more";
     }
     e.us += now_us() - start;
     ++e.calls;
@@ -184,6 +263,7 @@ extern "C" void twv_paintprof_begin(unsigned long long start) {
     gOn = sampled(++gFrameNo);
     gDepth = 0;
     gPaintStart = start;
+    rnd_state(gRndAtBegin);
 }
 extern "C" void twv_paintprof_end(unsigned long long start, unsigned long long end) {
     if (twv::vita::telemetryIsQuiet()) {
@@ -196,6 +276,9 @@ extern "C" void twv_paintprof_end(unsigned long long start, unsigned long long e
         gWin.painterUs += end - start;
     }
     gOn = false;
+    int rndNow[6];
+    rnd_state(rndNow);
+    if (std::memcmp(rndNow, gRndAtBegin, sizeof rndNow) != 0) ++gRndFrames;
     if (++gWin.frames >= WindowFrames) publish();
 }
 
@@ -306,6 +389,7 @@ extern "C" void __wrap_GXCallDisplayListStatic(const void* list, uint32_t size) 
 extern "C" void __real_GXCallDisplayList(const void*, uint32_t);
 extern "C" void __wrap_GXCallDisplayList(const void* list, uint32_t size) {
     if (!gOn) {__real_GXCallDisplayList(list, size); return;}
+    dl_caller(__builtin_return_address(0));
     const uint64_t start = now_us();
     __real_GXCallDisplayList(list, size);
     gWin.dlUs += now_us() - start;

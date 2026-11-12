@@ -31,7 +31,7 @@ void telemetryFlush(){++flushes;}
 constexpr unsigned QuietReceiptFrames=300;
 bool telemetryIsQuiet(){return false;}
 namespace audio {
-struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0;};
+struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0,renderWallUs=0,renderRunClocks=0,lateWallUs=0,lateRunClocks=0;};
 Stats stats(){return {};}
 }
 }

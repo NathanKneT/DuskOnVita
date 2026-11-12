@@ -306,6 +306,45 @@ SAME_STATE = [
      ' }\n'),
 ]
 
+# With --vita-gxm-draw-split: what separates a small draw from the small draw before
+# it when their states differ (diagnostic for one draw with a matrix palette).
+STATE_DIFF = [
+    (' uint64_t smallDraws=0,smallSameState=0,sameStateRuns=0;\n'
+     ' bool previousSmall=false,previousSame=false;\n'
+     '} sDrawSplit;\n',
+     ' uint64_t smallDraws=0,smallSameState=0,sameStateRuns=0;\n'
+     ' bool previousSmall=false,previousSame=false;\n'
+     ' // When the states differ, what separates a small draw from the small draw before it: only the\n'
+     ' // position and normal matrix rows (what one draw with a matrix palette could take), those and\n'
+     ' // the colour registers, or anything else.\n'
+     ' uint64_t smallMatrixOnly=0,smallMatrixColour=0,smallOther=0,matrixRuns=0;\n'
+     ' bool previousMatrix=false;\n'
+     '} sDrawSplit;\n'),
+    ('   twv::vita::telemetryEvent("gfx_draw_split_same_state_runs",sDrawSplit.sameStateRuns);\n',
+     '   twv::vita::telemetryEvent("gfx_draw_split_same_state_runs",sDrawSplit.sameStateRuns);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_small_matrix_only",sDrawSplit.smallMatrixOnly);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_small_matrix_colour",sDrawSplit.smallMatrixColour);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_small_other",sDrawSplit.smallOther);\n'
+     '   twv::vita::telemetryEvent("gfx_draw_split_matrix_runs",sDrawSplit.matrixRuns);\n'),
+    ('  if(same && !sDrawSplit.previousSame)++sDrawSplit.sameStateRuns;\n',
+     '  if(same && !sDrawSplit.previousSame)++sDrawSplit.sameStateRuns;\n'
+     '  bool matrix=false;\n'
+     '  if(small && sDrawSplit.previousSmall && !same) {\n'
+     '   const auto equal=[&](size_t from,size_t to) {\n'
+     '    return std::memcmp(reinterpret_cast<const char*>(&previousState)+from,\n'
+     '                       reinterpret_cast<const char*>(&state)+from,to-from)==0;\n'
+     '   };\n'
+     '   const size_t colours=offsetof(TwvVitaDrawState,color_regs),fog=offsetof(TwvVitaDrawState,fog);\n'
+     '   const size_t pn=offsetof(TwvVitaDrawState,pn_pos),lights=offsetof(TwvVitaDrawState,light_pos);\n'
+     '   const bool rest=equal(0,colours) && equal(fog,pn) && equal(lights,sizeof state);\n'
+     '   if(rest && equal(colours,fog)){matrix=true;++sDrawSplit.smallMatrixOnly;}\n'
+     '   else if(rest)++sDrawSplit.smallMatrixColour;\n'
+     '   else ++sDrawSplit.smallOther;\n'
+     '  }\n'
+     '  if(matrix && !sDrawSplit.previousMatrix)++sDrawSplit.matrixRuns;\n'
+     '  sDrawSplit.previousMatrix=matrix;\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
     off-screen edits, the pipeline memo, the g4 console fixes and the fast info check."""
@@ -337,6 +376,10 @@ def audited(original):
     for old, new in SAME_STATE:
         if expected.count(old) != 1:
             raise SystemExit('Audited same-state edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in STATE_DIFF:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited state-difference edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

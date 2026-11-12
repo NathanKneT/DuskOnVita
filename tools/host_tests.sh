@@ -709,3 +709,10 @@ if setarch "$(uname -m)" -R true 2>/dev/null; then
 else
   "$out/submit_queue_test_tsan"
 fi
+# The draw merge's hold (gfx_vgl/draw_merge.hpp, --vita-gxm-draw-merge): every quad and triangle
+# reaches the backend once, in order, with its state and sampler-unit requests.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined   -I "$repo/platform/vita" "$repo/tests/draw_merge_test.cpp" -o "$out/draw_merge_test"
+"$out/draw_merge_test"
+# The register census (gfx_vgl/register_census.hpp): which register writes the next draw needed.
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined   -I "$repo/platform/vita" "$repo/tests/register_census_test.cpp" -o "$out/register_census_test"
+"$out/register_census_test"

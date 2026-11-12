@@ -14,6 +14,7 @@
 #include "ui/startup_screen.hpp"
 #include "runtime/fast_actors.hpp"
 #include "runtime/visual_skips.hpp"
+#include "audio/audio_out.hpp"
 #include "runtime/fast_painter.hpp"
 #include "runtime/player_settings.hpp"
 #include "disc/disc_report.h"
@@ -565,6 +566,18 @@ int main(int, char**) {
     for (int& choice : visualSkipChoices) choice = -1;
     int settingsVisualSkip[twv::vita::VisualSkipCount] = {};
     int stateDigestChoice = -1;
+    // --vita-sync-loads=off|on (runtime/visual_skips.hpp): test only, for emulator comparison runs.
+    int syncLoadsChoice = -1;
+    // --vita-audio-priority=default|high (audio/audio_out.hpp): the sound thread's priority.
+    int audioPriorityChoice = -1;
+    // --vita-place=X,Y,Z,ANGLE (runtime/visual_skips.hpp): bench lines only.
+    bool placeChosen = false;
+    float placeX = 0.0f, placeY = 0.0f, placeZ = 0.0f;
+    int placeAngle = 0;
+    // --vita-fast-present-bg=off|on (runtime/visual_skips.hpp, patches/dusklight/0058).
+    int presentBgChoice = -1;
+    // --vita-fast-particle-palette=off|on (runtime/visual_skips.hpp, patches/dusklight/0059).
+    int particlePaletteChoice = -1;
     // --vita-crowd=full|half|low (runtime/visual_skips.hpp); settingsCrowd: the settings page's level.
     int crowdChoice = -1, settingsCrowd = twv::vita::CrowdFull;
     // --vita-fast-<name>=off|on|verify (runtime/fast_painter.hpp): painter speed-ups, not renderer
@@ -588,6 +601,44 @@ int main(int, char**) {
                 if (choice < 0) {
                     argsError("--vita-skip-hidden-draw, --vita-skip-offscreen-anim, --vita-rest-creatures and "
                               "--vita-state-digest need off or on, once each");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice =
+                    wordOption(token, "--vita-fast-particle-palette=", "off", "on", particlePaletteChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-fast-particle-palette needs off or on, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-fast-present-bg=", "off", "on", presentBgChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-fast-present-bg needs off or on, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (std::strncmp(token, "--vita-place=", 13) == 0) {
+                if (placeChosen || std::sscanf(token + 13, "%f,%f,%f,%d", &placeX, &placeY, &placeZ, &placeAngle) != 4 ||
+                    placeAngle < -32768 || placeAngle > 32767) {
+                    argsError("--vita-place needs X,Y,Z,ANGLE, once");
+                    argsExit();
+                }
+                placeChosen = true;
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-audio-priority=", "default", "high", audioPriorityChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-audio-priority needs default or high, once");
+                    argsExit();
+                }
+                continue;
+            }
+            if (const int choice = wordOption(token, "--vita-sync-loads=", "off", "on", syncLoadsChoice)) {
+                if (choice < 0) {
+                    argsError("--vita-sync-loads needs off or on, once");
                     argsExit();
                 }
                 continue;
@@ -938,6 +989,18 @@ int main(int, char**) {
     }
     twv_vita_state_digest_select(stateDigestChoice == 1);
     if (stateDigestChoice == 1) twv::vita::telemetryText("state_digest", "on");
+    twv_vita_sync_loads_select(syncLoadsChoice == 1);
+    twv::vita::audio::setHighPriority(audioPriorityChoice == 1);
+    if (placeChosen) {
+        twv_vita_place_select(placeX, placeY, placeZ, placeAngle);
+        twv::vita::telemetryText("place", "on");
+    }
+    if (audioPriorityChoice == 1) twv::vita::telemetryText("audio_priority", "high");
+    twv_vita_fast_present_bg_select(presentBgChoice == 1);
+    twv_vita_fast_particle_palette_select(particlePaletteChoice == 1);
+    if (particlePaletteChoice == 1) twv::vita::telemetryText("fast_particle_palette", "on");
+    if (presentBgChoice == 1) twv::vita::telemetryText("fast_present_bg", "on");
+    if (syncLoadsChoice == 1) twv::vita::telemetryText("sync_loads", "on");
     for (unsigned option = 0; option < twv::vita::FastPainterOptionCount; ++option) {
         const int choice = fastPainterChoices[option];
         const int mode = choice >= 0 ? choice : playProfile ? twv::vita::FastPainterPlay[option] : int(twv::vita::FastOff);

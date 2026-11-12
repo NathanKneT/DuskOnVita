@@ -1,0 +1,71 @@
+Vita: receipts that say how each particle emitter's particles reached the GPU (twv_vita_particle_
+batch_note, platform/vita/runtime/visual_skips.cpp). Dusklight draws most emitters' particles as
+one batch of quads and refuses some (a draw function the batch does not cover, a projected
+texture, a particle callback, a colour selection); child particles are never batched. Each emitter
+draw is counted by outcome with its number of live particles. Counting only: nothing is drawn
+differently.
+
+--- a/libs/JSystem/src/JParticle/JPAResource.cpp
++++ b/libs/JSystem/src/JParticle/JPAResource.cpp
+@@ -1001,20 +1001,41 @@ static void batch_restore_gx(JPAEmitterWorkData* work, bool changedTev, bool cha
+     }
+ }
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0056): each emitter draw tells the platform whether its particles went
++// out as one batch and, if not, why (receipts particle_batch_*, platform/vita/runtime/
++// visual_skips.hpp). Counting only; nothing is drawn differently.
++// Outcomes: 0 batched, 1 a draw function the batch does not cover, 2 projected texture, 3 a
++// particle callback, 4 a colour selection the batch does not cover, 5 child particles (drawC
++// below: never batched, one draw each).
++extern "C" void twv_vita_particle_batch_note(int outcome, int particles);
++#endif
++
+ static bool draw_particle_batch(JPAEmitterWorkData* work) {
+     ZoneScoped;
+ 
+     JPAResource* res = work->mpRes;
+     const JPAResource::BatchInfo& info = res->mBatchInfo;
++#if TARGET_VITA
++    const int twvAlive = (int)work->mpEmtr->mAlivePtclBase.getNum();
++    if (!info.supported || work->mPrjType != 0 || work->mpEmtr->mpPtclCallBack != nullptr) {
++        twv_vita_particle_batch_note(!info.supported ? 1 : work->mPrjType != 0 ? 2 : 3, twvAlive);
++        return false;
++    }
++#else
+     if (!info.supported || work->mPrjType != 0 || work->mpEmtr->mpPtclCallBack != nullptr) {
+         return false;
+     }
++#endif
+ 
+     bool useClr0 = false;
+     bool useClr1 = false;
+     if (info.hasPtclColor) {
+         u32 colorSel = res->getBsp()->getTevColorArgSel();
+         if (colorSel >= 6) {
++#if TARGET_VITA
++            twv_vita_particle_batch_note(4, twvAlive);
++#endif
+             return false;
+         }
+         useClr0 = true;
+@@ -1052,6 +1073,9 @@ static bool draw_particle_batch(JPAEmitterWorkData* work) {
+     GXEnd();
+ 
+     batch_restore_gx(work, useClr0, info.hasPtclTexMtx);
++#if TARGET_VITA
++    twv_vita_particle_batch_note(0, twvAlive);
++#endif
+     return true;
+ }
+ #endif
+@@ -1168,6 +1192,9 @@ void JPAResource::drawC(JPAEmitterWorkData* work) {
+     
+     work->mpAlivePtcl = &work->mpEmtr->mAlivePtclChld;
+     setCTev(work);
++#if TARGET_VITA
++    twv_vita_particle_batch_note(5, (int)work->mpEmtr->mAlivePtclChld.getNum());
++#endif
+ 
+     for (int i = mpDrawEmitterChildFuncListNum - 1; i >= 0; i--) {
+         (*mpDrawEmitterChildFuncList[i])(work);

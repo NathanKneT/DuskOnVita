@@ -108,6 +108,16 @@ int main() {
                sv.features==(GpuOptions::FeatureSubmitThread|GpuOptions::FeatureSubmitVerify));
         GpuOptions so;assert(so.consume("--vita-gxm-submit-thread=off")==1 && so.features==0 && so.any());
         assert(GpuOptions{}.consume("--vita-gxm-submit-thread=yes")==-1 && GpuOptions{}.consume("--vita-gxm-submit-thread")==0);
+        // The draw merge: GXM only, once, never a renderer choice; verify sets both bits.
+        GpuOptions dm;
+        assert(dm.consume("--vita-gxm-draw-merge=on")==1 && dm.features==GpuOptions::FeatureDrawMerge && dm.any());
+        assert(!dm.any_choice() && !dm.consistent() && dm.consume("--vita-gxm-draw-merge=off")==-1);
+        assert(dm.consume("--vita-gpu=gxm")==1 && dm.consistent());
+        GpuOptions dv;
+        assert(dv.consume("--vita-gxm-draw-merge=verify")==1 &&
+               dv.features==(GpuOptions::FeatureDrawMerge|GpuOptions::FeatureDrawMergeVerify));
+        GpuOptions dn;assert(dn.consume("--vita-gxm-draw-merge=off")==1 && dn.features==0 && dn.any());
+        assert(GpuOptions{}.consume("--vita-gxm-draw-merge=yes")==-1 && GpuOptions{}.consume("--vita-gxm-draw-merge")==0);
         // The draw split is a diagnostic: GXM only, once, never a choice.
         GpuOptions ds;
         assert(ds.consume("--vita-gxm-draw-split=on")==1 && ds.features==GpuOptions::FeatureDrawSplit && ds.any());

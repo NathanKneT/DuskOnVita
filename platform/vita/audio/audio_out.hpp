@@ -21,7 +21,17 @@ struct Stats {
     std::uint32_t maxRenderUs = 0;   // slowest buffer render
     std::uint32_t silentBuffers = 0; // buffers output as silence while paused
     std::int32_t deviceError = 0;    // last negative SDK result, 0 if none
+    // Wall time and the worker thread's own run clocks (kernel units) over every rendered buffer,
+    // and over the late ones alone. A late buffer with few run clocks for its wall time waited
+    // (another thread had core 2, or a lock was held); one with the usual rate was real work.
+    std::uint64_t renderWallUs = 0, renderRunClocks = 0, lateWallUs = 0, lateRunClocks = 0;
 };
+
+// "--vita-audio-priority=default|high" (before open()): high puts the worker 16 steps above the
+// default user priority, so that loaders and other threads that land on core 2 cannot hold it
+// while a buffer is due. Default keeps the priority every console run so far has used.
+void setHighPriority(bool on);
+bool highPriority();
 
 // Opens the port and starts the worker, paused (silence) until resume().
 // Only 48000 Hz stereo is accepted (the MAIN port's fixed rate; the Vita has stereo output).
