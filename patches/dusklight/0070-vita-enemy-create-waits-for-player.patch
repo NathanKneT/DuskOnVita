@@ -1,0 +1,77 @@
+Vita: an enemy's creation waits for the player.
+
+Most enemies run their execute once at the end of their create (61 of the d_a_e_*.cpp files;
+E_RD: "c_start = 1; daE_RD_Execute(i_this); c_start = 0;"), and that code reads the player
+without a null check: E_RD's action() calls fopAcM_searchPlayerDistance() and
+daPy_getPlayerActorClass()->checkHorseRide() on whatever dComIfGp_getPlayer(0) returns. The
+original can afford that because Link's create has run by the time an enemy's create completes.
+In this port an enemy can be ready first: Hyrule Field, room 7 to room 10 with the room's
+Bulblins awake (F_SP121; reproduced in Vita3K with three warps, every time, with every speed-up
+off and with one tick per frame). The virtual call then goes through a null object: a null read,
+then a jump to address 0. On the console that is a crash to the home screen.
+
+fopAc_Create now leaves an actor of the enemy group in the create queue (cPhs_INIT_e, as an actor
+does while it waits for its resources) while dComIfGp_getPlayer(0) is null, without calling its
+own create, and reports it (twilight-vita: runtime/visual_skips.cpp, receipt
+enemy_waits_for_player). With a player, which is the order the original relies on, the test is
+false and nothing changes; without one, the original's behaviour is a fault, so no defined
+behaviour is altered. The wait is bounded (600 ticks): a scene that never gets a player goes on
+as before. Other actor groups are untouched: stage-level objects and tags are created before
+Link exists in the original too.
+
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -624,6 +624,40 @@
+ }
+ 
+ // Wii: NONMATCHING, minor temp regalloc
++#if TARGET_VITA
++// An enemy's creation waits for the player.
++//
++// Most enemies run their execute once at the end of their create (61 of the d_a_e_*.cpp files;
++// E_RD: "c_start = 1; daE_RD_Execute(i_this); c_start = 0;"), and that code reads the player
++// without a null check (E_RD's action(): daPy_getPlayerActorClass()->checkHorseRide()). The
++// original can afford it because Link's create has run by the time an enemy's create completes.
++// Here an enemy can be ready first (Hyrule Field, room 7 to room 10 with the room's Bulblins
++// awake: a null read at the scene change, the console's C2-12828-1; reproduced in Vita3K with
++// three warps, every time, with every speed-up off and with one tick per frame).
++// So while there is no player, an enemy's own create is not called yet: the request stays in the
++// create queue, as it does while an actor waits for its resources, and is tried again on the next
++// tick. With a player, which is the order the original relies on, nothing changes. The wait is
++// bounded (600 ticks, 20 s): a scene that never gets a player goes on as before.
++extern "C" unsigned twv_vita_tick_serial;
++extern "C" void twv_enemy_without_player(int name, unsigned id, int waited_ticks);
++static bool twv_enemy_create_waits(fopAc_ac_c* actor) {
++    static unsigned since = 0; // the tick the wait began at (0: no wait in progress)
++    if (dComIfGp_getPlayer(0) != NULL) {
++        since = 0;
++        return false;
++    }
++    if (since == 0) {
++        since = twv_vita_tick_serial | 1u;
++    }
++    const unsigned waited = twv_vita_tick_serial - since;
++    if (waited > 600u) {
++        return false;
++    }
++    twv_enemy_without_player(fopAcM_GetName(actor), fpcM_GetID(actor), int(waited));
++    return true;
++}
++#endif
++
+ static int fopAc_Create(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+     int ret;
+@@ -725,6 +759,12 @@
+     print_error_check_c error_check(actor, print_error_check_c::sCREATE);
+     #endif
+ 
++#if TARGET_VITA
++    if (actor->group == fopAc_ENEMY_e && twv_enemy_create_waits(actor)) {
++        return cPhs_INIT_e;
++    }
++#endif
++
+     ret = fpcMtd_Create((process_method_class*)actor->sub_method, actor);
+ 
+     #if DEBUG

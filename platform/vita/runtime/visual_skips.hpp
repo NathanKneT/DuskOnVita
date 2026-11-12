@@ -81,6 +81,8 @@ void twv_vita_state_digest_select(int on);
 // The game patches, per event: 0 draw skipped, 1 calc skipped, 2 calc replayed, 3 table full,
 // 4 an actor rested this tick.
 void twv_vita_visual_skip_count(int what);
+// patches/dusklight/0070 (f_op_actor.cpp): an enemy's creation waited a tick for the player.
+void twv_enemy_without_player(int name, unsigned id, int waited_ticks);
 // benchmark/fixture.cpp's per-tick hook, after every game tick.
 void twv_vita_visual_skip_tick(void);
 }

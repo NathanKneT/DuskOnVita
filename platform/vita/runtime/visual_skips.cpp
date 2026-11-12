@@ -146,3 +146,17 @@ extern "C" void twv_vita_visual_skip_tick(void) {
                   (unsigned long)save.h, (unsigned long)rnd.h, count);
     twv::vita::telemetryText("gs_digest", text);
 }
+
+// patches/dusklight/0070: an enemy's creation waited a tick because there is no player yet. The
+// first sixteen waits are logged one by one (who, and for how many ticks so far); the total
+// follows every sixteenth.
+extern "C" void twv_enemy_without_player(int name, unsigned id, int waited_ticks) {
+    static unsigned total = 0;
+    ++total;
+    if (total <= 16) {
+        char text[80];
+        std::snprintf(text, sizeof text, "name=%d id=%u waited=%d tick=%u", name, id, waited_ticks, twv_vita_tick_serial);
+        twv::vita::telemetryText("enemy_waits_for_player", text);
+    }
+    if (total % 16 == 0) twv::vita::telemetryEvent("enemy_waits_for_player_total", (long long)total);
+}
