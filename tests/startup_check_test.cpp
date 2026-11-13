@@ -253,6 +253,14 @@ int main(int argc, char** argv) {
     render("args_builtin", t);
     graphics_message(t, "sceGxmCreateRenderTarget 0x805b0004");
     render("graphics", t);
+    // The first-run screen: with the longest gesture line, and with none (a build without the page).
+    welcome_message(t, "Settings: two fingers held on the rear pad, or three on the screen");
+    assert(std::strcmp(t.kind, "welcome") == 0 && std::strstr(t.message.items[0].text, "three on the screen.") &&
+           std::strcmp(t.message.footer, "Press any button to continue.") == 0);
+    render("welcome", t);
+    welcome_message(t, nullptr);
+    assert(std::strstr(t.message.items[0].text, "Settings:"));
+    render("welcome_default", t);
 
     // Progress: "Loading..." alone, then the bar; a partial redraw touches only the bar, count and label.
     std::vector<uint32_t> px(std::size_t(ui::ScreenWidth) * ui::ScreenHeight, 0);

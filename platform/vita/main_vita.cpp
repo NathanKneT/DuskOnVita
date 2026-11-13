@@ -71,6 +71,7 @@ extern "C" int twv_vita_system_params(int* language, int* enterButton, int* init
 // The settings page (ui/settings_screen.cpp): the port settings in force; absent without graphics.
 namespace twv::vita {
 void settingsConfigure(const VitaSettings& inForce, const VitaSettings& stored, const char* discId) __attribute__((weak));
+const char* settingsOpenHint() __attribute__((weak));
 }
 
 // Explicit CPU allocation budget; renderer allocations stay outside newlib.
@@ -1094,6 +1095,21 @@ int main(int, char**) {
                               (f & twv::vita::GpuOptions::FeatureScale50) ? 50 : 100;
         inForce.batterySaver = clockOptions.mode == twv::vita::ClockMode::System;
         twv::vita::settingsConfigure(inForce, stored, disc.game_id);
+    }
+    // The first run of a player's own game (no args.txt, no sequence.txt): one screen that says
+    // where the settings are. A marker file in the data folder keeps it to once.
+    if (!haveArgs && twv::vita::settingsOpenHint) {
+        static const char* const WelcomeSeen = "ux0:data/twilight-vita/welcome_seen";
+        if (FILE* seen = std::fopen(WelcomeSeen, "rb")) {
+            std::fclose(seen);
+        } else {
+            twv::vita::welcome_message(startupText, twv::vita::settingsOpenHint());
+            twv::vita::startupNotice(startupText, 30);
+            if (FILE* mark = std::fopen(WelcomeSeen, "wb")) {
+                std::fputs("shown\n", mark);
+                std::fclose(mark);
+            }
+        }
     }
     twv::vita::telemetryEvent("game_main_enter", 0);
     const int result = game_main(gameArgc, gameArgs);

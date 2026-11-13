@@ -15,6 +15,12 @@ namespace twv::vita {
 // process with `code`. Without a usable display buffer it exits at once (the receipts say so).
 [[noreturn]] void startupErrorExit(const MessageText& text, int code);
 
+// A screen the player reads and leaves: shows the message until a button is pressed (one held
+// since launch does not count, nor one in the first 1.5 s) or `seconds` have passed, then blanks
+// the display, frees its buffer and returns. Without a display buffer it returns at once.
+// Receipts: startup_notice, startup_notice_display, startup_notice_buttons (0: timed out).
+void startupNotice(const MessageText& text, uint32_t seconds);
+
 // The GXM backend, while it prepares the shader warm-up bundle. `buffer`: one of its display
 // buffers, at least 960 x 544 x 4 bytes, CPU-writable, not queued for display yet.
 // Begin draws "Loading..." and shows the buffer. Update is cheap to call after every stage: it draws

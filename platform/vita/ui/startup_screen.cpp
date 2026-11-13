@@ -32,8 +32,9 @@ int show(void* base) {
 }
 
 // A display buffer of its own for error screens: CDRAM, or physically contiguous main memory when
-// CDRAM is what ran out. The process ends after the screen, so it is never freed.
-void* error_buffer() {
+// CDRAM is what ran out. The process ends after an error screen, so that one is never freed; a
+// notice frees its block (`blockOut`).
+void* error_buffer(SceUID* blockOut = nullptr) {
     const struct {SceKernelMemBlockType type; uint32_t align;} kinds[] = {
         {SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 256u * 1024u},
         {SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, 1024u * 1024u}};
@@ -45,7 +46,10 @@ void* error_buffer() {
             continue;
         }
         void* base = nullptr;
-        if (sceKernelGetMemBlockBase(block, &base) >= 0 && base) return base;
+        if (sceKernelGetMemBlockBase(block, &base) >= 0 && base) {
+            if (blockOut) *blockOut = block;
+            return base;
+        }
         sceKernelFreeMemBlock(block);
     }
     return nullptr;
@@ -115,6 +119,31 @@ void startupErrorExit(const MessageText& text, int code) {
     telemetrySync();
     sceKernelExitProcess(code);
     for (;;) sceKernelDelayThread(1000000);
+}
+
+void startupNotice(const MessageText& text, uint32_t seconds) {
+    telemetryText("startup_notice", text.kind);
+    SceUID block = -1;
+    void* base = error_buffer(&block);
+    if (!base) {
+        telemetryText("startup_notice_unavailable", "no display buffer; not shown");
+        return;
+    }
+    const ui::Canvas canvas{static_cast<uint32_t*>(base), ui::ScreenWidth, ui::ScreenHeight, ui::ScreenWidth};
+    ui::draw_message(&canvas, text.message);
+    telemetryEvent("startup_notice_display", show(base));
+    const uint64_t shownAt = processTimeUs(), until = shownAt + uint64_t(seconds) * 1000000u;
+    while ((buttons() || processTimeUs() - shownAt < GraceUs) && processTimeUs() < until) sceKernelDelayThread(16000);
+    uint32_t pressed = 0;
+    while (!(pressed = buttons()) && processTimeUs() < until) sceKernelDelayThread(16000);
+    // The button is released before the game reads the pad; then nothing is on the display until
+    // the loading screen, and the buffer can go.
+    while (buttons() && processTimeUs() < until + 2000000u) sceKernelDelayThread(16000);
+    telemetryEvent("startup_notice_buttons", pressed);
+    sceDisplaySetFrameBuf(nullptr, SCE_DISPLAY_SETBUF_NEXTFRAME);
+    sceDisplayWaitVblankStart();
+    sceDisplayWaitVblankStart();
+    sceKernelFreeMemBlock(block);
 }
 
 void startupProgressBegin(void* buffer, uint32_t total) {

@@ -327,6 +327,26 @@ inline void arguments_message(MessageText& t, const char* source, const char* pr
     }
 }
 
+// The first run of a player's own game (no args.txt, no sequence.txt), shown once: where the
+// settings are. `hint`: how the settings page opens (ui/settings_screen.cpp), or null.
+inline void welcome_message(MessageText& t, const char* hint) {
+    auto& m = t.message;
+    m = {};
+    std::snprintf(t.kind, sizeof t.kind, "welcome");
+    m.title = "Before you play";
+    std::snprintf(t.buffers[0], sizeof t.buffers[0], "%s.",
+                  hint && *hint ? hint : "Settings: two fingers held on the rear pad, or three on the screen");
+    m.items[0] = {ui::Style::Text, t.buffers[0]};
+    m.items[1] = {ui::Style::Text, "The page pauses the game. Render size, button prompts, gyro, camera and "
+                                   "comfort options (auto-save, faster text and more) are there."};
+    m.items[2] = {ui::Style::Text, "The first visit to each area stutters while its graphics are prepared. "
+                                   "Later visits do not."};
+    m.items[3] = {ui::Style::Note, "The game saves only when you ask, unless you turn Auto-save on: save "
+                                   "before you put the Vita to sleep."};
+    m.items[4] = {ui::Style::Note, "This screen is shown once."};
+    m.footer = "Press any button to continue.";
+}
+
 inline void graphics_message(MessageText& t, const char* detail) {
     auto& m = t.message;
     m = {};

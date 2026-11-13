@@ -208,6 +208,13 @@ void settingsConfigure(const VitaSettings& inForce, const VitaSettings& stored, 
     state.stored = stored;
     state.disc = discId ? discId : "";
 }
+// The first-run screen (ui/startup_screen.cpp) returns after a button or its time; here at once.
+const char* settingsOpenHint() { return "Settings: the test's gesture"; }
+void startupNotice(const MessageText& text, std::uint32_t seconds) {
+    state.text["startup_notice"] = text.kind;
+    state.text["startup_notice_first_line"] = text.message.items[0].text ? text.message.items[0].text : "";
+    state.events["startup_notice_seconds"] = seconds;
+}
 }
 std::vector<std::string> folder; // what sceIoDread lists
 std::size_t folderNext = 0;
@@ -352,6 +359,19 @@ int main() {
     std::filesystem::current_path(root);
     std::filesystem::create_directories("ux0:data/twilight-vita");
 #if TWV_TEST_PLAY_PROFILE
+    // The first run of a player's own game: the welcome screen once (a marker file), with the
+    // settings page's own gesture line; never when args.txt drives the run.
+    {
+        const char* seen = "ux0:data/twilight-vita/welcome_seen";
+        std::filesystem::remove(seen);
+        assert(run("--vita-clocks=legacy444") == 7);
+        assert(!state.text.count("startup_notice") && !std::filesystem::exists(seen));
+        assert(run(nullptr) == 7 && state.gameCalls == 1);
+        assert(state.text.at("startup_notice") == "welcome" && std::filesystem::exists(seen));
+        assert(state.text.at("startup_notice_first_line") == "Settings: the test's gesture." &&
+               state.events.at("startup_notice_seconds") == 30);
+        assert(run(nullptr) == 7 && !state.text.count("startup_notice"));
+    }
     // Play profile, implicit: no args.txt (or one without any port option) -> g2c's GXM line through
     // the same selectors, fixed game ticks with a 30 FPS cap before the user's arguments, quiet receipts.
     fixedTicks = -1;
