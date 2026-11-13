@@ -6,6 +6,7 @@
 #include "f_op/f_op_actor_mng.h"
 #include "f_pc/f_pc_manager.h"
 #include "d/actor/d_a_e_oc.h"
+#include "d/actor/d_a_alink.h"
 #include "f_op/f_op_camera_mng.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_ext.h"
@@ -79,6 +80,24 @@ void heap_receipts(bool report) {
     heapLowValid=!report;
     if(used)twv::vita::telemetryText("jkr_heaps",text);
     if(lowUsed)twv::vita::telemetryText("jkr_heaps_low",low);
+    // Link's two own heaps (daAlink_c::setOriginalHeap: his clothes' archive and his shield's), each
+    // "free now/lowest free since the start/size": what the archives really take of them.
+    static long linkLow[2]={-1,-1};
+    if(const daAlink_c* link=daAlink_getAlinkActorClass()) {
+        JKRExpHeap* const own[2]={link->mpArcHeap,link->mpShieldArcHeap};
+        char line[160];std::size_t at=0;
+        for(unsigned i=0;i<2;++i) {
+            if(!own[i])continue;
+            const long free=long(own[i]->getTotalFreeSize());
+            if(linkLow[i]<0 || free<linkLow[i])linkLow[i]=free;
+            if(report && at<sizeof line) {
+                const int n=std::snprintf(line+at,sizeof line-at,"%s%s=%ld/%ld/%lu",at?";":"",i?"shield":"arc",free,linkLow[i],
+                    static_cast<unsigned long>(own[i]->getHeapSize()));
+                if(n>0)at+=std::size_t(n);
+            }
+        }
+        if(report && at)twv::vita::telemetryText("link_heaps",line);
+    }
 }
 }
 

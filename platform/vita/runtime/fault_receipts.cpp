@@ -53,6 +53,19 @@ extern "C" void twv_vita_error_text(const char* text, unsigned size) {
     twv::vita::telemetryText("game_error", line);
 }
 
+// Test only (patches/dusklight/0078): which actor is about to execute (phase 0) or draw (1). With a
+// file named "breadcrumb" in the data folder each one is printed, so the last line before a fault
+// names the actor; the emulator's log keeps the lines. Without the file: one test.
+extern "C" void twv_vita_actor_breadcrumb(int name, int phase) {
+    static int on = -1;
+    if (on < 0) {
+        std::FILE* file = std::fopen("ux0:data/twilight-vita/breadcrumb", "rb");
+        on = file != nullptr;
+        if (file) std::fclose(file);
+    }
+    if (on) sceClibPrintf("twv-actor %d %d\n", name, phase);
+}
+
 namespace twv::vita {
 namespace {
 [[noreturn]] void onTerminate() {

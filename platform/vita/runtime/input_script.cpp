@@ -131,6 +131,9 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
     } else if(step->kind==twv::vita::StepEvent) {
         twv::vita::telemetryEvent("input_script_event",step->room);
         dComIfGs_onEventBit(u16(step->room));
+    } else if(step->kind==twv::vita::StepWear) {
+        twv::vita::telemetryEvent("input_script_wear",step->room);
+        dComIfGs_setSelectEquipClothes(u8(step->room));
     } else if(step->kind==twv::vita::StepGive) {
         twv::vita::telemetryEvent("input_script_give",step->room);
         execItemGet(u8(step->room));

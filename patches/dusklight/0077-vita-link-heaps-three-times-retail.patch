@@ -1,0 +1,41 @@
+Vita: Link's own heaps are three times the original's size, not twenty.
+
+daAlink_c::setOriginalHeap creates Link's archive heap (0xA2800 bytes in the original) and his
+shield's (0x7000) inside the game heap. Dusklight multiplies both by twenty "to prevent mods
+from crashing with higher-quality models": 13.3 MiB and 573 KiB. On this port the game heap is
+27 MiB and there are no mods (patches 0004, 0005), so every creation of Link (a stage change, a
+restart after a fall) needs one free block of 13.3 MiB, half the heap. When the largest block is
+smaller the allocation fails, and a failed JKRExpHeap allocation stops the game here.
+
+The whole-game sweep hit it twice (Vita3K, 13 Nov): leaving the Forest Temple for Faron Woods
+and falling (the restart creates Link again), and leaving the Cave of Ordeals for the desert.
+The first reproduces every time with the same numbers: the game heap had 24 MiB free of 27 in
+blocks of 13.2 and 9.1 MiB, and the request was 0xCB20A0 bytes (0xA2800 * 20 + the heap's own
+header); the call chain is daAlink_c's create -> setOriginalHeap -> JKRExpHeap::create.
+
+What the archive really takes, measured with a receipt (platform/vita/runtime/scene_probe.cpp,
+link_heaps): 744 KiB in Ordon clothes, 723 in the hero's clothes, 715 in the Zora armour, 798
+as a wolf; the shield's heap 23 KiB. The original's own sizes (650 and 28 KiB) are therefore a
+little short on this port, whose structures are larger. Three times the original gives 2.0 MiB
+and 86 KiB: 2.5 times the largest use measured, and 11.8 MiB of the game heap back for
+everything else. Nothing changes outside TARGET_VITA.
+
+--- a/src/d/actor/d_a_alink_swindow.inc
++++ b/src/d/actor/d_a_alink_swindow.inc
+@@ -40,7 +40,15 @@
+         u32 var_r29 = 0x90;
+         u32 var_r28 = 0x10;
+         u32 size = ROUND(i_size, 16);
+-#if TARGET_PC
++#if TARGET_VITA
++        // Vita (patches/dusklight/0077): three times the original's size, not twenty. Twenty made
++        // Link's archive heap 13.3 MiB, taken in one piece from the 27 MiB game heap each time
++        // Link is created; when no free block was that large the game stopped (JKRExpHeap's
++        // CRASH on a failed allocation). There are no mods on this port. Measured in Vita3K: the
++        // archive takes 715 to 800 KiB (Ordon clothes, hero's clothes, Zora armour, wolf), the
++        // shield's 23 KiB; three times the original is 2.0 MiB and 86 KiB.
++        size *= 3;
++#elif TARGET_PC
+         size *= 20; // Increase Link's heap size to prevent mods from crashing with higher-quality models.
+ #endif
+         JKRHeap* parent = mDoExt_getGameHeap();

@@ -1,0 +1,53 @@
+Vita, test only: the platform is told which actor is about to execute or draw.
+
+A fault inside an actor's execute or draw (a read through a bad pointer) leaves a program
+counter and registers in the emulator's log, or a core file on the console, but not which
+actor it was. The whole-game sweep in Vita3K found one in mDoExt_McaMorfSO::play (City in the
+Sky room 6, story layer 5: the sound object pointer of the animation was 0x3f800000) with no
+usable caller. fopAc_Execute and fopAc_Draw now call twv_vita_actor_breadcrumb(name, phase)
+first, a weak function; the platform prints the name only when a file named "breadcrumb" is in
+the data folder, so a debug run's last printed line names the actor. Without the file the cost
+is one call and one test per actor. Nothing changes outside TARGET_VITA.
+
+--- a/src/f_op/f_op_actor.cpp
++++ b/src/f_op/f_op_actor.cpp
+@@ -412,8 +412,19 @@
+ }
+ #endif
+ 
++#if TARGET_VITA
++// Vita (patches/dusklight/0078, test only): the platform is told which actor is about to
++// execute (0) or draw (1). With a file named "breadcrumb" in the data folder it prints the
++// actor's profile name, so that a fault's last line names the actor (twilight-vita:
++// platform/vita/runtime/fault_receipts.cpp). Without the file: one call and one test.
++extern "C" void twv_vita_actor_breadcrumb(int name, int phase) __attribute__((weak));
++#endif
++
+ static int fopAc_Draw(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
++#if TARGET_VITA
++    if (twv_vita_actor_breadcrumb) twv_vita_actor_breadcrumb(fopAcM_GetName(actor), 1);
++#endif
+     int ret = 1;
+ 
+     #if DEBUG
+@@ -513,6 +524,9 @@
+ 
+ static int fopAc_Execute(void* i_this) {
+     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
++#if TARGET_VITA
++    if (twv_vita_actor_breadcrumb) twv_vita_actor_breadcrumb(fopAcM_GetName(actor), 0);
++#endif
+     int ret = 1;
+ 
+     #if DEBUG
+@@ -832,6 +846,9 @@
+     }
+ #endif
+ 
++#if TARGET_VITA
++    if (twv_vita_actor_breadcrumb) twv_vita_actor_breadcrumb(fopAcM_GetName(actor), 4000);
++#endif
+     ret = fpcMtd_Create((process_method_class*)actor->sub_method, actor);
+ 
+     #if DEBUG

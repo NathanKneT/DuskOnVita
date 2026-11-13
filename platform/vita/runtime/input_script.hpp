@@ -31,6 +31,9 @@
 //   event N                (one pad read, no input) turns story flag N on in the running save
 //                          (dComIfGs_onEventBit; N is the game's 16-bit flag number, e.g. 3332 =
 //                          0x0D04, "Link can change form"): a fixture, never in a player's script
+//   wear ITEM              (one pad read, no input) the clothes Link has on (item number, e.g. 47 the
+//                          hero's clothes, 49 the Zora armour, 48 the magic armour), as choosing them
+//                          on the collection screen does (dComIfGs_setSelectEquipClothes)
 //   tp X Y Z               (one pad read, no input) sets Link down at that point of the room
 //   shot                   (one pad read, no input) the next presented frame is written as a PNG
 //                          (captures/live-NNNN.png), whatever --vita-capture says
@@ -76,7 +79,7 @@ constexpr uint32_t ScriptPageUp=1u<<0,ScriptPageDown=1u<<1,ScriptPageLeft=1u<<2,
 // Steps a pad read consumes ("page open", "page gesture"); the other page steps are the page's.
 constexpr bool script_pad_page_step(uint32_t page) noexcept {return page==ScriptPageOpen || page==ScriptPageGesture;}
 
-constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3,StepLive=4,StepShot=5,StepGive=6,StepEquip=7,StepTp=8,StepFilm=9,StepForm=10,StepEvent=11;
+constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3,StepLive=4,StepShot=5,StepGive=6,StepEquip=7,StepTp=8,StepFilm=9,StepForm=10,StepEvent=11,StepWear=12;
 struct InputStep {uint32_t reads=0,buttons=0;int x=0,y=0;uint8_t kind=StepPad;char stage[8]{};int room=0,point=0,layer=0;
                   uint32_t page=0;};
 
@@ -188,6 +191,9 @@ private:
         } else if(n==5 && std::strncmp(p,"event",5)==0) {
             if(k!=1 || !integer(fields[0],ends[0],0,65535,v))return false;
             s.kind=StepEvent;s.reads=1;s.room=int(v);
+        } else if(n==4 && std::strncmp(p,"wear",4)==0) {
+            if(k!=1 || !integer(fields[0],ends[0],0,255,v))return false;
+            s.kind=StepWear;s.reads=1;s.room=int(v);
         } else if(n==4 && std::strncmp(p,"give",4)==0) {
             if(k!=1 || !integer(fields[0],ends[0],0,255,v))return false;
             s.kind=StepGive;s.reads=1;s.room=int(v);

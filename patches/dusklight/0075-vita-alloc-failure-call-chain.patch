@@ -1,0 +1,50 @@
+Vita: when a game heap cannot allocate, the stack's code addresses are reported.
+
+On this port a failed allocation in a JKRExpHeap stops the game (CRASH in do_alloc, upstream's
+choice). The report names the heap, the size asked for and the free blocks, but not who asked.
+Found by the whole-game sweep in Vita3K (13 Nov): the game heap, 24 MiB free of 27 in blocks of
+13.2 and 9.1 MiB, asked for 0xCB20A0 bytes (13.3 MiB) on the restart after a fall in Faron
+Woods, coming from the Forest Temple; the same numbers in every run. To find the caller, the
+words on the stack that look like Thumb return addresses into the program are written as one
+more error line before the stop. Diagnostic only: nothing changes unless an allocation fails.
+Nothing changes outside TARGET_VITA.
+
+--- a/libs/JSystem/src/JKernel/JKRExpHeap.cpp
++++ b/libs/JSystem/src/JKernel/JKRExpHeap.cpp
+@@ -10,6 +10,9 @@
+ #include "JSystem/JUtility/JUTConsole.h"
+ #include "JSystem/JUtility/JUTException.h"
+ #include <cstdlib>
++#if TARGET_VITA
++#include <cstdio>
++#endif
+ 
+ JKRExpHeap* JKRExpHeap::createRoot(int maxHeaps, bool errorFlag) {
+     JKRExpHeap* heap = NULL;
+@@ -242,6 +245,26 @@
+             OSReport_Error("%08X | %08X | %s\n", iter->getStartAddr(), iter->getEndAddr(), iter->getName());
+         }
+ 
++#if TARGET_VITA
++        {
++            // Vita (patches/dusklight/0075): who asked. The words on the stack that look like
++            // Thumb return addresses into the program (odd, inside its code), oldest last: the
++            // call chain is among them (arm-vita-eabi-addr2line on the ELF names each).
++            volatile uintptr_t here = 0;
++            const uintptr_t* stack = (const uintptr_t*)&here;
++            char line[420];
++            int used = 0, found = 0;
++            line[0] = 0;
++            for (int i = 1; i < 640 && found < 36; ++i) {
++                const uintptr_t word = stack[i];
++                if ((word & 1) != 0 && word >= 0x81000000u && word < 0x81f00000u) {
++                    used += snprintf(line + used, sizeof(line) - used, "%08x ", (unsigned)word);
++                    ++found;
++                }
++            }
++            OSReport_Error("Code addresses on the stack: %s\n", line);
++        }
++#endif
+         CRASH("Aborting due to allocation failure!");
+     }
+ #else
