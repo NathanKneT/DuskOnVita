@@ -31,6 +31,28 @@ extern "C" [[noreturn]] void __wrap_abort(void) {
     __real_abort();
 }
 
+// The reason the game gives when it stops itself (Log.fatal; patches/dusklight/0074 hands the text
+// over just before the abort above). The log file may never reach the card with that line in it.
+extern "C" void twv_vita_fatal_text(const char* text, unsigned size) {
+    char line[480];
+    std::snprintf(line, sizeof line, "%.*s", static_cast<int>(size < 470 ? size : 470), text ? text : "");
+    sceClibPrintf("twilight-vita: fatal: %s\n", line);
+    twv::vita::telemetryInit();
+    twv::vita::telemetryText("fatal", line);
+    twv::vita::telemetrySync();
+}
+
+// The game's error lines (patches/dusklight/0074): the first ones of a run are kept as receipts.
+// A stop is preceded by a few of them; a run that logs errors all the time must not fill the file.
+extern "C" void twv_vita_error_text(const char* text, unsigned size) {
+    static unsigned kept = 0;
+    if (kept >= 96 || !text) return;
+    ++kept;
+    char line[480];
+    std::snprintf(line, sizeof line, "%.*s", static_cast<int>(size < 470 ? size : 470), text);
+    twv::vita::telemetryText("game_error", line);
+}
+
 namespace twv::vita {
 namespace {
 [[noreturn]] void onTerminate() {

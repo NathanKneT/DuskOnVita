@@ -1,0 +1,65 @@
+Vita: the log file is written at the info level, and error and fatal lines reach the platform.
+
+Dusklight opens a log file at every launch (ux0:data/TwilitRealm/Dusklight/logs) and writes it
+at the debug level: a line or two for every process the game creates and for every create
+request, about 3,600 lines in two minutes of stage loads (Vita3K, a tour of the Forest Temple's
+rooms). On the console that is formatting and file writes on the memory card during every load,
+for lines only a developer reads. At the info level the file keeps the build, the platform, the
+configuration and every warning, error and fatal message, which is what a bug report needs. A
+level asked for on the command line still applies (standard.apply_to runs after this line).
+
+When the game stops itself (Log.fatal, then abort) the reason is one line of text, and what led
+to it is a few error lines before it (a heap that could not allocate names itself, the size
+asked for and its free blocks). In Vita3K the log file ended before those lines in three runs
+out of three (the process dies with the file's last block unwritten), so the reason was lost.
+Error lines and the fatal line are now also handed to the platform (borealis' divert and onFatal
+hooks), which writes them as receipts. Nothing changes outside TARGET_VITA.
+
+--- a/src/dusk/logging.cpp
++++ b/src/dusk/logging.cpp
+@@ -8,6 +8,11 @@
+ 
+ using namespace std::literals::string_view_literals;
+ 
++#if TARGET_VITA
++extern "C" void twv_vita_fatal_text(const char* text, unsigned size) __attribute__((weak));
++extern "C" void twv_vita_error_text(const char* text, unsigned size) __attribute__((weak));
++#endif
++
+ namespace {
+ constexpr std::string_view kStubFragments[] = {
+     "is a stub"sv,
+@@ -29,6 +34,13 @@
+ 
+ bool divert_stub_messages(const borealis::log::Message& message) {
+     ZoneScoped;
++#if TARGET_VITA
++    // Vita (patches/dusklight/0074): an error line is also handed to the platform, which keeps the
++    // first ones of a run as receipts (what the game says before it stops is a run of error lines).
++    if (message.level >= borealis::LogLevel::Error && twv_vita_error_text) {
++        twv_vita_error_text(message.text.data(), static_cast<unsigned>(message.text.size()));
++    }
++#endif
+     if (!StubLogEnabled || !is_for_stub_log(message.text)) {
+         return false;
+     }
+@@ -40,7 +52,19 @@
+ void dusk::InitializeLogging(
+     const std::filesystem::path& cacheDir, const borealis::cli::StandardOptions& standard) {
+     borealis::log::Options options{};
++#if TARGET_VITA
++    // Vita (patches/dusklight/0074): the log file is on the memory card and the debug level writes
++    // a line or two for every process the game creates (about 3,600 lines in two minutes of stage
++    // loads). Info keeps the build, the configuration, every warning, error and fatal message.
++    options.level = borealis::LogLevel::Info;
++    // The text of a fatal message also goes to the platform (twilight-vita:
++    // platform/vita/runtime/fault_receipts.cpp), which records it beside the abort it leads to.
++    options.onFatal = [](std::string_view text) {
++        if (twv_vita_fatal_text) twv_vita_fatal_text(text.data(), static_cast<unsigned>(text.size()));
++    };
++#else
+     options.level = borealis::LogLevel::Debug;
++#endif
+     options.fileDirectory = cacheDir.empty() ? std::filesystem::path{} : cacheDir / "logs";
+     options.filePrefix = "dusklight";
+     options.legacyFilePrefixes = {"dusk"};

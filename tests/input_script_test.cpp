@@ -22,6 +22,10 @@ static void live_steps() {
     assert(s.steps[2].kind == twv::vita::StepGive && s.steps[2].room == 72 && s.steps[2].reads == 1);
     assert(s.steps[3].kind == twv::vita::StepEquip && s.steps[3].room == 1 && s.steps[3].point == 4);
     assert(s.steps[4].kind == twv::vita::StepTp && s.steps[4].room == -100 && s.steps[4].point == 250 && s.steps[4].layer == 3000);
+    assert(s.parse("film 90\nstick 0 100 90\n") && s.steps[0].kind == twv::vita::StepFilm && s.steps[0].room == 90);
+    assert(!s.parse("film 0\n") && !s.parse("film\n"));
+    assert(s.parse("event 3332\n") && s.steps[0].kind == twv::vita::StepEvent && s.steps[0].room == 3332 && !s.parse("event 70000\n"));
+    assert(s.parse("form 1\n") && s.steps[0].kind == twv::vita::StepForm && s.steps[0].room == 1 && !s.parse("form 2\n"));
     for (const char* bad : {"press A 0 100\n", "press Q 0 0 1\n", "give 256\n", "equip 2 0\n", "equip 0 24\n", "tp 1 2\n"})
         assert(!s.parse(bad));
     std::puts("input_script_test: live and shot steps, press, give, equip, tp");

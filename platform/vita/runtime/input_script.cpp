@@ -33,6 +33,7 @@ unsigned reads=0,lastStep=~0u,lastLoops=0;
 // Step-by-step play ("live"): command files taken so far, frames captured by "shot".
 bool live=false;
 unsigned liveSeq=0,shots=0;
+unsigned filmLeft=0; // "film N": pad reads that still ask for a picture
 
 // The steps ran out in live mode: say where the game is, then wait for the next command file.
 // The game thread sleeps here, so nothing moves until the file is there. False: the session ends.
@@ -122,6 +123,14 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
         twv::vita::telemetryEvent("input_script_live",reads);
     } else if(step->kind==twv::vita::StepShot) {
         if(twv_vita_capture_request)twv_vita_capture_request(++shots);
+    } else if(step->kind==twv::vita::StepFilm) {
+        filmLeft=unsigned(step->room);
+    } else if(step->kind==twv::vita::StepForm) {
+        twv::vita::telemetryEvent("input_script_form",step->room);
+        dComIfGs_setTransformStatus(u8(step->room));
+    } else if(step->kind==twv::vita::StepEvent) {
+        twv::vita::telemetryEvent("input_script_event",step->room);
+        dComIfGs_onEventBit(u16(step->room));
     } else if(step->kind==twv::vita::StepGive) {
         twv::vita::telemetryEvent("input_script_give",step->room);
         execItemGet(u8(step->room));
@@ -134,6 +143,10 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
             player->old.pos=player->current.pos;
             twv::vita::telemetryEvent("input_script_tp",reads);
         }
+    }
+    if(filmLeft && step->kind!=twv::vita::StepFilm) {
+        --filmLeft;
+        if(twv_vita_capture_request)twv_vita_capture_request(++shots);
     }
     auto& p=status[0];p={};p.err=PAD_ERR_NONE;
     if(step->page) {
