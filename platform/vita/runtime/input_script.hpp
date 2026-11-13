@@ -17,7 +17,8 @@
 //   page gesture           (one pad read, no input) puts two fingers on the rear pad, held still: the
 //                          page's own gesture recogniser opens it 1 s later (pad reads wait meanwhile)
 //   page KEY               one key on the open settings page, read by the page, not by a pad read:
-//                          UP DOWN LEFT RIGHT CONFIRM BACK DEFAULT START, or SHOT (a PNG of the page)
+//                          UP DOWN LEFT RIGHT CONFIRM BACK DEFAULT START, L R (previous and next
+//                          section), or SHOT (a PNG of the page)
 //   page wait N            the open page shows N passes with no key (time for a window capture)
 //   # comment, blank lines
 // While the settings page is open the game reads no pad, so "page KEY" steps cost no pad read and
@@ -49,6 +50,7 @@ inline uint32_t resolve_vita_buttons(uint32_t bits,bool circleConfirms) noexcept
 // test checks they match), and the open request.
 constexpr uint32_t ScriptPageUp=1u<<0,ScriptPageDown=1u<<1,ScriptPageLeft=1u<<2,ScriptPageRight=1u<<3,
     ScriptPageConfirm=1u<<4,ScriptPageBack=1u<<5,ScriptPageDefault=1u<<6,ScriptPageStart=1u<<7,
+    ScriptPageSectionPrev=1u<<8,ScriptPageSectionNext=1u<<9,
     ScriptPageShot=1u<<16,ScriptPageWait=1u<<17,ScriptPageGesture=1u<<30,ScriptPageOpen=1u<<31;
 // Steps a pad read consumes ("page open", "page gesture"); the other page steps are the page's.
 constexpr bool script_pad_page_step(uint32_t page) noexcept {return page==ScriptPageOpen || page==ScriptPageGesture;}
@@ -167,7 +169,8 @@ private:
             struct Name {const char* text;uint32_t bit;};
             static constexpr Name keys[]={{"open",ScriptPageOpen},{"gesture",ScriptPageGesture},{"UP",ScriptPageUp},{"DOWN",ScriptPageDown},
                 {"LEFT",ScriptPageLeft},{"RIGHT",ScriptPageRight},{"CONFIRM",ScriptPageConfirm},{"BACK",ScriptPageBack},
-                {"DEFAULT",ScriptPageDefault},{"START",ScriptPageStart},{"SHOT",ScriptPageShot}};
+                {"DEFAULT",ScriptPageDefault},{"START",ScriptPageStart},{"SHOT",ScriptPageShot},
+                {"L",ScriptPageSectionPrev},{"R",ScriptPageSectionNext}};
             if(k==2 && ends[0]-fields[0]==4 && std::strncmp(fields[0],"wait",4)==0) {
                 if(!integer(fields[1],ends[1],1,100000,v))return false;
                 s.page=ScriptPageWait;s.reads=uint32_t(v);

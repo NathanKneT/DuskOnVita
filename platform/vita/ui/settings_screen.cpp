@@ -11,10 +11,12 @@
 #include "ui/settings_gesture.hpp"
 #include "ui/settings_page.hpp"
 
+#include <psp2/appmgr.h>
 #include <psp2/ctrl.h>
 #include <psp2/display.h>
 #include <psp2/gxm.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/threadmgr.h>
 
 #include <cstdio>
 #include <cstring>
@@ -65,7 +67,7 @@ struct Screen {
     st::PageText text;
     uint64_t openedAt = 0;
     unsigned frames = 0, scriptWait = 0, shots = 0, changes = 0;
-    bool gameChanged = false, portChanged = false;
+    bool gameChanged = false, portChanged = false, restartFailed = false;
     // Front taps while open: fingers that landed after the page opened.
     struct Tap { unsigned long long id; float x0, y0, x, y; bool live; } taps[4]{};
     int pendingTapX = -1, pendingTapY = -1;
@@ -149,6 +151,33 @@ int game_key(st::Id id) {
     case st::Id::FreeCamera: return TwvGameFreeCamera;
     case st::Id::CameraInvertX: return TwvGameCameraInvertX;
     case st::Id::CameraInvertY: return TwvGameCameraInvertY;
+    case st::Id::GyroRollgoal: return TwvGameGyroRollgoal;
+    case st::Id::AimInvertX: return TwvGameAimInvertX;
+    case st::Id::AimInvertY: return TwvGameAimInvertY;
+    case st::Id::AutoSave: return TwvGameAutoSave;
+    case st::Id::InstantText: return TwvGameInstantText;
+    case st::Id::HoldToMash: return TwvGameHoldToMash;
+    case st::Id::QuickTransform: return TwvGameQuickTransform;
+    case st::Id::FastClimbing: return TwvGameFastClimbing;
+    case st::Id::FastTears: return TwvGameFastTears;
+    case st::Id::FastTransitions: return TwvGameFastTransitions;
+    case st::Id::InstantSaves: return TwvGameInstantSaves;
+    case st::Id::RupeeMessages: return TwvGameRupeeMessages;
+    case st::Id::RupeesAlwaysFit: return TwvGameRupeesAlwaysFit;
+    case st::Id::BiggerWallets: return TwvGameBiggerWallets;
+    case st::Id::AimingReticle: return TwvGameAimingReticle;
+    case st::Id::LowHealthBeep: return TwvGameLowHealthBeep;
+    case st::Id::HideHud: return TwvGameHideHud;
+    case st::Id::HudSize: return TwvGameHudSize;
+    case st::Id::DamageTaken: return TwvGameDamageTaken;
+    case st::Id::HeartDrops: return TwvGameHeartDrops;
+    case st::Id::FastIronBoots: return TwvGameFastIronBoots;
+    case st::Id::InfiniteHearts: return TwvGameInfiniteHearts;
+    case st::Id::InfiniteArrows: return TwvGameInfiniteArrows;
+    case st::Id::InfiniteBombs: return TwvGameInfiniteBombs;
+    case st::Id::InfiniteRupees: return TwvGameInfiniteRupees;
+    case st::Id::InfiniteOil: return TwvGameInfiniteOil;
+    case st::Id::InfiniteAir: return TwvGameInfiniteAir;
     default: return -1;
     }
 }
@@ -156,11 +185,15 @@ int game_key(st::Id id) {
 int game_index(st::Id id, int value) {
     if (id == st::Id::Language) return index_of(st::LanguageValues, 6, value);
     if (id == st::Id::GyroSensitivity) return index_of(st::GyroSensitivityHundredths, 9, value);
+    if (id == st::Id::HudSize) return index_of(st::HudSizeHundredths, 4, value);
+    if (id == st::Id::DamageTaken) return index_of(st::DamageTakenValues, 3, value);
     return value;
 }
 int game_value(st::Id id, int index) {
     if (id == st::Id::Language) return st::LanguageValues[index];
     if (id == st::Id::GyroSensitivity) return st::GyroSensitivityHundredths[index];
+    if (id == st::Id::HudSize) return st::HudSizeHundredths[index];
+    if (id == st::Id::DamageTaken) return st::DamageTakenValues[index];
     return index;
 }
 
@@ -206,10 +239,13 @@ void load_values() {
     if (!p.allowed(st::Id::Language, p.defaults[int(st::Id::Language)])) p.defaults[int(st::Id::Language)] = first;
     // The recentre goes with the gyro entries; the preset with the two entries it sets.
     p.available[int(st::Id::GyroRecentre)] = p.available[int(st::Id::GyroAim)];
+    p.available[int(st::Id::RestartGame)] = !s.restartFailed;
     p.available[int(st::Id::Preset)] = p.available[int(st::Id::RenderScale)] && p.available[int(st::Id::Performance)];
     p.sync_preset();
     p.sync_speed();
 }
+
+void restart_game();
 
 void apply(const st::Effect& e) {
     switch (e.type) {
@@ -279,6 +315,9 @@ void apply(const st::Effect& e) {
     case st::Effect::Close:
         s.closing = true;
         return;
+    case st::Effect::Restart:
+        restart_game();
+        return;
     default: return;
     }
 }
@@ -294,6 +333,8 @@ uint32_t held_keys(uint32_t buttons) {
     if (buttons & (circle ? SCE_CTRL_CROSS : SCE_CTRL_CIRCLE)) k |= st::KeyBack;
     if (buttons & SCE_CTRL_TRIANGLE) k |= st::KeyDefault;
     if (buttons & SCE_CTRL_START) k |= st::KeyStart;
+    if (buttons & SCE_CTRL_LTRIGGER) k |= st::KeySectionPrev;
+    if (buttons & SCE_CTRL_RTRIGGER) k |= st::KeySectionNext;
     return k;
 }
 
@@ -319,6 +360,25 @@ void save_changes() {
         const bool ok = write_vita_settings(s.stored, VitaSettingsFile, VitaSettingsTemp);
         telemetryEvent("settings_vita_settings_saved", ok);
     }
+}
+
+// "Restart the game": what changed is saved, then the application starts again from its own
+// executable. If the system refuses, the entry goes away and the page says what to do instead.
+void restart_game() {
+    save_changes();
+    s.gameChanged = s.portChanged = false;
+    telemetryEvent("settings_restart_requested", 1);
+    telemetryFlush();
+    telemetrySync();
+    const int result = sceAppMgrLoadExec("app0:eboot.bin", nullptr, nullptr);
+    // Accepted: the system ends this process shortly. Still here after five seconds: it did not.
+    for (int pass = 0; result >= 0 && pass < 300; ++pass) sceKernelDelayThread(16000);
+    telemetryEvent("settings_restart_failed", result);
+    telemetryFlush();
+    s.restartFailed = true;
+    s.page.available[int(st::Id::RestartGame)] = false;
+    s.page.handle(st::KeyDown);
+    s.page.status = "The system refused the restart: close the game from the home screen and start it again.";
 }
 
 void finish_close() {

@@ -36,7 +36,35 @@ enum : int {
     TwvGameCameraInvertY = 8, // 0/1                                 (game.invertCameraYAxis)
     TwvGameFreeCamera = 9,    // 0/1                                 (game.freeCamera)
     TwvGameHudButtons = 10,   // 0 vita, 1 original                  (game.hudButtonLayout)
-    TwvGameKeyCount = 11
+    TwvGameGyroRollgoal = 11, // 0/1                                 (game.enableGyroRollgoal)
+    TwvGameAimInvertX = 12,   // 0/1                                 (game.invertFirstPersonXAxis)
+    TwvGameAimInvertY = 13,   // 0/1                                 (game.invertFirstPersonYAxis)
+    // Dusklight's comfort and challenge options: 0 is the original game.
+    TwvGameAutoSave = 14,        // 0/1                              (game.autoSave)
+    TwvGameInstantText = 15,     // 0/1                              (game.instantText)
+    TwvGameHoldToMash = 16,      // 0/1                              (game.holdToMash)
+    TwvGameQuickTransform = 17,  // 0/1                              (game.enableQuickTransform)
+    TwvGameFastClimbing = 18,    // 0/1                              (game.fastClimbing)
+    TwvGameFastTears = 19,       // 0/1                              (game.fastTears)
+    TwvGameFastTransitions = 20, // 0/1                              (game.fastTransitions)
+    TwvGameInstantSaves = 21,    // 0/1                              (game.instantSaves)
+    TwvGameRupeeMessages = 22,   // 0/1                              (game.disableRupeeCutscenes)
+    TwvGameRupeesAlwaysFit = 23, // 0/1                              (game.noReturnRupees)
+    TwvGameBiggerWallets = 24,   // 0/1                              (game.biggerWallets)
+    TwvGameAimingReticle = 25,   // 0/1                              (game.aimingReticle)
+    TwvGameLowHealthBeep = 26,   // 0/1                              (game.noLowHpSound)
+    TwvGameHideHud = 27,         // 0/1                              (game.minimalHUD)
+    TwvGameHudSize = 28,         // hundredths                       (game.hudScale)
+    TwvGameDamageTaken = 29,     // 1, 2, 4                          (game.damageMultiplier)
+    TwvGameHeartDrops = 30,      // 0/1                              (game.noHeartDrops)
+    TwvGameFastIronBoots = 31,   // 0/1                              (game.enableFastIronBoots)
+    TwvGameInfiniteHearts = 32,  // 0/1                              (game.infiniteHearts)
+    TwvGameInfiniteArrows = 33,  // 0/1                              (game.infiniteArrows)
+    TwvGameInfiniteBombs = 34,   // 0/1                              (game.infiniteBombs)
+    TwvGameInfiniteRupees = 35,  // 0/1                              (game.infiniteRupees)
+    TwvGameInfiniteOil = 36,     // 0/1                              (game.infiniteOil)
+    TwvGameInfiniteAir = 37,     // 0/1                              (game.infiniteOxygen)
+    TwvGameKeyCount = 38
 };
 
 extern "C" {

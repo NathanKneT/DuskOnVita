@@ -55,7 +55,8 @@ inline void fill_backdrop(const Canvas& c, const Backdrop& b, int x, int y, int 
 inline int value_text(const Page& page, int i, char* out, std::size_t size, const PageText& t) {
     const Entry& e = Entries[i];
     if (e.kind == Kind::Action) {
-        if (e.id == Id::ResetDefaults && page.resetArmed) return std::snprintf(out, size, "Press %s again", t.confirm);
+        if ((e.id == Id::ResetDefaults && page.resetArmed) || (e.id == Id::RestartGame && page.restartArmed))
+            return std::snprintf(out, size, "Press %s again", t.confirm);
         return std::snprintf(out, size, "Press %s", t.confirm);
     }
     return std::snprintf(out, size, "%s", e.choices[page.index[i]]);
@@ -65,7 +66,12 @@ inline int value_text(const Page& page, int i, char* out, std::size_t size, cons
 inline void draw_page(const Canvas& c, const Page& page, const Backdrop& backdrop, const PageText& t) {
     fill_backdrop(c, backdrop, 0, 0, c.width, c.height);
     draw_text(c, LabelX, TitleY, RowScale, palette::Title, "Settings");
-    draw_text(c, LabelX + text_width(9, RowScale) + 12, TitleY + 6, SmallScale, palette::Name, AppName);
+    {
+        // The section of the chosen entry; L and R (or a tap on it) change it.
+        char section[48];
+        std::snprintf(section, sizeof section, "L <  %s  > R", SectionNames[page.section()]);
+        draw_text(c, SectionX, SectionY, SmallScale, colors::Value, section);
+    }
     {
         const char* paused = "Game paused";
         draw_text(c, ValueRight - text_width(std::strlen(paused), SmallScale), TitleY + 6, SmallScale, colors::Footer,

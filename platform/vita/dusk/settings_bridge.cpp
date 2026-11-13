@@ -57,6 +57,32 @@ ConfigVar<bool>* flag(int key) {
     case TwvGameFreeCamera: return &g.freeCamera;
     case TwvGameCameraInvertX: return &g.invertCameraXAxis;
     case TwvGameCameraInvertY: return &g.invertCameraYAxis;
+    case TwvGameGyroRollgoal: return &g.enableGyroRollgoal;
+    case TwvGameAimInvertX: return &g.invertFirstPersonXAxis;
+    case TwvGameAimInvertY: return &g.invertFirstPersonYAxis;
+    // Dusklight's comfort, challenge and cheat options, each off by default (the original game).
+    case TwvGameAutoSave: return &g.autoSave;
+    case TwvGameInstantText: return &g.instantText;
+    case TwvGameHoldToMash: return &g.holdToMash;
+    case TwvGameQuickTransform: return &g.enableQuickTransform;
+    case TwvGameFastClimbing: return &g.fastClimbing;
+    case TwvGameFastTears: return &g.fastTears;
+    case TwvGameFastTransitions: return &g.fastTransitions;
+    case TwvGameInstantSaves: return &g.instantSaves;
+    case TwvGameRupeeMessages: return &g.disableRupeeCutscenes;
+    case TwvGameRupeesAlwaysFit: return &g.noReturnRupees;
+    case TwvGameBiggerWallets: return &g.biggerWallets;
+    case TwvGameAimingReticle: return &g.aimingReticle;
+    case TwvGameLowHealthBeep: return &g.noLowHpSound;
+    case TwvGameHideHud: return &g.minimalHUD;
+    case TwvGameHeartDrops: return &g.noHeartDrops;
+    case TwvGameFastIronBoots: return &g.enableFastIronBoots;
+    case TwvGameInfiniteHearts: return &g.infiniteHearts;
+    case TwvGameInfiniteArrows: return &g.infiniteArrows;
+    case TwvGameInfiniteBombs: return &g.infiniteBombs;
+    case TwvGameInfiniteRupees: return &g.infiniteRupees;
+    case TwvGameInfiniteOil: return &g.infiniteOil;
+    case TwvGameInfiniteAir: return &g.infiniteOxygen;
     default: return nullptr;
     }
 }
@@ -94,6 +120,12 @@ bool read(int key, bool wantDefault, int& out) {
     case TwvGameGyroSensitivity:
         // One entry for both axes: the sideways value stands for the pair.
         out = hundredths(wantDefault ? g.gyroSensitivityX.getDefaultValue() : g.gyroSensitivityX.getValue());
+        return true;
+    case TwvGameHudSize:
+        out = hundredths(wantDefault ? g.hudScale.getDefaultValue() : g.hudScale.getValue());
+        return true;
+    case TwvGameDamageTaken:
+        out = wantDefault ? g.damageMultiplier.getDefaultValue() : g.damageMultiplier.getValue();
         return true;
     default: return false;
     }
@@ -150,6 +182,18 @@ extern "C" int twv_dusk_setting_set(int key, int value) {
         }
         g.gyroSensitivityX.setValue(static_cast<float>(value) / 100.0f);
         g.gyroSensitivityY.setValue(static_cast<float>(value) / 100.0f);
+        return 1;
+    case TwvGameHudSize:
+        if (value < 50 || value > 200) { // the range the game clamps to (d_meter2.cpp)
+            return 0;
+        }
+        g.hudScale.setValue(static_cast<float>(value) / 100.0f);
+        return 1;
+    case TwvGameDamageTaken:
+        if (value < 1 || value > 8) {
+            return 0;
+        }
+        g.damageMultiplier.setValue(value);
         return 1;
     default: return 0;
     }

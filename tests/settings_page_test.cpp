@@ -28,7 +28,9 @@ using twv::ui::TouchPhase;
 static_assert(twv::vita::ScriptPageUp == st::KeyUp && twv::vita::ScriptPageDown == st::KeyDown &&
               twv::vita::ScriptPageLeft == st::KeyLeft && twv::vita::ScriptPageRight == st::KeyRight &&
               twv::vita::ScriptPageConfirm == st::KeyConfirm && twv::vita::ScriptPageBack == st::KeyBack &&
-              twv::vita::ScriptPageDefault == st::KeyDefault && twv::vita::ScriptPageStart == st::KeyStart);
+              twv::vita::ScriptPageDefault == st::KeyDefault && twv::vita::ScriptPageStart == st::KeyStart &&
+              twv::vita::ScriptPageSectionPrev == st::KeySectionPrev &&
+              twv::vita::ScriptPageSectionNext == st::KeySectionNext);
 static_assert(twv::vita::ScriptPageShot == (1u << 16) && twv::vita::ScriptPageWait == (1u << 17)); // TwvPageShot/Wait
 
 namespace {
@@ -69,6 +71,24 @@ void entries() {
     assert(st::entry(st::Id::Language).applies == st::Applies::Restart);
     assert(st::entry(st::Id::ConfirmButton).applies == st::Applies::Restart);
     assert(st::entry(st::Id::GyroInvertYaw).applies == st::Applies::Now);
+    // Dusklight's comfort, challenge and cheat options: every default is the original game.
+    for (int i = idx(st::Id::AutoSave); i <= idx(st::Id::InfiniteAir); ++i) {
+        const st::Entry& e = st::Entries[i];
+        assert(e.kind == st::Kind::Choice && e.applies == st::Applies::Now);
+        if (e.id == st::Id::HudSize) assert(st::HudSizeHundredths[e.defaultIndex] == 100);
+        else if (e.id == st::Id::DamageTaken) assert(st::DamageTakenValues[e.defaultIndex] == 1);
+        else assert(e.count == 2 && e.defaultIndex == 0);
+    }
+    assert(st::entry(st::Id::GyroRollgoal).defaultIndex == 0 && st::entry(st::Id::AimInvertX).defaultIndex == 0 &&
+           st::entry(st::Id::AimInvertY).defaultIndex == 0);
+    // Sections: in entry order, each with a name that fits the title, every entry in exactly one.
+    for (int k = 0; k < st::SectionCount; ++k) {
+        if (k) assert(int(st::SectionFirst[k]) > int(st::SectionFirst[k - 1]));
+        assert(st::section_of(st::SectionFirst[k]) == k);
+        assert(int(std::strlen(st::SectionNames[k]) + 12) * twv::ui::FontAdvance * st::SmallScale <= st::SectionW);
+    }
+    assert(st::section_of(st::Id::Close) == st::SectionCount - 1 && st::section_of(st::Id::HudSize) == 4 &&
+           st::section_of(st::Id::InfiniteAir) == 6);
     // Honest wording: 444 MHz is the standard maximum, not an overclock.
     assert(std::strstr(st::entry(st::Id::Performance).help, "no overclock"));
     std::puts("settings_page_test: entries, defaults, label/value/help sizes");
@@ -153,6 +173,63 @@ void navigation() {
     s.handle(st::KeyDown); // wraps to the top
     assert(s.selected == 0 && s.top == 0 && !s.more_above() && s.more_below());
     std::puts("settings_page_test: navigation wraps, values wrap, default, close, hidden entries, scrolling");
+}
+
+// L and R jump between sections; the section's first shown entry goes to the top row when the
+// list is long enough below it.
+void sections() {
+    st::Page p;
+    int rows[st::VisibleRows];
+    assert(p.section() == 0);
+    p.handle(st::KeySectionNext);
+    assert(p.selected == idx(st::Id::ButtonPrompts) && p.top == p.selected && p.section() == 1);
+    p.handle(st::KeySectionNext);
+    p.handle(st::KeySectionNext);
+    p.handle(st::KeySectionNext);
+    assert(p.selected == idx(st::Id::AutoSave) && p.top == p.selected && p.visible(rows) == st::VisibleRows);
+    p.handle(st::KeySectionPrev);
+    assert(p.selected == idx(st::Id::FreeCamera));
+    // From the first section, the previous one is the last: the page stays full and shows the entry.
+    st::Page q;
+    q.handle(st::KeySectionPrev);
+    assert(q.selected == idx(st::Id::OpenGesture) && q.section() == st::SectionCount - 1);
+    const int n = q.visible(rows);
+    assert(n == st::VisibleRows && rows[n - 1] == st::EntryCount - 1 && !q.more_below() && q.more_above());
+    q.handle(st::KeySectionNext);
+    assert(q.selected == 0 && q.top == 0);
+    // A section whose first entry is not shown starts at its next one; an empty section is passed.
+    st::Page r;
+    r.available[idx(st::Id::GyroAim)] = false;
+    r.selected = idx(st::Id::Language);
+    r.handle(st::KeySectionNext);
+    assert(r.selected == idx(st::Id::GyroSensitivity));
+    for (int i = idx(st::Id::DamageTaken); i < idx(st::Id::OpenGesture); ++i) r.available[i] = false;
+    r.selected = idx(st::Id::HudSize);
+    r.handle(st::KeySectionNext);
+    assert(r.selected == idx(st::Id::OpenGesture));
+    // A tap on the section name: its left third goes back, the rest goes on.
+    st::Page t;
+    assert(t.tap(st::SectionX + st::SectionW - 10, st::SectionY + 4).count == 0 && t.section() == 1);
+    assert(t.tap(st::SectionX + 10, st::SectionY + 4).count == 0 && t.section() == 0);
+    // Restart: the first confirm asks, the second restarts, any other key in between disarms.
+    st::Page s;
+    s.selected = idx(st::Id::RestartGame);
+    st::Effects e = s.handle(st::KeyConfirm);
+    assert(e.count == 0 && s.restartArmed && s.status);
+    s.handle(st::KeyLeft);
+    assert(!s.restartArmed);
+    s.handle(st::KeyConfirm);
+    e = s.handle(st::KeyConfirm);
+    assert(e.has(st::Effect::Restart) && !s.restartArmed);
+    // Reset puts a comfort option back, and leaves no change for one already at its default.
+    st::Page c;
+    c.selected = idx(st::Id::AutoSave);
+    e = c.handle(st::KeyRight);
+    assert(e.count == 1 && e.list[0].id == st::Id::AutoSave && e.list[0].index == 1);
+    st::Effects back;
+    c.reset_all(back);
+    assert(back.count == 1 && back.list[0].id == st::Id::AutoSave && back.list[0].index == 0);
+    std::puts("settings_page_test: sections by L/R and by touch, restart asks once, comfort options reset");
 }
 
 void actions_and_language() {
@@ -472,6 +549,11 @@ void storage() {
 
 void script() {
     twv::vita::InputScript sc;
+    {
+        twv::vita::InputScript lr;
+        assert(lr.parse("page open\npage R\npage L\n") && lr.next()->page == twv::vita::ScriptPageOpen);
+        assert(lr.page_key() == st::KeySectionNext && lr.page_key() == st::KeySectionPrev);
+    }
     assert(sc.parse("wait 2\npage open\npage DOWN\npage wait 2\npage RIGHT\npage SHOT\npage BACK\nhold A 1\n"));
     // Pad reads: the waits, then "page open" (a read without input).
     const twv::vita::InputStep* step = sc.next();
@@ -552,6 +634,7 @@ void drawing(const char* ppm) {
 int main(int argc, char** argv) {
     entries();
     navigation();
+    sections();
     actions_and_language();
     taps();
     presets();

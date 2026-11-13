@@ -4,8 +4,13 @@
 //
 // D-pad up/down chooses an entry (wrapping), left/right changes its value (wrapping), the confirm
 // button changes it too or runs an action, triangle puts the entry back to its default, back or
-// START closes the page. Front-screen taps: a tap on an entry chooses it, a tap on its value (left
-// or right half) changes it, a tap on an action runs it, a tap on the footer's "Close" closes.
+// START closes the page. L and R jump to the previous and the next section. Front-screen taps: a tap
+// on an entry chooses it, a tap on its value (left or right half) changes it, a tap on an action runs
+// it, a tap on the section name in the title goes to the next section (its left third: the previous
+// one), a tap on the footer's "Close" closes.
+//
+// The Comfort, Challenge and Cheats entries are Dusklight's own options (dusk/settings.h): each is
+// off by default, and off is the game as it was made.
 // Values are choice indices; the page shell maps them to Dusklight settings and vita_settings.json.
 #include <cstdint>
 #include <cstring>
@@ -14,11 +19,30 @@ namespace twv::ui::settings {
 
 enum class Id : uint8_t {
     Preset, RenderScale, Performance, SpeedUps, SkipUnseen, StillAnimals, RestingAnimals, Crowd, ShowFps, ButtonPrompts, HudButtons, ConfirmButton, Language, GyroAim, GyroSensitivity,
-    GyroInvertYaw, GyroInvertPitch, GyroRecentre, FreeCamera, CameraInvertX, CameraInvertY, OpenGesture, ResetDefaults,
-    Close, Count
+    GyroInvertYaw, GyroInvertPitch, GyroRecentre, GyroRollgoal, FreeCamera, CameraInvertX, CameraInvertY, AimInvertX,
+    AimInvertY,
+    AutoSave, InstantText, HoldToMash, QuickTransform, FastClimbing, FastIronBoots, FastTears, FastTransitions,
+    InstantSaves, RupeeMessages, RupeesAlwaysFit, BiggerWallets, AimingReticle, LowHealthBeep, HideHud, HudSize,
+    DamageTaken, HeartDrops,
+    InfiniteHearts, InfiniteArrows, InfiniteBombs, InfiniteRupees, InfiniteOil, InfiniteAir,
+    OpenGesture, RestartGame, ResetDefaults, Close, Count
 };
 constexpr int EntryCount = int(Id::Count);
 enum class Kind : uint8_t { Choice, Action };
+
+// Sections, each named by its first entry: L and R jump between them, the title shows the current one.
+constexpr int SectionCount = 8;
+constexpr Id SectionFirst[SectionCount] = {Id::Preset, Id::ButtonPrompts, Id::GyroAim, Id::FreeCamera,
+                                           Id::AutoSave, Id::DamageTaken, Id::InfiniteHearts, Id::OpenGesture};
+constexpr const char* SectionNames[SectionCount] = {"Display and speed", "Buttons and text", "Gyro",
+                                                    "Camera and aim", "Comfort", "Challenge", "Cheats",
+                                                    "This page"};
+constexpr int section_of(Id id) {
+    int section = 0;
+    for (int k = 1; k < SectionCount; ++k)
+        if (int(id) >= int(SectionFirst[k])) section = k;
+    return section;
+}
 // When a change takes effect (shown next to the help line).
 enum class Applies : uint8_t { Now, NextArea, Restart };
 
@@ -37,6 +61,8 @@ struct Entry {
 constexpr int RenderScaleValues[] = {50, 67, 75, 100};
 constexpr int GyroSensitivityHundredths[] = {25, 50, 75, 100, 125, 150, 200, 250, 300};
 constexpr int LanguageValues[] = {0, 1, 2, 3, 4, 6}; // Dusklight GameLanguage (OS_LANGUAGE_*; Japanese 6)
+constexpr int HudSizeHundredths[] = {75, 100, 125, 150}; // game.hudScale
+constexpr int DamageTakenValues[] = {1, 2, 4};            // game.damageMultiplier
 // Presets set Render size and Performance together (choice indices of those two entries). "Custom"
 // (PresetCustom) is shown when the two match no preset; it is never chosen by a key.
 struct PresetChoice { int renderScale, performance; };
@@ -62,6 +88,8 @@ constexpr const char* Confirm[] = {"System", "Cross", "Circle"};
 constexpr const char* Language[] = {"English", "German", "French", "Spanish", "Italian", "Japanese"};
 constexpr const char* Sensitivity[] = {"0.25", "0.50", "0.75", "1.00", "1.25", "1.50", "2.00", "2.50", "3.00"};
 constexpr const char* Gesture[] = {"Rear: 2 fingers", "Front: 3 fingers", "Rear or front"};
+constexpr const char* HudSize[] = {"75 %", "100 %", "125 %", "150 %"};
+constexpr const char* Damage[] = {"Original", "Double", "Four times"};
 } // namespace text
 
 constexpr Entry Entries[EntryCount] = {
@@ -115,6 +143,9 @@ constexpr Entry Entries[EntryCount] = {
     {Id::GyroRecentre, Kind::Action, "Recentre gyro",
      "Forget the held angle: the way you hold the Vita when the game resumes is the new neutral.",
      Applies::Now, nullptr, 0, 0},
+    {Id::GyroRollgoal, Kind::Choice, "Gyro Rollgoal",
+     "Tilt the Vita to play Rollgoal in the fishing hole's cabin. Off: the stick, as the original.",
+     Applies::Now, text::OffOn, 2, 0},
     {Id::FreeCamera, Kind::Choice, "Free camera",
      "Off: the original camera (the right stick turns it sideways; up looks through Link's eyes). "
      "On: the right stick moves the camera freely, up and down too.", Applies::Now, text::OffOn, 2, 0},
@@ -123,16 +154,85 @@ constexpr Entry Entries[EntryCount] = {
     {Id::CameraInvertY, Kind::Choice, "Camera invert up/down",
      "Right stick camera, up and down. Only the free camera moves up and down.", Applies::Now,
      text::OffOn, 2, 0},
+    {Id::AimInvertX, Kind::Choice, "Aim invert left/right",
+     "The stick while aiming an item or looking through Link's eyes, sideways.", Applies::Now, text::OffOn, 2,
+     0},
+    {Id::AimInvertY, Kind::Choice, "Aim invert up/down",
+     "The stick while aiming an item or looking through Link's eyes, up and down.", Applies::Now, text::OffOn,
+     2, 0},
+    // Comfort: Dusklight's options. Off is the original game.
+    {Id::AutoSave, Kind::Choice, "Auto-save",
+     "Saves into your current file when Link enters a new area or opens a dungeon door. "
+     "Off: the game saves only when you ask, as the original.", Applies::Now, text::OffOn, 2, 0},
+    {Id::InstantText, Kind::Choice, "Instant text",
+     "Hold the cancel button and a text box shows all of its text at once.", Applies::Now, text::OffOn, 2, 0},
+    {Id::HoldToMash, Kind::Choice, "Hold to mash",
+     "Where the game asks you to press a button again and again, holding it is enough.", Applies::Now,
+     text::OffOn, 2, 0},
+    {Id::QuickTransform, Kind::Choice, "Quick transform",
+     "R + Triangle changes between Link and the wolf without asking Midna, once the story lets you change.",
+     Applies::Now, text::OffOn, 2, 0},
+    {Id::FastClimbing, Kind::Choice, "Faster climbing",
+     "Ladders and vines are climbed faster, as in the HD version.", Applies::Now, text::OffOn, 2, 0},
+    {Id::FastIronBoots, Kind::Choice, "Faster iron boots",
+     "Link walks faster with the iron boots on.", Applies::Now, text::OffOn, 2, 0},
+    {Id::FastTears, Kind::Choice, "Faster Tears of Light",
+     "The tear a shadow insect leaves comes out sooner, as in the HD version.", Applies::Now, text::OffOn, 2, 0},
+    {Id::FastTransitions, Kind::Choice, "Faster area changes",
+     "Shorter fades when Link goes from one map to the next.", Applies::Now, text::OffOn, 2, 0},
+    {Id::InstantSaves, Kind::Choice, "Instant saves",
+     "No waiting screen while the game writes your save.", Applies::Now, text::OffOn, 2, 0},
+    {Id::RupeeMessages, Kind::Choice, "Skip rupee messages",
+     "A rupee's message plays only the first time you pick that kind up, not again after each load.",
+     Applies::Now, text::OffOn, 2, 0},
+    {Id::RupeesAlwaysFit, Kind::Choice, "Always take rupees",
+     "Rupees from a chest are taken even when the wallet is full, instead of going back into the chest.",
+     Applies::Now, text::OffOn, 2, 0},
+    {Id::BiggerWallets, Kind::Choice, "Bigger wallets",
+     "The three wallets hold 500, 1000 and 2000 rupees, as in the HD version.", Applies::Now, text::OffOn, 2, 0},
+    {Id::AimingReticle, Kind::Choice, "Aiming reticle",
+     "A mark shows where the bow and the slingshot aim.", Applies::Now, text::OffOn, 2, 0},
+    {Id::LowHealthBeep, Kind::Choice, "Mute low health beep",
+     "No beeping while Link is low on hearts.", Applies::Now, text::OffOn, 2, 0},
+    {Id::HideHud, Kind::Choice, "Hide the HUD",
+     "Hearts, buttons, rupees and the rest of the main HUD are not drawn.", Applies::Now, text::OffOn, 2, 0},
+    {Id::HudSize, Kind::Choice, "HUD size",
+     "Size of the hearts, the buttons and the other HUD parts. Menus and text boxes keep their size.",
+     Applies::Now, text::HudSize, 4, 1},
+    // Challenge: Dusklight's options. The defaults are the original game.
+    {Id::DamageTaken, Kind::Choice, "Damage taken",
+     "How much each hit hurts Link. Double is what the HD version's Hero Mode does.", Applies::Now,
+     text::Damage, 3, 0},
+    {Id::HeartDrops, Kind::Choice, "No heart drops",
+     "Enemies, pots and grass never drop hearts, as in the HD version's Hero Mode.", Applies::Now,
+     text::OffOn, 2, 0},
+    // Cheats: Dusklight's options. Off is the original game.
+    {Id::InfiniteHearts, Kind::Choice, "Infinite hearts", "Link's hearts stay full.", Applies::Now, text::OffOn,
+     2, 0},
+    {Id::InfiniteArrows, Kind::Choice, "Infinite arrows", "The quiver stays full.", Applies::Now, text::OffOn, 2,
+     0},
+    {Id::InfiniteBombs, Kind::Choice, "Infinite bombs", "The bomb bags stay full.", Applies::Now, text::OffOn, 2,
+     0},
+    {Id::InfiniteRupees, Kind::Choice, "Infinite rupees", "The wallet stays full.", Applies::Now, text::OffOn, 2,
+     0},
+    {Id::InfiniteOil, Kind::Choice, "Infinite lantern oil", "The lantern never runs out of oil.", Applies::Now,
+     text::OffOn, 2, 0},
+    {Id::InfiniteAir, Kind::Choice, "Infinite air", "Link never runs out of air under water.", Applies::Now,
+     text::OffOn, 2, 0},
     {Id::OpenGesture, Kind::Choice, "Open this page with",
      "Rear: hold two fingers together on the rear touch pad for 1 second. Front: touch the screen with three "
      "fingers.",
      Applies::Now, text::Gesture, 3, 2},
+    {Id::RestartGame, Kind::Action, "Restart the game",
+     "Closes the game and starts it again, so that entries marked \"next start\" apply. "
+     "Progress since your last save is lost.", Applies::Now, nullptr, 0, 0},
     {Id::ResetDefaults, Kind::Action, "Reset to defaults", "Every entry on this page back to its default.",
      Applies::Now, nullptr, 0, 0},
     {Id::Close, Kind::Action, "Close and resume", "Back to the game. Changes are saved now.", Applies::Now,
      nullptr, 0, 0},
 };
-static_assert(EntryCount == 24);
+static_assert(EntryCount == 52);
+static_assert(SectionFirst[0] == Id::Preset, "the first section starts at the first entry");
 static_assert(Presets[1].renderScale == 2 && Presets[1].performance == 0, "Balanced is the default size and clock");
 constexpr const Entry& entry(Id id) { return Entries[int(id)]; }
 
@@ -144,15 +244,17 @@ constexpr int LabelX = 48, ValueX = 556, ValueRight = 920; // value: "<" at Valu
 constexpr int HelpY = ListTop + RowHeight * VisibleRows + 12, HelpLines = 3; // at SmallScale
 constexpr int FooterY = 464, FooterLine2Y = 490, FooterLine3Y = 516; // controls; how it opens; build, disc
 constexpr int CloseButtonX = 760, CloseButtonY = 457, CloseButtonW = 172, CloseButtonH = 30;
+// The section name in the title, "L <  name  > R": a tap on it changes the section.
+constexpr int SectionX = 222, SectionY = TitleY + 6, SectionW = 420, SectionTapBottom = ListTop - 12;
 
 // Keys (the shell maps the Vita buttons or a test script onto them).
 enum Key : uint32_t {
     KeyUp = 1u << 0, KeyDown = 1u << 1, KeyLeft = 1u << 2, KeyRight = 1u << 3, KeyConfirm = 1u << 4,
-    KeyBack = 1u << 5, KeyDefault = 1u << 6, KeyStart = 1u << 7
+    KeyBack = 1u << 5, KeyDefault = 1u << 6, KeyStart = 1u << 7, KeySectionPrev = 1u << 8, KeySectionNext = 1u << 9
 };
 
 struct Effect {
-    enum Type : uint8_t { None, Changed, Recentre, Close } type = None;
+    enum Type : uint8_t { None, Changed, Recentre, Close, Restart } type = None;
     Id id = Id::Count;
     int index = 0; // Changed: the new choice index
 };
@@ -177,7 +279,7 @@ public:
     bool available[EntryCount] = {};   // false: not shown (e.g. no FPS counter in this renderer)
     uint32_t allowedChoices[EntryCount] = {}; // bit i: choice i can be chosen (Language: on this disc)
     int selected = 0, top = 0;
-    bool resetArmed = false;
+    bool resetArmed = false, restartArmed = false;
     const char* status = nullptr; // a short line after an action ("Gyro recentred.")
 
     Page() {
@@ -246,10 +348,13 @@ public:
         if (!pressed) return out;
         const Entry& e = current();
         if (!(pressed & KeyConfirm) || e.id != Id::ResetDefaults) resetArmed = false;
+        if (!(pressed & KeyConfirm) || e.id != Id::RestartGame) restartArmed = false;
         if (pressed & (KeyBack | KeyStart)) {
             out.add({Effect::Close, Id::Close, 0});
             return out;
         }
+        if (pressed & KeySectionPrev) jump(-1);
+        if (pressed & KeySectionNext) jump(+1);
         if (pressed & KeyUp) move(-1);
         if (pressed & KeyDown) move(+1);
         const Entry& now = current();
@@ -271,9 +376,14 @@ public:
             out.add({Effect::Close, Id::Close, 0});
             return out;
         }
+        if (y >= SectionY - 6 && y < SectionTapBottom && x >= SectionX && x < SectionX + SectionW) {
+            resetArmed = restartArmed = false;
+            jump(x < SectionX + SectionW / 3 ? -1 : +1);
+            return out;
+        }
         const int row = row_at(y);
         if (row < 0) return out;
-        if (row != selected) resetArmed = false;
+        if (row != selected) resetArmed = restartArmed = false;
         selected = row;
         const Entry& e = Entries[row];
         if (e.kind == Kind::Action) {
@@ -315,6 +425,9 @@ public:
         return false;
     }
 
+    // The section of the chosen entry.
+    int section() const { return section_of(Entries[selected].id); }
+
     // Every entry back to its default (the Reset action); emits a change for each that moved.
     void reset_all(Effects& out) {
         for (int i = 0; i < EntryCount; ++i)
@@ -329,7 +442,9 @@ private:
             selected = (selected + direction + EntryCount) % EntryCount;
             if (available[selected]) break;
         }
-        // Keep the selection on screen.
+        keep_selection_shown();
+    }
+    void keep_selection_shown() {
         if (selected < top) top = selected;
         int rows[VisibleRows];
         for (int guard = 0; guard < EntryCount; ++guard) {
@@ -338,6 +453,25 @@ private:
             for (int r = 0; r < n; ++r) shown |= rows[r] == selected;
             if (shown) break;
             ++top;
+        }
+    }
+    // To the first shown entry of the previous or next section that has one (wrapping); that entry
+    // goes to the top row, or as near to it as the end of the list allows.
+    void jump(int direction) {
+        const int from = section();
+        for (int k = 1; k <= SectionCount; ++k) {
+            const int target = ((from + direction * k) % SectionCount + SectionCount) % SectionCount;
+            const int end = target + 1 < SectionCount ? int(SectionFirst[target + 1]) : EntryCount;
+            for (int i = int(SectionFirst[target]); i < end; ++i) {
+                if (!available[i]) continue;
+                selected = top = i;
+                // A full page when the list ends before nine rows.
+                int rows[VisibleRows];
+                while (top > 0 && visible(rows) < VisibleRows) --top;
+                keep_selection_shown();
+                status = nullptr;
+                return;
+            }
         }
     }
     void change(Id id, int choice, Effects& out) {
@@ -373,6 +507,15 @@ private:
                 resetArmed = false;
                 reset_all(out);
                 status = "Every entry is back to its default.";
+            }
+            break;
+        case Id::RestartGame:
+            if (!restartArmed) {
+                restartArmed = true;
+                status = "Press again to restart. Progress since your last save is lost.";
+            } else {
+                restartArmed = false;
+                out.add({Effect::Restart, id, 0});
             }
             break;
         case Id::Close: out.add({Effect::Close, id, 0}); break;
