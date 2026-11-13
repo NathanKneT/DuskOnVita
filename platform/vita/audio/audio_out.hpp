@@ -31,6 +31,10 @@ struct Stats {
     std::uint32_t pulls = 0, buffersWithoutPull = 0;
     std::uint64_t putFrames = 0;
     std::uint32_t renderHist[8] = {};
+    // patches/dusklight/0071 (measurement only): the rendered subframes (80 samples each), the
+    // voices active summed over them, and their time in the game's sound driver, in the mixer and
+    // in the rest (stream mix, interleave, hand-over).
+    std::uint64_t subframes = 0, voiceSubframes = 0, driverUs = 0, mixUs = 0, restUs = 0;
 };
 
 // "--vita-audio-priority=default|high" (before open()): high puts the worker 16 steps above the

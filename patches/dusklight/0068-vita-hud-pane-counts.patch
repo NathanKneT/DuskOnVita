@@ -1,0 +1,40 @@
+Vita: measurement only. Counts the panes walked under the HUD's meter screen per frame, how many
+of them are visible and how many run their own draw (receipts paintprof_hud_panes_*), to see
+whether the HUD's 3 ms of main thread per picture is the walk of its pane tree or the drawing.
+
+--- a/libs/JSystem/src/J2DGraph/J2DPane.cpp
++++ b/libs/JSystem/src/J2DGraph/J2DPane.cpp
+@@ -253,6 +253,9 @@ bool J2DPane::insertChild(J2DPane* p_prev, J2DPane* p_child) {
+ extern "C" const void* twv_hud_root;
+ extern "C" unsigned long long twv_paintprof_hud_begin(void);
+ extern "C" void twv_paintprof_hud_pane(const void* pane, u64 tag, int depth, unsigned long long start);
++// patches/dusklight/0068 (measurement only): every pane walked under the meter screen is counted
++// (0 hidden, 1 visible), and every pane whose own draw runs (2).
++extern "C" void twv_paintprof_hud_walk(int kind);
+ static int s_twvHudDepth = -1; // depth of the pane drawing its children under the meter screen
+ #endif
+ 
+@@ -263,6 +266,11 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
+     }
+ #endif
+     param_4 = param_4 && mVisible;
++#if TARGET_VITA
++    if (s_twvHudDepth >= 0) {
++        twv_paintprof_hud_walk(param_4 ? 1 : 0);
++    }
++#endif
+     if (p_grafCtx->getGrafType() != 1) {
+         isOrthoGraf = false;
+     }
+@@ -352,6 +360,11 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
+                 tmpGraf.setScissor();
+             }
+             GXSetCullMode((GXCullMode)mCullMode);
++#if TARGET_VITA
++            if (s_twvHudDepth >= 0) {
++                twv_paintprof_hud_walk(2);
++            }
++#endif
+             drawSelf(x, y, &tmpGraf.mPosMtx);
+         }
+ 

@@ -78,9 +78,13 @@ constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake
 // ms in Ordon centre. patient-cache: on since the console session of 11 Nov: verify compared 29,981
 // cache hits on the console without a difference; Kakariko stores 16 packets per frame instead of
 // 77 and its worker fell by 1.3 to 1.6 ms.
-// reg-repeats, draw-runs and shadow-lists: off until a console run has verified them.
+// draw-runs and shadow-lists: on since 13 Nov, after the console sessions of 12 and 13 Nov.
+// draw-runs: the Palace of Twilight 7.0 -> 13.3 FPS and Snowpeak Ruins room 9 8.7 -> 18.9, 0
+// mismatches in verify and in every run since. shadow-lists: the Ordon overview 8.7 -> 9.9 FPS,
+// 27,186 volumes joined, 0 mismatches.
+// reg-repeats: verified on the console (0 mismatches), not among the defaults chosen for 0.9.0.
 constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn, FastOn,
-                                                         FastOn, FastOn, FastOff, FastOff, FastOff};
+                                                         FastOn, FastOn, FastOff, FastOn, FastOn};
 
 // "--vita-fast-<name>=off|on|verify" for a name above: 1 (choices[option] set), -1 for another
 // value or a second time, 0 for any other token.

@@ -1,0 +1,86 @@
+Vita, measurement only (--vita-fast-draw-runs=on): what ends the look ahead of each draw run.
+The console session of 13 Nov and Vita3K agree that a run holds 16 quads on average in the Palace of
+Twilight although the limit is 255, and publishing the squares to the worker together (tried
+on 13 Nov, removed) does not change it, so something in the stream ends the runs. Counted for runs and for draws that stayed alone:
+the end of the published bytes, a BP write that changes a value, an XF write, a CP write,
+another draw command, any other command, the vertex limit, an indexed vertex descriptor; and
+the runs by size. Reported with the draw-runs receipts.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -728,6 +728,12 @@ constexpr u32 RunMaxVtxSize = 64;
+ u8 sRunBuf[RunVertexLimit * RunMaxVtxSize];
+ int sRunMode = -1;         // -1 not read yet, 0 off, 1 on, 2 verify
+ u32 sRunCounts[4];         // runs, draws joined, verify candidates, verify mismatches
++// patches/aurora/0027 (measurement only): what ended each look ahead, for runs ([0]) and for
++// draws that stayed alone ([1]): 0 the published bytes ended, 1 a BP write that changes a value,
++// 2 an XF write, 3 a CP write, 4 another draw command, 5 any other command or a draw this one
++// cannot take, 6 the vertex limit, 7 a vertex descriptor with indexed attributes.
++u32 sRunEnds[2][8];
++u32 sRunSizes[2][4];       // quads ([0]) and triangles ([1]) per run: 2-4, 5-16, 17-64, more
+ const u8* sRunExpect = nullptr; // verify: where the next joining draw command starts
+ 
+ inline int draw_runs_mode() noexcept {
+@@ -755,6 +761,13 @@ extern "C" int twv_gx_fast_draw_runs_stats(uint32_t* counts, unsigned n) noexcep
+   return sRunMode < 0 ? 0 : sRunMode;
+ }
+ 
++// patches/aurora/0027: the 16 look-ahead end counts, then the 8 run-size counts.
++extern "C" void twv_gx_fast_draw_runs_census(uint32_t* counts, unsigned n) noexcept {
++  for (unsigned i = 0; i < n && i < 24; ++i) {
++    counts[i] = i < 16 ? sRunEnds[i / 8][i % 8] : sRunSizes[(i - 16) / 4][(i - 16) % 4];
++  }
++}
++
+ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange) noexcept;
+ 
+ // The reader stands on this draw's vertex bytes. True when the draw and the draws that follow it
+@@ -779,6 +792,7 @@ static bool draw_run(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, u32 vtxSize,
+   const u8 cmd = static_cast<u8>(prim) | static_cast<u8>(fmt);
+   u32 total = vtxCount;
+   u32 joined = 0;
++  u32 endReason = 5;
+   size_t end = own; // past the last draw taken
+   for (;;) {
+     size_t p = end;
+@@ -803,13 +817,25 @@ static bool draw_run(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, u32 vtxSize,
+       }
+     }
+     if (avail - p < 3 || base[p] != cmd) {
++      if (avail - p < 3) {
++        endReason = 0;
++      } else {
++        const u32 op = base[p] >> 3;
++        endReason = op == (CP_CMD_LOAD_BP_REG >> 3)   ? 1
++                    : op == (CP_CMD_LOAD_XF_REG >> 3) ? 2
++                    : op == (CP_CMD_LOAD_CP_REG >> 3) ? 3
++                    : (base[p] & 0x80) != 0           ? 4
++                                                      : 5;
++      }
+       break;
+     }
+     const u32 n = read_bits<u16>(base + p + 1);
+     if (n == 0 || n % per != 0 || total + n > RunVertexLimit || avail - p - 3 < static_cast<size_t>(n) * vtxSize) {
++      endReason = n != 0 && n % per == 0 && total + n > RunVertexLimit ? 6 : avail - p - 3 < static_cast<size_t>(n) * vtxSize ? 0 : 5;
+       break;
+     }
+     if (joined == 0 && !run_direct_only()) {
++      endReason = 7;
+       break;
+     }
+     if (sRunMode == 2) {
+@@ -825,9 +851,14 @@ static bool draw_run(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, u32 vtxSize,
+     ++joined;
+     end = p + 3 + static_cast<size_t>(n) * vtxSize;
+   }
++  ++sRunEnds[joined == 0 ? 1 : 0][endReason];
+   if (joined == 0) {
+     return false;
+   }
++  {
++    const u32 prims = total / per;
++    ++sRunSizes[prim == GX_QUADS ? 0 : 1][prims <= 4 ? 0 : prims <= 16 ? 1 : prims <= 64 ? 2 : 3];
++  }
+   reader.skip(end);
+   ++sRunCounts[0];
+   sRunCounts[1] += joined;

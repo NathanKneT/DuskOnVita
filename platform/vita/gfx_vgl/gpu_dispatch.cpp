@@ -232,8 +232,13 @@ extern "C" void twv_vgl_end(void) {
         twv::gpu::capture_name(path,sizeof path,CaptureRoot,index,frameDigest);
         capturePath=path;
     }
+    // The submit thread's drain, the scene end and the flip, apart from the receipts and the
+    // caches' frame ends (gpu_api.h SETTLE split).
+    const uint64_t sceneEnd=twv_vgl_time_us();
     settle();
-    if(!gpu().end(capturePath))return;
+    const bool ended=gpu().end(capturePath);
+    twv_vgl_profile_add(TWV_PROFILE_SETTLE_SCENE_END,twv_vgl_time_us()-sceneEnd);
+    if(!ended)return;
     twv::gpu::common_frame(gpu());
     if(twv::gpu::frames_presented()%60==0){twv::gpu::submit::report();merge_report();}
     if(digest && twv::gpu::frames_presented()%60==0) {

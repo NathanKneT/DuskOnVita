@@ -86,7 +86,7 @@ extern "C" void twv_vita_scene_probe(unsigned frame) {
     // Free play (telemetry.hpp, quiet): stage, player and game ticks every 300 frames only.
     const bool quiet = twv::vita::telemetryIsQuiet();
     if (!quiet) twv_vita_target_probe(frame);
-    if (quiet ? frame % twv::vita::QuietReceiptFrames != 0 : (frame != 1 && frame % 10)) return;
+    if (quiet ? frame % twv::vita::quietReceiptFrames() != 0 : (frame != 1 && frame % 10)) return;
     twv::vita::telemetryEvent("runtime_frames", frame);
     const char* stage = dComIfGp_getStartStageName();
     twv::vita::telemetryText("stage_name", stage ? stage : "");

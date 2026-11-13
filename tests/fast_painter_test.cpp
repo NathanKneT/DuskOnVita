@@ -10,6 +10,7 @@
 std::map<std::string, long long> events;
 unsigned receiptGroups = 0;
 namespace twv::vita {
+void telemetryText(const char*, const char*) {}
 void telemetryEvent(const char* name, long long value) {
     if (std::string(name) == "fast_gx_wake_mode") ++receiptGroups;
     events[name] = value;

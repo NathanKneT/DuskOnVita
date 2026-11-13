@@ -44,7 +44,7 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     // Free play (telemetryQuiet): one complete 30-frame window in every 300 frames.
     static unsigned windows=0;
     if(twv::vita::telemetryIsQuiet() &&
-       ++windows%(twv::vita::QuietReceiptFrames/twv::vgl::FramePacing::Window)) {
+       ++windows%(twv::vita::quietReceiptFrames()/twv::vgl::FramePacing::Window)) {
         profileUs.fill(0);frameStart.fill(0);worstInterval=0;
         return;
     }
@@ -60,7 +60,9 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
         "prof_tick_input_us", "prof_tick_tail_us", "prof_present_prep_us", "prof_present_pass_us",
         "prof_present_end_us", "prof_loop_tail_us", "prof_input_setup_us", "prof_input_touch_us",
         "prof_input_pad_read_us", "prof_input_binds_us", "prof_input_pad_update_us",
-        "prof_input_convert_us", "prof_input_sensors_us", "prof_input_combos_us"};
+        "prof_input_convert_us", "prof_input_sensors_us", "prof_input_combos_us",
+        "prof_settle_fifo_us", "prof_settle_scene_end_us", "prof_settle_frame_end_us",
+        "prof_settle_begin_us"};
     static_assert(sizeof names/sizeof names[0]==TWV_PROFILE_COUNT);
     twv::vita::telemetryEvent("prof_frame_samples",pacing.frames);
     twv::vita::telemetryEvent("prof_draw_timers_enabled",TWV_VITA_DRAW_TIMERS);
@@ -126,6 +128,12 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     twv::vita::telemetryEvent("audio_pulls",audio.pulls);
     twv::vita::telemetryEvent("audio_put_frames",(long long)audio.putFrames);
     twv::vita::telemetryEvent("audio_buffers_without_pull",audio.buffersWithoutPull);
+    // patches/dusklight/0071: the subframes' split (totals; the report divides).
+    twv::vita::telemetryEvent("audio_subframes",(long long)audio.subframes);
+    twv::vita::telemetryEvent("audio_voice_subframes",(long long)audio.voiceSubframes);
+    twv::vita::telemetryEvent("audio_driver_us",(long long)audio.driverUs);
+    twv::vita::telemetryEvent("audio_mix_us",(long long)audio.mixUs);
+    twv::vita::telemetryEvent("audio_rest_us",(long long)audio.restUs);
     {char hist[128];
      std::snprintf(hist,sizeof hist,"%u,%u,%u,%u,%u,%u,%u,%u",(unsigned)audio.renderHist[0],(unsigned)audio.renderHist[1],
          (unsigned)audio.renderHist[2],(unsigned)audio.renderHist[3],(unsigned)audio.renderHist[4],(unsigned)audio.renderHist[5],
@@ -169,7 +177,7 @@ void common_frame(const TwvGpuBackend& backend) {
     profile_receipts(backend,twv::vita::processTimeUs());
     twv::vita::system_probe_sample(sceKernelGetThreadId(),twv::vita::audio::threadId());
     twv::vita::runControlFrame();
-    if(frames%(twv::vita::telemetryIsQuiet()?twv::vita::QuietReceiptFrames:60))return;
+    if(frames%(twv::vita::telemetryIsQuiet()?twv::vita::quietReceiptFrames():60))return;
     if(backend.report)backend.report();
     const auto log=twv::vita::telemetryStats();
     twv::vita::telemetryEvent("diag_log_written_bytes",log.writtenBytes);

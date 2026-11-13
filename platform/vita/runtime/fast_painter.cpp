@@ -3,6 +3,8 @@
 #include "runtime/fast_painter.hpp"
 #include "runtime/telemetry.hpp"
 
+#include <cstdio>
+
 // patches/aurora/0020 (fifo.cpp): the wake mode in use and its counts (worker signals, worker sleeps,
 // waiter signals, waiter sleeps, lost wakeups). Weak: absent in a build without the GX worker.
 extern "C" int twv_gx_fast_wake_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
@@ -21,6 +23,10 @@ extern "C" int twv_gx_fast_reg_repeats_stats(uint32_t* counts, unsigned n) noexc
 // patches/aurora/0026 (command_processor.cpp): the draw-runs switch's mode and counts (runs, draws
 // joined, verify candidates, verify mismatches).
 extern "C" int twv_gx_fast_draw_runs_stats(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
+
+// patches/aurora/0027 (command_processor.cpp, measurement only): what ended each look ahead (8
+// reasons for runs, 8 for draws that stayed alone), then the runs by size (quads, triangles).
+extern "C" void twv_gx_fast_draw_runs_census(uint32_t* counts, unsigned n) noexcept __attribute__((weak));
 
 // gfx_vgl/backend.cpp: 1 while the backend drops every draw into an offscreen framebuffer.
 extern "C" int twv_vita_offscreen_draws_dropped(void) __attribute__((weak));
@@ -65,6 +71,25 @@ void receipts() {
         twv::vita::telemetryEvent("fast_draw_runs_candidates", d[2]);
         twv::vita::telemetryEvent("fast_draw_runs_mismatches", d[3]);
         sDrawRunsReported = d[3];
+        if (twv_gx_fast_draw_runs_census) {
+            uint32_t c[24] = {};
+            twv_gx_fast_draw_runs_census(c, 24);
+            // Three lines: a text receipt holds 254 characters.
+            static const char* const names[3] = {"fast_draw_runs_ends_run", "fast_draw_runs_ends_alone",
+                                                 "fast_draw_runs_sizes"};
+            static const char* const formats[3] = {
+                "avail=%lu;bp=%lu;xf=%lu;cp=%lu;draw=%lu;other=%lu;limit=%lu;indexed=%lu",
+                "avail=%lu;bp=%lu;xf=%lu;cp=%lu;draw=%lu;other=%lu;limit=%lu;indexed=%lu",
+                "q4=%lu;q16=%lu;q64=%lu;qmore=%lu;t4=%lu;t16=%lu;t64=%lu;tmore=%lu"};
+            for (unsigned g = 0; g < 3; ++g) {
+                const uint32_t* v = c + g * 8;
+                char text[176];
+                std::snprintf(text, sizeof text, formats[g], (unsigned long)v[0], (unsigned long)v[1],
+                              (unsigned long)v[2], (unsigned long)v[3], (unsigned long)v[4], (unsigned long)v[5],
+                              (unsigned long)v[6], (unsigned long)v[7]);
+                twv::vita::telemetryText(names[g], text);
+            }
+        }
     }
     if (twv_gx_fast_reg_repeats_stats && sModes[twv::vita::FastRegRepeats] != twv::vita::FastOff) {
         uint32_t r[4] = {};

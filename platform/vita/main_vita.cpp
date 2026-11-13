@@ -538,7 +538,9 @@ int main(int, char**) {
     //   dusklight/0015), or one per presented frame as before. Default fixed with the play profile.
     //   single: fixed, at most one per loop, so a run slower than 30 FPS (the emulator) runs exactly
     //   one tick per frame and frames match between runs (A/B captures).
-    // --vita-receipts=full|quiet: default quiet with the implicit play profile (free play).
+    // --vita-receipts=full|quiet|brief: default quiet with the implicit play profile (free play).
+    //   brief: quiet, with a window of thread times every 90 frames instead of 300 (hand-played
+    //   console runs).
     // --vita-frame-overlap=on|off|verify: the next game tick runs while the GX worker finishes the last
     //   frame (aurora/frame_overlap.hpp). Default on with the play profile (FrameOverlapPlay), off
     //   otherwise. Needs the GX worker (the play profile has it);
@@ -557,6 +559,7 @@ int main(int, char**) {
     // config.json's game.language / vita.confirmButton. --vita-disc-read-test=MIB: read speed of
     // the disc image through its container before the game starts (receipts only).
     int profileChoice = -1, receiptsChoice = -1, ticksChoice = -1, overlapChoice = -1, fastShadowChoice = -1;
+    bool briefReceipts = false;
     int importChoice = -1;
     int fastActorChoices[twv::vita::FastActorSwitchCount];
     for (int& choice : fastActorChoices) choice = -1;
@@ -571,6 +574,7 @@ int main(int, char**) {
     // --vita-audio-priority=default|high (audio/audio_out.hpp): the sound thread's priority.
     int audioPriorityChoice = -1;
     // --vita-audio-pull=frame|subframe (audio/audio_out.hpp): how much sound one render call makes.
+    //   Default subframe with the play profile, frame otherwise.
     int audioPullChoice = -1;
     // --vita-place=X,Y,Z,ANGLE (runtime/visual_skips.hpp): bench lines only.
     bool placeChosen = false;
@@ -735,9 +739,14 @@ int main(int, char**) {
                 }
                 continue;
             }
+            if (std::strcmp(token, "--vita-receipts=brief") == 0 && receiptsChoice < 0) {
+                receiptsChoice = 1;
+                briefReceipts = true;
+                continue;
+            }
             if (const int choice = wordOption(token, "--vita-receipts=", "full", "quiet", receiptsChoice)) {
                 if (choice < 0) {
-                    argsError("--vita-receipts needs full or quiet, once");
+                    argsError("--vita-receipts needs full, quiet or brief, once");
                     argsExit();
                 }
                 continue;
@@ -1000,8 +1009,11 @@ int main(int, char**) {
     if (stateDigestChoice == 1) twv::vita::telemetryText("state_digest", "on");
     twv_vita_sync_loads_select(syncLoadsChoice == 1);
     twv::vita::audio::setHighPriority(audioPriorityChoice == 1);
-    twv::vita::audio::setSubframePull(audioPullChoice == 1);
-    if (audioPullChoice == 1) twv::vita::telemetryText("audio_pull", "subframe");
+    // Default with the play profile since 13 Nov (after two console sessions that day: late sound
+    // buffers in the Palace of Twilight 29 % -> 0.2 %, Hyrule Field 47 % -> 20 %, no crackle heard).
+    const bool subframePull = audioPullChoice >= 0 ? audioPullChoice == 1 : playProfile;
+    twv::vita::audio::setSubframePull(subframePull);
+    if (subframePull) twv::vita::telemetryText("audio_pull", audioPullChoice == 1 ? "subframe" : "subframe (default)");
     if (placeChosen) {
         twv_vita_place_select(placeX, placeY, placeZ, placeAngle);
         twv::vita::telemetryText("place", "on");
@@ -1027,6 +1039,10 @@ int main(int, char**) {
     // Quiet receipts with the implicit profile (free play); sequence runs, explicit profiles and
     // renderer choices keep every receipt, and --vita-receipts decides either way.
     twv::vita::telemetryQuiet(receiptsChoice >= 0 ? receiptsChoice == 1 : implicitProfile);
+    if (briefReceipts) {
+        twv::vita::telemetryQuietFrames(twv::vita::BriefReceiptFrames);
+        twv::vita::telemetryText("receipts", "brief");
+    }
     gameArgs[gameArgc] = nullptr;
     if(!twv_vita_bundle_select(rendererOptions.bundle_features(),rendererOptions.memoryProfile)) {
         argsError("render bundle unavailable or selected after first use");

@@ -55,6 +55,8 @@ struct EntryState {
     unsigned exitAfter = 0;
     int gameResult = 7;
     bool quiet = false, gpuCalled = false;
+    unsigned quietFrames = 0; // telemetryQuietFrames (--vita-receipts=brief)
+    bool subframePull = false; // audio::setSubframePull (default with the play profile)
     int gpuBackend = -1;
     std::uint32_t gpuFeatures = 0;
     int overlap = -1;
@@ -190,6 +192,7 @@ void telemetryFlush() {}
 void telemetrySync() { state.calls.emplace_back("sync"); }
 void runControlExitAfter(unsigned seconds) { state.calls.emplace_back("exit_after"); state.exitAfter = seconds; }
 void telemetryQuiet(bool quiet) { state.quiet = quiet; }
+void telemetryQuietFrames(unsigned frames) { state.quietFrames = frames; }
 void startupErrorExit(const MessageText& text, int code) {
     state.text["startup_screen"] = text.kind;
     state.text["screen_title"] = text.message.title;
@@ -271,7 +274,7 @@ extern "C" void twv_vita_place_select(float, float, float, int) {}
 // audio/audio_out.hpp: --vita-audio-priority.
 namespace twv::vita::audio {
 void setHighPriority(bool) {}
-void setSubframePull(bool) {}
+void setSubframePull(bool on) { state.subframePull = on; }
 }
 extern "C" void twv_vita_fast_present_bg_select(int) {}
 extern "C" void twv_vita_fast_particle_palette_select(int) {}
@@ -449,6 +452,11 @@ int main() {
         (std::vector<std::string>{"--cvar", "video.maxFrameRate=30"}));
     assert(run("--vita-ticks=single") == 7 && state.text.at("play_profile") == "off (--vita-ticks given)");
     assert(run("--vita-profile=play --vita-receipts=quiet") == 7 && state.quiet);
+    assert(state.quietFrames == 0);
+    assert(run("--vita-profile=play --vita-receipts=brief") == 7 && state.quiet && state.quietFrames == 90);
+    assert(state.subframePull); // the play profile renders the sound in small steps
+    assert(run("--vita-profile=play --vita-audio-pull=frame") == 7 && !state.subframePull);
+    assert(run("--vita-profile=off") == 7 && !state.subframePull);
     assert(run("--vita-profile=off --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "off");
     assert(state.selections.empty() && !state.gpuCalled && state.gameArgs.size() == 7);
     for (const char* bad : {"--vita-profile=play --vita-gx-thread=on", "--vita-profile=play --vita-gpu=vgl",

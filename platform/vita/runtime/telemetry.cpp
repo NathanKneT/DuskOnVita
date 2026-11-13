@@ -35,6 +35,7 @@ struct RingLock {
 // Quiet receipts (free play, telemetryQuiet): thinner frame/scene receipts, and the log rotated
 // at boot only, so a run's records never straddle two files (vita_run_report.py splits by boot).
 volatile bool gQuiet = false;
+volatile unsigned gQuietFrames = QuietReceiptFrames;
 
 // Append and close per write, so a crash never loses already-written lines.
 bool writeFile(const char* data, std::size_t bytes) {
@@ -198,6 +199,8 @@ void telemetryQuiet(bool quiet) {
     gLog.flush();
 }
 bool telemetryIsQuiet() { return gQuiet; }
+void telemetryQuietFrames(unsigned frames) { if (frames >= 30 && frames % 30 == 0) gQuietFrames = frames; }
+unsigned quietReceiptFrames() { return gQuietFrames; }
 void telemetryEvent(const char* name, long long value) { Lock l; gLog.event(name, value, sinceStartMs()); }
 void telemetryText(const char* name, const char* text) { Lock l; gLog.text(name, text, sinceStartMs()); }
 void telemetryFlush() { Lock l; gLog.flush(); }

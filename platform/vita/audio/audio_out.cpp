@@ -54,6 +54,7 @@ struct State {
     std::atomic<bool> subframePull{false};
     std::atomic<std::uint32_t> pulls{0}, buffersWithoutPull{0}, renderHist[8];
     std::atomic<std::uint64_t> putFrames{0};
+    std::atomic<std::uint64_t> subframes{0}, voiceSubframes{0}, driverUs{0}, mixUs{0}, restUs{0};
 };
 State gState;
 
@@ -231,6 +232,11 @@ Stats stats() {
     s.buffersWithoutPull = gState.buffersWithoutPull.load(std::memory_order_relaxed);
     s.putFrames = gState.putFrames.load(std::memory_order_relaxed);
     for (int i = 0; i < 8; ++i) s.renderHist[i] = gState.renderHist[i].load(std::memory_order_relaxed);
+    s.subframes = gState.subframes.load(std::memory_order_relaxed);
+    s.voiceSubframes = gState.voiceSubframes.load(std::memory_order_relaxed);
+    s.driverUs = gState.driverUs.load(std::memory_order_relaxed);
+    s.mixUs = gState.mixUs.load(std::memory_order_relaxed);
+    s.restUs = gState.restUs.load(std::memory_order_relaxed);
     return s;
 }
 void setHighPriority(bool on) { gState.highPriority.store(on, std::memory_order_relaxed); }
@@ -240,6 +246,18 @@ bool subframePull() { return gState.subframePull.load(std::memory_order_relaxed)
 std::int32_t threadId() { return gState.thread; }
 
 }  // namespace twv::vita::audio
+
+// patches/dusklight/0071 (DuskAudioSystem.cpp, on the audio thread, measurement only): the clock
+// and one rendered subframe's split.
+extern "C" unsigned long long twv_vita_audio_clock_us(void) { return twv::vita::processTimeUs(); }
+extern "C" void twv_vita_audio_split(unsigned driverUs, unsigned mixUs, unsigned restUs, unsigned voices) {
+    using twv::vita::audio::gState;
+    gState.subframes.fetch_add(1, std::memory_order_relaxed);
+    gState.voiceSubframes.fetch_add(voices, std::memory_order_relaxed);
+    gState.driverUs.fetch_add(driverUs, std::memory_order_relaxed);
+    gState.mixUs.fetch_add(mixUs, std::memory_order_relaxed);
+    gState.restUs.fetch_add(restUs, std::memory_order_relaxed);
+}
 
 // patches/dusklight/0067 (DuskAudioSystem.cpp, on the audio thread): 1 with --vita-audio-pull=subframe.
 extern "C" int twv_vita_audio_subframe_pull(void) { return twv::vita::audio::subframePull() ? 1 : 0; }

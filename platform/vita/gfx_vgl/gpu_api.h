@@ -108,7 +108,13 @@ constexpr uint32_t TWV_PROFILE_VERTEX = 0, TWV_PROFILE_SUBMIT = 1,
     // bindings, pad state update, pad conversion, mouse and gyro, combos.
     TWV_PROFILE_INPUT_SETUP = 36, TWV_PROFILE_INPUT_TOUCH = 37, TWV_PROFILE_INPUT_PAD_READ = 38,
     TWV_PROFILE_INPUT_BINDS = 39, TWV_PROFILE_INPUT_PAD_UPDATE = 40, TWV_PROFILE_INPUT_CONVERT = 41,
-    TWV_PROFILE_INPUT_SENSORS = 42, TWV_PROFILE_INPUT_COMBOS = 43, TWV_PROFILE_COUNT = 44;
+    TWV_PROFILE_INPUT_SENSORS = 42, TWV_PROFILE_INPUT_COMBOS = 43,
+    // SETTLE split into its parts (console, 13 Nov, one step per picture: 2 to 3 ms of settle per picture
+    // beside the worker wait): the FIFO settle (worker wait, the next frame's bytes moved to the
+    // front), the backend's frame end (scene end and flip, then the caches' frame ends and the
+    // receipts), and the deferred frame begin (scene begin and clear).
+    TWV_PROFILE_SETTLE_FIFO = 44, TWV_PROFILE_SETTLE_SCENE_END = 45, TWV_PROFILE_SETTLE_FRAME_END = 46,
+    TWV_PROFILE_SETTLE_BEGIN = 47, TWV_PROFILE_COUNT = 48;
 uint64_t twv_vgl_time_us(void);
 void twv_vgl_profile_add(uint32_t category, uint64_t microseconds);
 uint32_t twv_vgl_program(const char* vertex, const char* fragment);

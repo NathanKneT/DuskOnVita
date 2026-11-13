@@ -157,7 +157,9 @@ struct OverlapOps {
   void close_frame() noexcept { gx::fifo::close_frame(); }
   bool settle_frame(uint64_t end) noexcept {
     const uint64_t before = gx::fifo::wait_us();
+    const uint64_t settleStart = twv_vgl_time_us();
     gx::fifo::settle_frame(end);
+    twv_vgl_profile_add(TWV_PROFILE_SETTLE_FIFO, twv_vgl_time_us() - settleStart);
     if (g_verify) {
       verify_check();
     }
@@ -428,8 +430,11 @@ const AuroraEvent* update() noexcept {
 
 #if TWV_VITA_GFX_VGL
 bool begin_now() noexcept {
+  const uint64_t start = twv_vgl_time_us();
   gx::fifo::begin_frame();
-  return twv::gfx_vgl::begin_frame();
+  const bool begun = twv::gfx_vgl::begin_frame();
+  twv_vgl_profile_add(TWV_PROFILE_SETTLE_BEGIN, twv_vgl_time_us() - start);
+  return begun;
 }
 
 // What end_frame does once the worker has processed the whole frame: the draw cache, the present
@@ -439,12 +444,14 @@ void finish_frame() noexcept {
   const uint64_t waited = gx::fifo::wait_us();
   twv_vgl_profile_add(TWV_PROFILE_GX_WAIT, waited - g_waitReported);
   g_waitReported = waited;
+  const uint64_t frameEndStart = twv_vgl_time_us();
   twv::gfx_vgl::end_frame();
+  twv_vgl_profile_add(TWV_PROFILE_SETTLE_FRAME_END, twv_vgl_time_us() - frameEndStart);
 #if TWV_VITA_DECODE_PROBE
   twv_decode_probe_frame_end();
 #endif
   if (g_overlap.enabled &&
-      g_overlap.stats.frames % (twv::vita::telemetryIsQuiet() ? twv::vita::QuietReceiptFrames : 60) == 0) {
+      g_overlap.stats.frames % (twv::vita::telemetryIsQuiet() ? twv::vita::quietReceiptFrames() : 60) == 0) {
     const auto& s = g_overlap.stats;
     twv::vita::telemetryEvent("frame_overlap_frames", static_cast<long long>(s.frames));
     twv::vita::telemetryEvent("frame_overlap_settle_idle", static_cast<long long>(s.idle));

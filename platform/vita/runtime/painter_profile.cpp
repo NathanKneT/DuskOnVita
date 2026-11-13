@@ -57,6 +57,8 @@ unsigned gDepth = 0;  // wrapped sections open
 extern "C" void twv_cM_rnd_state(int* out);
 extern "C" void twv_cM_rnd2_state(int* out);
 uint32_t gRndFrames = 0;               // painted frames whose painter drew random numbers
+// patches/dusklight/0068: [0] panes walked while hidden, [1] while visible, [2] own draw ran.
+unsigned long long gHudPanes[3];
 uint32_t gRndSection[SectionCount] = {};  // sampled frames in which the section did
 int gRndAtBegin[6];
 inline void rnd_state(int* s) {
@@ -157,6 +159,12 @@ void publish() {
                                 (unsigned long)gDlCallers[order[i]].calls);
         if (n) telemetryText("paintprof_dl_callers", text);
     }
+    // patches/dusklight/0068: panes walked under the HUD's meter screen in this window (every frame),
+    // those of them that were visible, and those whose own draw ran.
+    telemetryEvent("paintprof_hud_panes_walked", (long long)gHudPanes[0] + gHudPanes[1]);
+    telemetryEvent("paintprof_hud_panes_visible", (long long)gHudPanes[1]);
+    telemetryEvent("paintprof_hud_panes_drew", (long long)gHudPanes[2]);
+    gHudPanes[0] = gHudPanes[1] = gHudPanes[2] = 0;
     telemetryEvent("paintprof_rnd_frames", gRndFrames);
     if (gRndFrames) {
         int at = 0;
@@ -205,6 +213,9 @@ struct Scope {
 // meter screen, on sampled painter frames only (begin returns 0 otherwise).
 extern "C" {
 const void* twv_hud_root = nullptr;
+}
+extern "C" void twv_paintprof_hud_walk(int kind) {
+    if (kind >= 0 && kind < 3) ++gHudPanes[kind];
 }
 extern "C" unsigned long long twv_paintprof_hud_begin(void) {
     if (!gOn) return 0;

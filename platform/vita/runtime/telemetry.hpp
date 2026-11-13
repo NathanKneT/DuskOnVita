@@ -40,6 +40,12 @@ constexpr std::uint64_t QuietRotateBytes = 8ull << 20;
 constexpr unsigned QuietReceiptFrames = 300;
 void telemetryQuiet(bool quiet);
 bool telemetryIsQuiet();
+// --vita-receipts=brief (hand-played console runs): quiet, with one 30-frame window in every 90
+// frames instead of 300, so a 40-second visit to a slow place still gives several windows of
+// thread times. frames: a multiple of 30. quietReceiptFrames() is the value in use.
+constexpr unsigned BriefReceiptFrames = 90;
+void telemetryQuietFrames(unsigned frames);
+unsigned quietReceiptFrames();
 std::uint64_t processTimeUs();
 // std::terminate handler that records the exception (fault_receipts.cpp).
 void installFaultReceipts();

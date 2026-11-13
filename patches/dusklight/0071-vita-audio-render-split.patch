@@ -1,0 +1,54 @@
+Vita, measurement only: where a sound subframe's time goes. In Hyrule Field the sound thread
+needs 8.2 ms per 10.7 ms device buffer on the console (13 Nov; Ordon 3.0, Snowpeak
+4.9, the Palace of Twilight 5.7), so a fifth of the buffers are late even when the sound is
+rendered in small steps. Each subframe now reports its time in the game's sound driver
+(JASDriver::updateDSP), in the mixer (DspRender) and in the rest, and the number of active
+voices, to platform/vita/audio/audio_out.cpp.
+
+--- a/src/dusk/audio/DuskAudioSystem.cpp
++++ b/src/dusk/audio/DuskAudioSystem.cpp
+@@ -336,12 +336,35 @@ static struct {
+     }
+ } extResampler;
+ 
++#if TARGET_VITA
++// Measurement only (platform/vita/audio/audio_out.cpp): one subframe's time in the game's sound
++// driver (JASDriver::updateDSP: sequencer, channel and oscillator updates), in the mixer
++// (DspRender) and in the rest (stream mix, interleave, hand-over), and the voices active in it.
++extern "C" unsigned long long twv_vita_audio_clock_us(void);
++extern "C" void twv_vita_audio_split(unsigned driverUs, unsigned mixUs, unsigned restUs, unsigned voices);
++#endif
++
+ int RenderAudioSubframe() {
+     ZoneScoped;
+     OutBuffer = {};
+ 
++#if TARGET_VITA
++    const unsigned long long twvStart = twv_vita_audio_clock_us();
++    JASDriver::updateDSP();
++    const unsigned long long twvDriver = twv_vita_audio_clock_us();
++    unsigned twvVoices = 0;
++    for (int i = 0; i < DSP_CHANNELS; i++) {
++        const auto& voice = JASDsp::CH_BUF[i];
++        if (voice.mIsActive && !voice.mPauseFlag && !voice.mForcedStop) {
++            ++twvVoices;
++        }
++    }
++    DspRender(OutBuffer);
++    const unsigned long long twvMix = twv_vita_audio_clock_us();
++#else
+     JASDriver::updateDSP();
+     DspRender(OutBuffer);
++#endif
+ 
+     std::span<f32> OutInterleaveBuffer{OutInterleaveBufferFull.data(), static_cast<size_t>(DSP_SUBFRAME_SIZE * OutChannelCount)};
+     InterleaveOutputData(OutBuffer, OutInterleaveBuffer);
+@@ -367,6 +390,8 @@ int RenderAudioSubframe() {
+     auto bytesToWrite = OutInterleaveBuffer.size_bytes();
+ #if TARGET_VITA
+     twv::vita::audio::put(OutInterleaveBuffer.data(), bytesToWrite);
++    twv_vita_audio_split(static_cast<unsigned>(twvDriver - twvStart), static_cast<unsigned>(twvMix - twvDriver),
++                         static_cast<unsigned>(twv_vita_audio_clock_us() - twvMix), twvVoices);
+ #else
+     SDL_PutAudioStreamData(PlaybackStream, OutInterleaveBuffer.data(), bytesToWrite);
+ #endif
