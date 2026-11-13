@@ -20,7 +20,10 @@ namespace {
 
 using twv::disc::Format;
 
-constexpr const char* VitaFolders[] = {"ux0:data/twilight-vita", "ux0:data/dusklight"};
+// After ux0: the port's folder on the other storage devices a Vita can have (a memory card or an
+// SD adapter mounted beside ux0:). A device that is not there has no folder to list.
+constexpr const char* VitaFolders[] = {"ux0:data/twilight-vita", "ux0:data/dusklight", "uma0:data/twilight-vita",
+                                       "imc0:data/twilight-vita", "xmc0:data/twilight-vita"};
 constexpr const char* VitaDefaultImage = "game.iso";
 // Read as discs, then named only (so a message can say what the file is).
 constexpr const char* Extensions[] = {".iso", ".gcm", ".ciso", ".gcz", ".rvz", ".wia", ".wbfs", ".nfs", ".tgc", ".cso"};
@@ -210,7 +213,8 @@ int twv_disc_probe(const char* path, TwvDiscReport* out) {
 }
 
 int twv_disc_find(const char* configured, TwvDiscReport* out) {
-    return twv::disc::find_in(configured, VitaDefaultImage, VitaFolders, 2, out);
+    return twv::disc::find_in(configured, VitaDefaultImage, VitaFolders,
+                              int(sizeof VitaFolders / sizeof VitaFolders[0]), out);
 }
 
 long long twv_disc_read(const char* path, unsigned long long offset, void* out, unsigned len) {

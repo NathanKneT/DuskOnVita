@@ -9,7 +9,8 @@
  *   2. ux0:data/twilight-vita/game.iso;
  *   3. any other image in ux0:data/twilight-vita/ (.iso .gcm .ciso .gcz, and the formats only
  *      named: .rvz .wia .wbfs .nfs .tgc .cso), in name order;
- *   4. the same in ux0:data/dusklight/ (Zelda.iso or Zelda.ciso, where another Vita build keeps it).
+ *   4. the same in ux0:data/dusklight/ (Zelda.iso or Zelda.ciso, where another Vita build keeps it);
+ *   5. the same in data/twilight-vita/ on uma0:, imc0: and xmc0: (a second storage device).
  * Images are read in place, never copied. The region comes from the disc header, not the name. */
 #include <stddef.h>
 
