@@ -82,9 +82,10 @@ constexpr const char* FastPainterOptionNames[FastPainterOptionCount] = {"gx-wake
 // draw-runs: the Palace of Twilight 7.0 -> 13.3 FPS and Snowpeak Ruins room 9 8.7 -> 18.9, 0
 // mismatches in verify and in every run since. shadow-lists: the Ordon overview 8.7 -> 9.9 FPS,
 // 27,186 volumes joined, 0 mismatches.
-// reg-repeats: verified on the console (0 mismatches), not among the defaults chosen for 0.9.0.
+// reg-repeats: on since 13 Nov as well: no mismatch of BP writes or light loads in any console run
+// since 12 Nov.
 constexpr int FastPainterPlay[FastPainterOptionCount] = {FastOn, FastOn, FastOn, FastOn, FastOn, FastOn,
-                                                         FastOn, FastOn, FastOff, FastOn, FastOn};
+                                                         FastOn, FastOn, FastOn, FastOn, FastOn};
 
 // "--vita-fast-<name>=off|on|verify" for a name above: 1 (choices[option] set), -1 for another
 // value or a second time, 0 for any other token.

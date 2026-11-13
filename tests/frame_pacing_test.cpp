@@ -37,7 +37,8 @@ unsigned quietReceiptFrames(){return QuietReceiptFrames;}
 namespace audio {
 struct Stats {uint64_t buffers=0,late=0,maxRenderUs=0,renderWallUs=0,renderRunClocks=0,lateWallUs=0,lateRunClocks=0;
               uint32_t pulls=0,buffersWithoutPull=0;uint64_t putFrames=0;uint32_t renderHist[8]={};
-              uint64_t subframes=0,voiceSubframes=0,driverUs=0,mixUs=0,restUs=0;};
+              uint64_t subframes=0,voiceSubframes=0,driverUs=0,mixUs=0,restUs=0;
+              uint64_t mixTimed=0,mixStageUs[5]={},mixVoices=0,mixBiquads=0,mixInput=0;uint32_t fpscr=0;};
 Stats stats(){return {};}
 }
 }

@@ -134,6 +134,15 @@ void profile_receipts(const TwvGpuBackend& backend,uint64_t now) {
     twv::vita::telemetryEvent("audio_driver_us",(long long)audio.driverUs);
     twv::vita::telemetryEvent("audio_mix_us",(long long)audio.mixUs);
     twv::vita::telemetryEvent("audio_rest_us",(long long)audio.restUs);
+    // patches/dusklight/0072: the mixer by stage over its timed subframes (totals), and the sound
+    // thread's FPSCR.
+    {char split[200];
+     std::snprintf(split,sizeof split,"n=%llu;voice=%llu;pan=%llu;reverb_in=%llu;mix=%llu;tail=%llu;voices=%llu;biquads=%llu;input=%llu",
+         (unsigned long long)audio.mixTimed,(unsigned long long)audio.mixStageUs[0],(unsigned long long)audio.mixStageUs[1],
+         (unsigned long long)audio.mixStageUs[2],(unsigned long long)audio.mixStageUs[3],(unsigned long long)audio.mixStageUs[4],
+         (unsigned long long)audio.mixVoices,(unsigned long long)audio.mixBiquads,(unsigned long long)audio.mixInput);
+     twv::vita::telemetryText("audio_mix_stages_us",split);}
+    twv::vita::telemetryEvent("audio_fpscr",(long long)audio.fpscr);
     {char hist[128];
      std::snprintf(hist,sizeof hist,"%u,%u,%u,%u,%u,%u,%u,%u",(unsigned)audio.renderHist[0],(unsigned)audio.renderHist[1],
          (unsigned)audio.renderHist[2],(unsigned)audio.renderHist[3],(unsigned)audio.renderHist[4],(unsigned)audio.renderHist[5],

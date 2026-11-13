@@ -35,6 +35,12 @@ struct Stats {
     // voices active summed over them, and their time in the game's sound driver, in the mixer and
     // in the rest (stream mix, interleave, hand-over).
     std::uint64_t subframes = 0, voiceSubframes = 0, driverUs = 0, mixUs = 0, restUs = 0;
+    // patches/dusklight/0072 (measurement only): the mixer's subframes that were timed by stage
+    // (one in sixteen), their time in a voice's decode/resampling/filter, volume and panning,
+    // reverb input and surround, mix, and after the voices (reverb and the rest); the voices in
+    // them, those with the biquad filter, and the input samples their pitch asked for.
+    std::uint64_t mixTimed = 0, mixStageUs[5] = {}, mixVoices = 0, mixBiquads = 0, mixInput = 0;
+    std::uint32_t fpscr = 0; // the sound thread's floating-point control register at its start
 };
 
 // "--vita-audio-priority=default|high" (before open()): high puts the worker 16 steps above the

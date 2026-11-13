@@ -1,0 +1,96 @@
+Vita, measurement only: the sound mixer's time by stage. On the console on 13 Nov, in Hyrule Field the
+mixer (DspRender) takes 7.2 ms of each 10.7 ms device buffer with 39 voices active, 0.14 to
+0.20 ms per voice and buffer in every place, and a quarter of the field's buffers are late. One
+subframe in sixteen now times a voice's decode, resampling and filter, its volume and panning,
+its reverb input and surround share, its mix into the output, and the reverb and the rest after
+the voices, and counts the voices, those with the biquad filter on and the input samples asked
+for. Reported through platform/vita/audio/audio_out.cpp.
+
+--- a/src/dusk/audio/DuskDsp.cpp
++++ b/src/dusk/audio/DuskDsp.cpp
+@@ -804,6 +804,24 @@ void dusk::audio::DspInit() {
+     SharedReverb.mute();
+ }
+ 
++#if TARGET_VITA
++// Measurement only (platform/vita/audio/audio_out.cpp): one subframe in sixteen reports the
++// mixer's time by stage (a voice's decode, resampling and filter; its volume and panning; its
++// reverb input and surround share; its mix into the output; then the reverb and the rest after
++// the voices), the voices rendered, those with the biquad filter on, and the input samples their
++// pitch asks for.
++extern "C" unsigned long long twv_vita_audio_clock_us(void);
++extern "C" void twv_vita_audio_mix_split(const unsigned* us, unsigned voices, unsigned biquads, unsigned inputSamples);
++#define TWV_MIX_STEP(n)                                                    \
++    if (twvTimed) {                                                        \
++        const unsigned long long twvNow = twv_vita_audio_clock_us();       \
++        twvUs[n] += static_cast<unsigned>(twvNow - twvT);                  \
++        twvT = twvNow;                                                     \
++    }
++#else
++#define TWV_MIX_STEP(n)
++#endif
++
+ void dusk::audio::DspRender(OutputSubframe& subframe) {
+     ZoneScoped;
+     if (DumpAudio != sDumpWasActive) {
+@@ -818,6 +836,13 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
+     GenerateEvolvingHarmonic();
+ 
+     std::span voices(JASDsp::CH_BUF, DSP_CHANNELS);
++#if TARGET_VITA
++    static unsigned twvSerial = 0;
++    const bool twvTimed = (++twvSerial & 15) == 0;
++    unsigned twvUs[5] = {};
++    unsigned twvVoices = 0, twvBiquads = 0, twvInput = 0;
++    unsigned long long twvT = twvTimed ? twv_vita_audio_clock_us() : 0;
++#endif
+ 
+     DspSubframe reverbInputL = {};
+     DspSubframe reverbInputR = {};
+@@ -850,9 +875,18 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
+             ValidateChannel(voice);
+             RenderChannel(voice, aux, monoBuf);
+         }
++#if TARGET_VITA
++        if (twvTimed) {
++            ++twvVoices;
++            twvBiquads += (voice.mFilterMode & 0x20) != 0 ? 1 : 0;
++            twvInput += static_cast<unsigned>(DSP_SUBFRAME_SIZE * (static_cast<f32>(voice.mPitch) / 4096.0f));
++        }
++#endif
++        TWV_MIX_STEP(0)
+ 
+         OutputSubframe buf = {};
+         ApplyPanning(voice, aux, monoBuf, buf);
++        TWV_MIX_STEP(1)
+ 
+         if (EnableReverb) {
+             // scale the input to the reverb rather than using wet/dry on the output.
+@@ -888,6 +922,7 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
+             }
+         }
+ 
++        TWV_MIX_STEP(2)
+         if (DumpAudio && sChannelDumpFiles[i]) {
+             f32 interleaved[DSP_SUBFRAME_SIZE * 2];
+             for (int j = 0; j < DSP_SUBFRAME_SIZE; j++) {
+@@ -898,6 +933,7 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
+         }
+ 
+         MixOutputSubframe(subframe, buf);
++        TWV_MIX_STEP(3)
+     }
+ 
+     if (EnableReverb && (anyReverbInput || ReverbHasTail)) {
+@@ -950,4 +986,11 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
+         ApplyVolume(channel, channel, PrevMasterVolume, MasterVolume);
+     }
+     PrevMasterVolume = MasterVolume;
++#if TARGET_VITA
++    TWV_MIX_STEP(4)
++    if (twvTimed) {
++        twv_vita_audio_mix_split(twvUs, twvVoices, twvBiquads, twvInput);
++    }
++#endif
+ }
++#undef TWV_MIX_STEP

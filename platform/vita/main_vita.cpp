@@ -125,9 +125,9 @@ constexpr int FastActorPlay[twv::vita::FastActorSwitchCount] = {
     // hands on the buttons compared 2,292 reads, no difference; the tick's input step went from
     // 1.5 ms per tick to about 1.05 ms per frame.
     twv::vita::FastActorOn,  // pad
-    // The pad values kept from SDL's events (aurora 0024): off until a console verify run with hands
-    // on the buttons.
-    twv::vita::FastActorOff, // pad-events
+    // The pad values kept from SDL's events (aurora 0024): on since 13 Nov. Verified on the console
+    // on 12 Nov and on in every console run since, the hand-played ones included.
+    twv::vita::FastActorOn,  // pad-events
 };
 // GXM additions the play profile turns on unless the command line chooses (console, 10 Nov):
 // the pipeline memo (with gen-mode and pipeline-info the worker's pipeline step fell from 10.7 to
@@ -1020,10 +1020,14 @@ int main(int, char**) {
         twv::vita::telemetryText("place", "on");
     }
     if (audioPriorityChoice == 1) twv::vita::telemetryText("audio_priority", "high");
-    twv_vita_fast_present_bg_select(presentBgChoice == 1);
-    twv_vita_fast_particle_palette_select(particlePaletteChoice == 1);
-    if (particlePaletteChoice == 1) twv::vita::telemetryText("fast_particle_palette", "on");
-    if (presentBgChoice == 1) twv::vita::telemetryText("fast_present_bg", "on");
+    // Both default on with the play profile since 13 Nov: identical pictures on the console on
+    // 12 Nov, and both were on in every console run since.
+    const bool presentBg = presentBgChoice >= 0 ? presentBgChoice == 1 : playProfile;
+    const bool particlePalette = particlePaletteChoice >= 0 ? particlePaletteChoice == 1 : playProfile;
+    twv_vita_fast_present_bg_select(presentBg);
+    twv_vita_fast_particle_palette_select(particlePalette);
+    if (particlePalette) twv::vita::telemetryText("fast_particle_palette", particlePaletteChoice == 1 ? "on" : "on (default)");
+    if (presentBg) twv::vita::telemetryText("fast_present_bg", presentBgChoice == 1 ? "on" : "on (default)");
     if (syncLoadsChoice == 1) twv::vita::telemetryText("sync_loads", "on");
     for (unsigned option = 0; option < twv::vita::FastPainterOptionCount; ++option) {
         const int choice = fastPainterChoices[option];

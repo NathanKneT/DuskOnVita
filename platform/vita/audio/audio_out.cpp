@@ -55,6 +55,8 @@ struct State {
     std::atomic<std::uint32_t> pulls{0}, buffersWithoutPull{0}, renderHist[8];
     std::atomic<std::uint64_t> putFrames{0};
     std::atomic<std::uint64_t> subframes{0}, voiceSubframes{0}, driverUs{0}, mixUs{0}, restUs{0};
+    std::atomic<std::uint64_t> mixTimed{0}, mixStageUs[5], mixVoices{0}, mixBiquads{0}, mixInput{0};
+    std::atomic<std::uint32_t> fpscr{0};
 };
 State gState;
 
@@ -101,6 +103,13 @@ void render(std::int16_t* out) {
 
 int worker(SceSize, void*) {
     constexpr std::uint64_t bufferUs = 1000000ull * kFrames / 48000;
+    {
+        // Whether this thread flushes denormals to zero (bit 24) decides what a decaying filter
+        // costs; reported with the sound receipts.
+        unsigned fpscr = 0;
+        asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
+        gState.fpscr.store(fpscr, std::memory_order_relaxed);
+    }
     int which = 0;
     while (gState.running.load(std::memory_order_acquire)) {
         std::int16_t* out = gState.device[which];
@@ -237,6 +246,12 @@ Stats stats() {
     s.driverUs = gState.driverUs.load(std::memory_order_relaxed);
     s.mixUs = gState.mixUs.load(std::memory_order_relaxed);
     s.restUs = gState.restUs.load(std::memory_order_relaxed);
+    s.mixTimed = gState.mixTimed.load(std::memory_order_relaxed);
+    for (int i = 0; i < 5; ++i) s.mixStageUs[i] = gState.mixStageUs[i].load(std::memory_order_relaxed);
+    s.mixVoices = gState.mixVoices.load(std::memory_order_relaxed);
+    s.mixBiquads = gState.mixBiquads.load(std::memory_order_relaxed);
+    s.mixInput = gState.mixInput.load(std::memory_order_relaxed);
+    s.fpscr = gState.fpscr.load(std::memory_order_relaxed);
     return s;
 }
 void setHighPriority(bool on) { gState.highPriority.store(on, std::memory_order_relaxed); }
@@ -257,6 +272,16 @@ extern "C" void twv_vita_audio_split(unsigned driverUs, unsigned mixUs, unsigned
     gState.driverUs.fetch_add(driverUs, std::memory_order_relaxed);
     gState.mixUs.fetch_add(mixUs, std::memory_order_relaxed);
     gState.restUs.fetch_add(restUs, std::memory_order_relaxed);
+}
+
+// patches/dusklight/0072 (DuskDsp.cpp, on the audio thread, measurement only): one timed subframe.
+extern "C" void twv_vita_audio_mix_split(const unsigned* us, unsigned voices, unsigned biquads, unsigned inputSamples) {
+    using twv::vita::audio::gState;
+    gState.mixTimed.fetch_add(1, std::memory_order_relaxed);
+    for (int i = 0; i < 5; ++i) gState.mixStageUs[i].fetch_add(us[i], std::memory_order_relaxed);
+    gState.mixVoices.fetch_add(voices, std::memory_order_relaxed);
+    gState.mixBiquads.fetch_add(biquads, std::memory_order_relaxed);
+    gState.mixInput.fetch_add(inputSamples, std::memory_order_relaxed);
 }
 
 // patches/dusklight/0067 (DuskAudioSystem.cpp, on the audio thread): 1 with --vita-audio-pull=subframe.

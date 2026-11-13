@@ -57,6 +57,7 @@ struct EntryState {
     bool quiet = false, gpuCalled = false;
     unsigned quietFrames = 0; // telemetryQuietFrames (--vita-receipts=brief)
     bool subframePull = false; // audio::setSubframePull (default with the play profile)
+    int presentBg = -1, particlePalette = -1; // their selects (default on with the play profile)
     int gpuBackend = -1;
     std::uint32_t gpuFeatures = 0;
     int overlap = -1;
@@ -283,8 +284,8 @@ namespace twv::vita::audio {
 void setHighPriority(bool) {}
 void setSubframePull(bool on) { state.subframePull = on; }
 }
-extern "C" void twv_vita_fast_present_bg_select(int) {}
-extern "C" void twv_vita_fast_particle_palette_select(int) {}
+extern "C" void twv_vita_fast_present_bg_select(int on) { state.presentBg = on; }
+extern "C" void twv_vita_fast_particle_palette_select(int on) { state.particlePalette = on; }
 extern "C" int twv_vita_crowd_select(int level) {
     return level >= 0 && level < twv::vita::CrowdLevelCount;
 }
@@ -475,8 +476,11 @@ int main() {
     assert(state.quietFrames == 0);
     assert(run("--vita-profile=play --vita-receipts=brief") == 7 && state.quiet && state.quietFrames == 90);
     assert(state.subframePull); // the play profile renders the sound in small steps
+    assert(state.presentBg == 1 && state.particlePalette == 1); // and has both of these on
+    assert(run("--vita-profile=play --vita-fast-present-bg=off --vita-fast-particle-palette=off") == 7 &&
+           state.presentBg == 0 && state.particlePalette == 0);
     assert(run("--vita-profile=play --vita-audio-pull=frame") == 7 && !state.subframePull);
-    assert(run("--vita-profile=off") == 7 && !state.subframePull);
+    assert(run("--vita-profile=off") == 7 && !state.subframePull && state.presentBg == 0 && state.particlePalette == 0);
     assert(run("--vita-profile=off --stage R_SP01,4,2,0") == 7 && state.text.at("play_profile") == "off");
     assert(state.selections.empty() && !state.gpuCalled && state.gameArgs.size() == 7);
     for (const char* bad : {"--vita-profile=play --vita-gx-thread=on", "--vita-profile=play --vita-gpu=vgl",
