@@ -38,28 +38,35 @@ int idx(st::Id id) { return int(id); }
 
 void entries() {
     std::set<std::string> labels;
-    const int labelColumns = (st::ValueX - st::LabelX - 12) / (twv::ui::FontAdvance * st::RowScale);
-    const int valueColumns = (st::ValueRight - st::ValueX - 2 * twv::ui::FontAdvance * st::RowScale - 12) /
-                             (twv::ui::FontAdvance * st::RowScale);
+    namespace font = twv::ui::font;
+    using twv::ui::text_width;
+    const int arrow = text_width(font::Body, ">");
     for (int i = 0; i < st::EntryCount; ++i) {
         const st::Entry& e = st::Entries[i];
         assert(int(e.id) == i);
         assert(labels.insert(e.label).second);
-        assert(int(std::strlen(e.label)) <= labelColumns);
+        // The label as the chosen row draws it, with its "next start" note, ends before the value's column.
+        const int note = e.applies == st::Applies::Now ? 0 : 10 + text_width(font::Small, "next start");
+        assert(st::LabelX + text_width(font::Strong, e.label) + note <= st::ValueX - 8);
         if (e.kind == st::Kind::Choice) {
             assert(e.choices && e.count >= 2 && e.defaultIndex < e.count);
-            for (int c = 0; c < e.count; ++c) assert(int(std::strlen(e.choices[c])) <= valueColumns);
+            // A slider's value sits left of its track; a choice keeps room for both arrows.
+            const int room = st::control_of(e) == st::Control::Slider ? 64 : st::ValueRight - st::ValueX - 2 * (arrow + 10);
+            for (int c = 0; c < e.count; ++c) assert(text_width(font::Body, e.choices[c]) <= room);
         } else {
             assert(!e.choices && e.count == 0);
         }
-        // Help with its "Applies at ..." prefix fits the help lines.
-        const std::string help = std::string("Applies at the next start. ") + e.help;
+        // The help fits its lines.
         twv::ui::TextLine lines[4];
         bool cut = false;
-        twv::ui::wrap_text(help.c_str(), std::size_t((st::ValueRight - st::LabelX) / (twv::ui::FontAdvance * st::SmallScale)),
-                           lines, st::HelpLines, &cut);
+        twv::ui::wrap_text(font::Small, e.help, st::ContentRight - st::ContentX - 8, lines, st::HelpLines, &cut);
         assert(!cut);
     }
+    // A switch for every Off/On entry, a slider for the sizes, a button for the actions.
+    assert(st::control_of(st::entry(st::Id::AutoSave)) == st::Control::Switch &&
+           st::control_of(st::entry(st::Id::RenderScale)) == st::Control::Slider &&
+           st::control_of(st::entry(st::Id::Language)) == st::Control::Choice &&
+           st::control_of(st::entry(st::Id::RestartGame)) == st::Control::Button);
     // The required entries, with their documented defaults.
     assert(st::entry(st::Id::RenderScale).count == 4 && st::RenderScaleValues[st::entry(st::Id::RenderScale).defaultIndex] == 75);
     assert(st::entry(st::Id::Performance).defaultIndex == 0); // Normal 444 MHz
@@ -85,8 +92,12 @@ void entries() {
     for (int k = 0; k < st::SectionCount; ++k) {
         if (k) assert(int(st::SectionFirst[k]) > int(st::SectionFirst[k - 1]));
         assert(st::section_of(st::SectionFirst[k]) == k);
-        assert(int(std::strlen(st::SectionNames[k]) + 12) * twv::ui::FontAdvance * st::SmallScale <= st::SectionW);
+        // The name fits its place on the left, and with its note the heading on the right.
+        assert(20 + text_width(font::Strong, st::SectionNames[k]) <= st::SectionW - 8);
+        assert(st::ContentX + 4 + text_width(font::Strong, st::SectionNames[k]) + 14 +
+               text_width(font::Small, st::SectionNotes[k]) + 20 + text_width(font::Small, "Game paused") <= st::ContentRight);
     }
+    assert(st::SectionTop + st::SectionCount * st::SectionHeight <= st::SidebarInfoY);
     assert(st::section_of(st::Id::Close) == st::SectionCount - 1 && st::section_of(st::Id::HudSize) == 4 &&
            st::section_of(st::Id::InfiniteAir) == 6);
     // Honest wording: 444 MHz is the standard maximum, not an overclock.
@@ -169,9 +180,30 @@ void navigation() {
         assert(at >= 0);
         assert(s.row_at(st::ListTop + at * st::RowHeight + 5) == s.selected);
     }
-    assert(s.more_above() && !s.more_below());
+    // The last section is short: nothing above or below its rows.
+    assert(s.selected == st::EntryCount - 1 && !s.more_above() && !s.more_below());
     s.handle(st::KeyDown); // wraps to the top
-    assert(s.selected == 0 && s.top == 0 && !s.more_above() && s.more_below());
+    assert(s.selected == 0 && s.top == 0 && !s.more_above());
+    // The list moves only inside a section: a long one scrolls by one row at its last row and
+    // shows its first row again when the selection comes back up; other sections are never shown.
+    {
+        st::Page c;
+        c.open_section(4);
+        const int first = idx(st::Id::AutoSave), last = idx(st::Id::HudSize);
+        assert(c.section_rows() == last - first + 1 && c.more_below() && !c.more_above());
+        for (int k = 0; k < st::VisibleRows - 1; ++k) c.handle(st::KeyDown);
+        assert(c.top == first && c.selected == first + st::VisibleRows - 1);
+        c.handle(st::KeyDown);
+        assert(c.top == first + 1 && c.more_above());
+        while (c.selected < last) c.handle(st::KeyDown);
+        int shown[st::VisibleRows];
+        const int count = c.visible(shown);
+        assert(count == st::VisibleRows && shown[count - 1] == last && !c.more_below());
+        c.handle(st::KeyDown); // on into the next section, from its first row
+        assert(c.selected == idx(st::Id::DamageTaken) && c.top == c.selected && c.visible(shown) == 2);
+        c.handle(st::KeyUp); // and back: the long section's last rows
+        assert(c.selected == last && c.visible(shown) == st::VisibleRows && shown[st::VisibleRows - 1] == last);
+    }
     std::puts("settings_page_test: navigation wraps, values wrap, default, close, hidden entries, scrolling");
 }
 
@@ -194,7 +226,7 @@ void sections() {
     q.handle(st::KeySectionPrev);
     assert(q.selected == idx(st::Id::OpenGesture) && q.section() == st::SectionCount - 1);
     const int n = q.visible(rows);
-    assert(n == st::VisibleRows && rows[n - 1] == st::EntryCount - 1 && !q.more_below() && q.more_above());
+    assert(n == 4 && rows[0] == q.selected && rows[n - 1] == st::EntryCount - 1 && !q.more_below() && !q.more_above());
     q.handle(st::KeySectionNext);
     assert(q.selected == 0 && q.top == 0);
     // A section whose first entry is not shown starts at its next one; an empty section is passed.
@@ -207,10 +239,24 @@ void sections() {
     r.selected = idx(st::Id::HudSize);
     r.handle(st::KeySectionNext);
     assert(r.selected == idx(st::Id::OpenGesture));
-    // A tap on the section name: its left third goes back, the rest goes on.
+    // A tap on a section's name on the left opens it; the chosen one, the title and the space under
+    // the list do nothing; a section with nothing to show stays closed.
     st::Page t;
-    assert(t.tap(st::SectionX + st::SectionW - 10, st::SectionY + 4).count == 0 && t.section() == 1);
-    assert(t.tap(st::SectionX + 10, st::SectionY + 4).count == 0 && t.section() == 0);
+    assert(t.tap(st::SectionX + 10, st::SectionTop + 4 * st::SectionHeight + 5).count == 0);
+    assert(t.section() == 4 && t.selected == idx(st::Id::AutoSave) && t.top == t.selected);
+    t.handle(st::KeyDown);
+    assert(t.tap(st::SectionX + 10, st::SectionTop + 4 * st::SectionHeight + 5).count == 0 && t.selected == idx(st::Id::InstantText));
+    assert(t.tap(st::SectionX + 10, st::TitleY + 4).count == 0 && t.tap(st::SectionX + 10, st::SidebarInfoY + 40).count == 0 &&
+           t.section() == 4);
+    for (int i = idx(st::Id::InfiniteHearts); i < idx(st::Id::OpenGesture); ++i) t.available[i] = false;
+    assert(t.tap(st::SectionX + 10, st::SectionTop + 6 * st::SectionHeight + 5).count == 0 && t.section() == 4);
+    // The page reopens where it was left, the list as it was when that still shows the entry.
+    st::Page again;
+    again.reopen(idx(st::Id::BiggerWallets), idx(st::Id::QuickTransform));
+    assert(again.selected == idx(st::Id::BiggerWallets) && again.top == idx(st::Id::QuickTransform));
+    again.reopen(idx(st::Id::HudSize), 0);
+    int reopened[st::VisibleRows];
+    assert(again.visible(reopened) == st::VisibleRows && reopened[st::VisibleRows - 1] == idx(st::Id::HudSize));
     // Restart: the first confirm asks, the second restarts, any other key in between disarms.
     st::Page s;
     s.selected = idx(st::Id::RestartGame);
@@ -286,7 +332,7 @@ void taps() {
     assert(p.tap(st::CloseButtonX + 5, st::CloseButtonY + 5).has(st::Effect::Close));
     assert(p.tap(5, 5).count == 0 && p.tap(st::LabelX, st::HelpY + 4).count == 0);
     // Reset by touch: two taps.
-    p.top = st::EntryCount - st::VisibleRows;
+    p.open_section(st::SectionCount - 1);
     int rows[st::VisibleRows];
     const int n = p.visible(rows);
     int resetRow = -1;
@@ -594,15 +640,17 @@ void drawing(const char* ppm) {
     t.opens = "Settings: hold two fingers on the rear touch pad for 1 second";
     const st::Backdrop backdrop{game.data(), 720, 408, 768};
     st::draw_page(c, page, backdrop, t);
-    // The backdrop is the game's frame at a quarter: a corner pixel samples game (0,0).
+    // The backdrop is the game's frame at a quarter, under the left panel: a corner pixel samples
+    // game (0,0).
     const uint32_t g00 = game[0];
-    assert(pixels[std::size_t(st::Height - 1) * st::Width] != 0 && pixels[0] == (0xff000000u | ((g00 >> 2) & 0x3f3f3fu)));
+    assert(pixels[std::size_t(st::Height - 1) * st::Width] != 0 &&
+           pixels[0] == twv::ui::mix(0xff000000u | ((g00 >> 2) & 0x3f3f3fu), st::colors::Sidebar, st::colors::SidebarAlpha));
     // Every pixel is opaque, and text was drawn in the title, list, help and footer bands.
     for (uint32_t p : pixels) assert((p >> 24) == 0xff);
     const auto lit = [&](int y0, int y1) {
         int n = 0;
         for (int y = y0; y < y1; ++y)
-            for (int x = 0; x < st::Width; ++x) n += pixels[std::size_t(y) * st::Width + x] == twv::ui::palette::Text ||
+            for (int x = 0; x < st::Width; ++x) n += pixels[std::size_t(y) * st::Width + x] == st::colors::Text ||
                                                      pixels[std::size_t(y) * st::Width + x] == st::colors::Label ||
                                                      pixels[std::size_t(y) * st::Width + x] == st::colors::Value ||
                                                      pixels[std::size_t(y) * st::Width + x] == twv::ui::palette::Title ||
@@ -610,11 +658,12 @@ void drawing(const char* ppm) {
                                                      pixels[std::size_t(y) * st::Width + x] == st::colors::Footer;
         return n;
     };
-    assert(lit(st::TitleY, st::TitleY + 30) > 100 && lit(st::ListTop, st::ListTop + st::RowHeight * st::VisibleRows) > 2000);
-    assert(lit(st::HelpY, st::HelpY + 40) > 200 && lit(st::FooterY, st::Height) > 300);
+    // Pixels a glyph covers fully have the text's own colour.
+    assert(lit(st::TitleY, st::TitleY + 36) > 100 && lit(st::ListTop, st::ListTop + st::RowHeight * st::VisibleRows) > 1500);
+    assert(lit(st::HelpY, st::HelpY + 40) > 60 && lit(st::FooterY, st::Height) > 150);
     // Without a game frame: a plain backdrop.
     st::draw_page(c, page, st::Backdrop{}, t);
-    assert(pixels[0] == st::colors::Dim);
+    assert(pixels[0] == twv::ui::mix(st::colors::Dim, st::colors::Sidebar, st::colors::SidebarAlpha));
     if (ppm) {
         st::draw_page(c, page, backdrop, t);
         std::FILE* f = std::fopen(ppm, "wb");

@@ -1,10 +1,15 @@
 #pragma once
-// Draws the settings page (ui/settings_page.hpp) with the start-up screens' font and canvas
-// (ui/startup_canvas.hpp): the CPU writes a 960x544 A8B8G8R8 buffer that sceDisplay shows. Behind
-// the text, the game's last frame dimmed to a quarter (or a plain colour when there is none).
-// SDK-free: the host tests draw it into memory (tests/settings_page_test.cpp).
+// Draws the settings page (ui/settings_page.hpp) on the start-up screens' canvas, with the page's
+// own font and shapes (ui/ui_paint.hpp): the CPU writes a 960x544 A8B8G8R8 buffer that sceDisplay
+// shows. Behind everything, the game's last frame dimmed to a quarter (or a plain colour when there
+// is none), under two translucent panels: the section list on the left, the chosen section's entries
+// on the right. SDK-free: the host tests draw it into memory (tests/settings_page_test.cpp).
+//
+// What a row shows: a dot when its value is not the default, the label, "next start" or "next area"
+// when the change waits for one, and the value as a switch (Off / On), a stepped slider (sizes and
+// sensitivities), a choice with arrows on the chosen row, or a button (actions).
 #include "ui/settings_page.hpp"
-#include "ui/startup_canvas.hpp"
+#include "ui/ui_paint.hpp"
 
 #include <cstdio>
 
@@ -26,11 +31,14 @@ struct PageText {
 };
 
 namespace colors {
-constexpr uint32_t Dim = rgb(8, 10, 14), Selected = rgb(36, 58, 92), SelectedEdge = rgb(110, 160, 230),
-                   Label = rgb(225, 230, 238), Value = rgb(255, 206, 110), Arrow = rgb(140, 170, 210),
-                   Help = rgb(185, 192, 204), Footer = rgb(150, 158, 172), Status = rgb(130, 220, 150),
-                   Button = rgb(54, 70, 96), Applies = rgb(130, 210, 255), Rule = rgb(70, 80, 96);
-}
+constexpr uint32_t Dim = rgb(8, 10, 14), Sidebar = rgb(13, 11, 22), Panel = rgb(21, 19, 34),
+                   Accent = rgb(255, 184, 92), AccentInk = rgb(44, 30, 8), Text = rgb(240, 238, 248),
+                   Label = rgb(208, 205, 224), Value = Accent, Help = rgb(176, 172, 198), Footer = rgb(142, 138, 166),
+                   Faint = rgb(106, 102, 130), Selected = rgb(54, 50, 90), SectionSelected = rgb(41, 38, 68),
+                   Track = rgb(74, 70, 100), Knob = rgb(216, 214, 228), Status = rgb(130, 220, 150),
+                   Rule = rgb(54, 51, 78), Button = rgb(60, 56, 96);
+constexpr unsigned SidebarAlpha = 238, PanelAlpha = 218;
+} // namespace colors
 
 // Fills a rectangle with the dimmed backdrop (nearest sample, a quarter of the brightness).
 inline void fill_backdrop(const Canvas& c, const Backdrop& b, int x, int y, int w, int h) {
@@ -52,6 +60,15 @@ inline void fill_backdrop(const Canvas& c, const Backdrop& b, int x, int y, int 
     }
 }
 
+// How an entry's value is drawn.
+enum class Control : uint8_t { Switch, Slider, Choice, Button };
+constexpr Control control_of(const Entry& e) {
+    if (e.kind == Kind::Action) return Control::Button;
+    if (e.choices == text::OffOn) return Control::Switch;
+    if (e.id == Id::RenderScale || e.id == Id::GyroSensitivity || e.id == Id::HudSize) return Control::Slider;
+    return Control::Choice;
+}
+
 inline int value_text(const Page& page, int i, char* out, std::size_t size, const PageText& t) {
     const Entry& e = Entries[i];
     if (e.kind == Kind::Action) {
@@ -62,106 +79,199 @@ inline int value_text(const Page& page, int i, char* out, std::size_t size, cons
     return std::snprintf(out, size, "%s", e.choices[page.index[i]]);
 }
 
+// A button's name in a small rounded box; returns the box's width.
+inline int key_cap(const Canvas& c, int x, int y, const char* name) {
+    const int text = text_width(font::Small, name) + 14, w = text < 24 ? 24 : text;
+    round_rect(c, x, y, w, 22, 6, colors::Track);
+    draw_text_centred(c, font::Small, x + w / 2, y + 2, colors::Text, name);
+    return w;
+}
+// The same box with the outline of a triangle in it (the Triangle button).
+inline int key_cap_triangle(const Canvas& c, int x, int y) {
+    round_rect(c, x, y, 24, 22, 6, colors::Track);
+    // An upright triangle, 13 wide and 11.5 high, drawn by each pixel's distance to its three edges.
+    const float cx = float(x) + 12.0f, top = float(y) + 5.0f, bottom = float(y) + 16.5f, half = 6.5f;
+    const float slope = (bottom - top) / half, norm = std::sqrt(slope * slope + 1.0f);
+    for (int py = y + 3; py < y + 20; ++py)
+        for (int px = x + 3; px < x + 21; ++px) {
+            const float fx = float(px) + 0.5f - cx, fy = float(py) + 0.5f;
+            // Positive inside: the base, then the nearer side.
+            const float base = bottom - fy;
+            const float side = ((fy - top) - slope * (fx < 0 ? -fx : fx)) / norm;
+            const float inside = base < side ? base : side;
+            // A line 1.5 pixels wide along the edge.
+            const float cover = inside < 0.75f ? inside + 0.5f : 2.25f - inside;
+            if (cover <= 0.0f || px < 0 || py < 0 || px >= c.width || py >= c.height) continue;
+            uint32_t& p = c.pixels[std::size_t(py) * std::size_t(c.stride) + std::size_t(px)];
+            p = mix(p, colors::Text, cover >= 1.0f ? 255u : unsigned(cover * 255.0f));
+        }
+    return 24;
+}
+
+// The value of entry i in its row at `y` (the row's top).
+inline void draw_value(const Canvas& c, const Page& page, int i, int y, bool sel, const PageText& t) {
+    const Entry& e = Entries[i];
+    const int textY = y + (RowHeight - font::Body.lineHeight) / 2, mid = y + RowHeight / 2;
+    char value[40];
+    value_text(page, i, value, sizeof value, t);
+    switch (control_of(e)) {
+    case Control::Button: {
+        const int w = text_width(font::Body, value) + 32;
+        round_rect(c, ValueRight - w, y + 4, w, RowHeight - 8, (RowHeight - 8) / 2, sel ? colors::Accent : colors::Button);
+        draw_text_centred(c, font::Body, ValueRight - w / 2, textY, sel ? colors::AccentInk : colors::Label, value);
+        break;
+    }
+    case Control::Switch: {
+        const bool on = page.index[i] == 1;
+        const int w = 46, h = 24, x = ValueRight - w;
+        round_rect(c, x, mid - h / 2, w, h, h / 2, on ? colors::Accent : colors::Track);
+        round_rect(c, on ? x + w - 21 : x + 3, mid - 9, 18, 18, 9, on ? rgb(255, 255, 255) : colors::Knob);
+        draw_text_right(c, font::Body, x - 14, textY, on ? colors::Value : colors::Footer, value);
+        break;
+    }
+    case Control::Slider: {
+        // The value, then a track with one mark per step and the knob on the chosen one.
+        const int x0 = ValueX + 84, x1 = ValueRight - 9, steps = e.count > 1 ? e.count - 1 : 1;
+        const int knob = x0 + (x1 - x0) * page.index[i] / steps;
+        draw_text_right(c, font::Body, ValueX + 64, textY, colors::Value, value);
+        round_rect(c, x0 - 3, mid - 3, x1 - x0 + 6, 6, 3, colors::Track);
+        round_rect(c, x0 - 3, mid - 3, knob - x0 + 6, 6, 3, colors::Accent);
+        for (int k = 0; k <= steps; ++k) {
+            const int at = x0 + (x1 - x0) * k / steps;
+            fill_rect(c, at - 1, mid - 1, 2, 2, k <= page.index[i] ? colors::AccentInk : colors::Footer);
+        }
+        round_rect(c, knob - 9, mid - 9, 18, 18, 9, rgb(255, 255, 255));
+        break;
+    }
+    case Control::Choice: {
+        // The value ends where an arrow would start; the arrows show on the chosen row only, and
+        // only when there is something to change to.
+        const bool several = page.choice_count(e.id) > 1;
+        const int arrow = text_width(font::Body, ">"), right = ValueRight - arrow - 10;
+        const int w = text_width(font::Body, value);
+        draw_text(c, font::Body, right - w, textY, several ? colors::Value : colors::Footer, value);
+        if (sel && several) {
+            draw_text(c, font::Body, ValueRight - arrow, textY, colors::Text, ">");
+            draw_text(c, font::Body, right - w - 10 - arrow, textY, colors::Text, "<");
+        }
+        break;
+    }
+    }
+}
+
 // Draws the whole page.
 inline void draw_page(const Canvas& c, const Page& page, const Backdrop& backdrop, const PageText& t) {
     fill_backdrop(c, backdrop, 0, 0, c.width, c.height);
-    draw_text(c, LabelX, TitleY, RowScale, palette::Title, "Settings");
-    {
-        // The section of the chosen entry; L and R (or a tap on it) change it.
-        char section[48];
-        std::snprintf(section, sizeof section, "L <  %s  > R", SectionNames[page.section()]);
-        draw_text(c, SectionX, SectionY, SmallScale, colors::Value, section);
+    blend_rect(c, 0, 0, SidebarW, Height, colors::Sidebar, colors::SidebarAlpha);
+    blend_rect(c, SidebarW, 0, Width - SidebarW, Height, colors::Panel, colors::PanelAlpha);
+
+    // --- left: the title, the sections, what the shoulder buttons do, the build and the disc ---
+    draw_text(c, font::Title, TitleX, TitleY, palette::Title, "Settings");
+    const int current = page.section();
+    for (int k = 0; k < SectionCount; ++k) {
+        const int y = SectionTop + k * SectionHeight;
+        const bool sel = k == current;
+        if (sel) {
+            round_rect(c, SectionX, y + 2, SectionW, SectionHeight - 4, 9, colors::SectionSelected);
+            round_rect(c, SectionX + 6, y + 10, 4, SectionHeight - 20, 2, colors::Accent);
+        }
+        draw_text(c, sel ? font::Strong : font::Body, SectionX + 20, y + (SectionHeight - font::Body.lineHeight) / 2,
+                  sel ? colors::Text : page.section_shown(k) ? colors::Label : colors::Faint, SectionNames[k]);
     }
     {
-        const char* paused = "Game paused";
-        draw_text(c, ValueRight - text_width(std::strlen(paused), SmallScale), TitleY + 6, SmallScale, colors::Footer,
-                  paused);
+        int x = TitleX;
+        x += key_cap(c, x, SidebarInfoY, "L") + 4;
+        x += key_cap(c, x, SidebarInfoY, "R") + 9;
+        draw_text(c, font::Small, x, SidebarInfoY + 2, colors::Footer, "Section");
+        // The build on up to two lines, then the disc.
+        TextLine lines[2];
+        const int count = wrap_text(font::Small, t.build, SidebarW - 2 * TitleX, lines, 2);
+        int y = SidebarInfoY + 36;
+        for (int k = 0; k < count; ++k, y += font::Small.lineHeight)
+            draw_text(c, font::Small, TitleX, y, colors::Faint, t.build + lines[k].start, lines[k].length);
+        draw_text(c, font::Small, TitleX, y, colors::Faint, t.disc);
     }
-    fill_rect(c, LabelX, ListTop - 10, ValueRight - LabelX, 2, colors::Rule);
+
+    // --- right: the section, its entries ---
+    {
+        const int w = draw_text(c, font::Strong, ContentX + 4, HeadingY, colors::Accent, SectionNames[current]);
+        draw_text(c, font::Small, ContentX + 4 + w + 14, HeadingY + 4, colors::Footer, SectionNotes[current]);
+        draw_text_right(c, font::Small, ContentRight, HeadingY + 4, colors::Faint, "Game paused");
+    }
+    fill_rect(c, ContentX, ListTop - 10, ContentRight - ContentX, 1, colors::Rule);
 
     int rows[VisibleRows];
     const int n = page.visible(rows);
     for (int r = 0; r < n; ++r) {
         const int i = rows[r];
         const Entry& e = Entries[i];
-        const int y = ListTop + r * RowHeight;
+        const int y = ListTop + r * RowHeight, textY = y + (RowHeight - font::Body.lineHeight) / 2;
         const bool sel = i == page.selected;
-        if (sel) {
-            fill_rect(c, LabelX - 12, y - 4, ValueRight - LabelX + 24, RowHeight - 2, colors::Selected);
-            fill_rect(c, LabelX - 12, y - 4, 4, RowHeight - 2, colors::SelectedEdge);
-        }
-        draw_text(c, LabelX, y, RowScale, sel ? palette::Text : colors::Label, e.label);
-        char value[40];
-        value_text(page, i, value, sizeof value, t);
-        const std::size_t len = std::strlen(value);
-        const int w = text_width(len, RowScale);
-        const int arrowW = text_width(1, RowScale);
-        if (e.kind == Kind::Choice) {
-            const bool several = page.choice_count(e.id) > 1;
-            if (several) {
-                draw_text(c, ValueX, y, RowScale, colors::Arrow, "<");
-                draw_text(c, ValueRight - arrowW, y, RowScale, colors::Arrow, ">");
-            }
-            const int mid = (ValueX + ValueRight) / 2;
-            draw_text(c, mid - w / 2, y, RowScale, several ? colors::Value : colors::Footer, value);
-        } else {
-            draw_text(c, ValueRight - w, y, RowScale, sel ? colors::Value : colors::Footer, value);
+        if (sel) round_rect(c, ContentX, y + 1, ContentRight - ContentX, RowHeight - 2, 9, colors::Selected);
+        if (e.kind == Kind::Choice && page.index[i] != page.defaults[i])
+            round_rect(c, ContentX + 7, y + RowHeight / 2 - 3, 6, 6, 3, colors::Accent);
+        const int w = draw_text(c, sel ? font::Strong : font::Body, LabelX, textY, sel ? colors::Text : colors::Label,
+                                e.label);
+        if (e.applies != Applies::Now)
+            draw_text(c, font::Small, LabelX + w + 10, textY + 4, colors::Faint,
+                      e.applies == Applies::Restart ? "next start" : "next area");
+        draw_value(c, page, i, y, sel, t);
+    }
+    {
+        // A bar on the right when the section has more entries than rows.
+        int above = 0;
+        const int total = page.section_rows(&above), height = VisibleRows * RowHeight;
+        if (total > VisibleRows) {
+            const int thumb = height * VisibleRows / total, offset = height * above / total;
+            round_rect(c, ContentRight + 8, ListTop, 4, height, 2, colors::Rule);
+            round_rect(c, ContentRight + 8, ListTop + offset, 4, thumb, 2, colors::Footer);
         }
     }
-    if (page.more_above()) draw_text(c, ValueRight + 14, ListTop, SmallScale, colors::Arrow, "^");
-    if (page.more_below())
-        draw_text(c, ValueRight + 14, ListTop + (VisibleRows - 1) * RowHeight + 8, SmallScale, colors::Arrow, "v");
 
-    // Help for the chosen entry: when it applies, then its text (or the last action's result).
-    fill_rect(c, LabelX, HelpY - 6, ValueRight - LabelX, 2, colors::Rule);
+    // --- the help of the chosen entry, or the result of the last action ---
+    fill_rect(c, ContentX, HelpY - 8, ContentRight - ContentX, 1, colors::Rule);
     const Entry& e = page.current();
     char help[320];
-    const char* applies = e.applies == Applies::Restart ? "Applies at the next start. " :
-                          e.applies == Applies::NextArea ? "Applies at the next area. " : "";
     if (e.id == Id::Language && page.choice_count(Id::Language) == 1) {
-        std::snprintf(help, sizeof help, "%sYour disc has %s only (Europe: English, German, French, Spanish, Italian).",
-                      applies, e.choices[page.index[int(Id::Language)]]);
+        std::snprintf(help, sizeof help, "Your disc has %s only (Europe: English, German, French, Spanish, Italian).",
+                      e.choices[page.index[int(Id::Language)]]);
     } else {
-        std::snprintf(help, sizeof help, "%s%s", applies, page.status ? page.status : e.help);
+        std::snprintf(help, sizeof help, "%s", page.status ? page.status : e.help);
     }
     TextLine lines[HelpLines];
-    const std::size_t columns = std::size_t((ValueRight - LabelX) / (FontAdvance * SmallScale));
-    const int count = wrap_text(help, columns, lines, HelpLines);
-    const std::size_t appliesLen = std::strlen(applies);
-    for (int k = 0; k < count; ++k) {
-        const int y = HelpY + k * line_height(SmallScale);
-        const char* line = help + lines[k].start;
-        // "Applies at ..." in its own colour on the first line.
-        if (k == 0 && appliesLen && lines[k].start == 0 && lines[k].length >= appliesLen - 1) {
-            const int w = draw_text(c, LabelX, y, SmallScale, colors::Applies, line, appliesLen - 1);
-            const std::size_t rest = lines[k].length > appliesLen ? lines[k].length - appliesLen : 0;
-            draw_text(c, LabelX + w + FontAdvance * SmallScale, y, SmallScale, page.status ? colors::Status : colors::Help,
-                      line + appliesLen, rest);
-        } else {
-            draw_text(c, LabelX, y, SmallScale, page.status && k == count - 1 ? colors::Status : colors::Help, line,
-                      lines[k].length);
-        }
-    }
+    const int count = wrap_text(font::Small, help, ContentRight - ContentX - 8, lines, HelpLines);
+    for (int k = 0; k < count; ++k)
+        draw_text(c, font::Small, ContentX + 4, HelpY + k * HelpLineHeight, page.status ? colors::Status : colors::Help,
+                  help + lines[k].start, lines[k].length);
 
-    // Footer: the controls, the Close button; how the page opens, the build and the disc.
-    char controls[160];
-    if (t.releaseWait)
-        std::snprintf(controls, sizeof controls, "Release every button to resume the game...");
-    else
-        std::snprintf(controls, sizeof controls, "Up/Down: entry  Left/Right: change  %s: select  %s: close",
-                      t.confirm, t.back);
-    draw_text(c, LabelX, FooterY, SmallScale, t.releaseWait ? colors::Status : colors::Footer, controls);
-    fill_rect(c, CloseButtonX, CloseButtonY, CloseButtonW, CloseButtonH, colors::Button);
-    {
-        const char* close = "Close";
-        draw_text(c, CloseButtonX + (CloseButtonW - text_width(5, SmallScale)) / 2, CloseButtonY + 7, SmallScale,
-                  palette::Text, close);
+    // --- the controls, the Close button, how the page opens ---
+    if (t.releaseWait) {
+        draw_text(c, font::Small, ContentX + 4, FooterY + 2, colors::Status, "Release every button to resume the game...");
+    } else {
+        int x = ContentX + 4;
+        const auto hint = [&](const char* what) {
+            x += 7;
+            x += draw_text(c, font::Small, x, FooterY + 2, colors::Footer, what) + 18;
+        };
+        x += key_cap(c, x, FooterY, t.confirm);
+        hint("Change");
+        x += key_cap(c, x, FooterY, t.back);
+        hint("Close");
+        x += key_cap_triangle(c, x, FooterY);
+        hint("Default");
+        x += key_cap(c, x, FooterY, "L") + 4;
+        x += key_cap(c, x, FooterY, "R");
+        hint("Section");
     }
-    const std::size_t columns2 = std::size_t((Width - LabelX - 16) / (FontAdvance * SmallScale));
-    draw_text(c, LabelX, FooterLine2Y, SmallScale, colors::Footer, t.opens, columns2);
-    char info[200];
-    std::snprintf(info, sizeof info, "%s  |  %s", t.build, t.disc);
-    draw_text(c, LabelX, FooterLine3Y, SmallScale, colors::Footer, info, columns2);
+    round_rect(c, CloseButtonX, CloseButtonY, CloseButtonW, CloseButtonH, CloseButtonH / 2, colors::Button);
+    draw_text_centred(c, font::Body, CloseButtonX + CloseButtonW / 2,
+                      CloseButtonY + (CloseButtonH - font::Body.lineHeight) / 2, colors::Text, "Close");
+    {
+        // How the page opens, cut to the line's width.
+        std::size_t fits = std::strlen(t.opens);
+        while (fits && text_width(font::Small, t.opens, fits) > ContentRight - ContentX - 8) --fits;
+        draw_text(c, font::Small, ContentX + 4, FooterLine2Y, colors::Faint, t.opens, fits);
+    }
 }
 
 } // namespace twv::ui::settings

@@ -59,8 +59,15 @@ struct Screen {
     bool open = false, closing = false, dirty = false;
     st::Page page;
     st::KeyRepeat repeat;
-    SceUID block = -1;
+    // Two display buffers when memory allows: the page is drawn into the one off the display and
+    // shown at the next vertical blank, so no half-drawn page is ever on screen. `pixels`: the one
+    // drawn last (on the display, or about to be).
+    SceUID blocks[2] = {-1, -1};
+    uint32_t* buffers[2] = {nullptr, nullptr};
+    int shown = 0, displayResult = 0;
     uint32_t* pixels = nullptr;
+    // Where the page was when it last closed: it reopens there.
+    int lastSelected = -1, lastTop = 0;
     SceDisplayFrameBuf saved{}; // the game's frame on the display when the page opened
     bool haveSaved = false;
     st::Backdrop backdrop;
@@ -89,7 +96,7 @@ void apply_gesture(OpenGesture g) {
 
 bool confirm_on_circle() { return twv_vita_confirm_circle && twv_vita_confirm_circle(); }
 
-void* alloc_buffer() {
+void* alloc_buffer(SceUID& owner) {
     const struct {SceKernelMemBlockType type; uint32_t align;} kinds[] = {
         {SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, 256u * 1024u},
         {SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW, 1024u * 1024u}};
@@ -102,7 +109,7 @@ void* alloc_buffer() {
         }
         void* base = nullptr;
         if (sceKernelGetMemBlockBase(block, &base) >= 0 && base) {
-            s.block = block;
+            owner = block;
             return base;
         }
         sceKernelFreeMemBlock(block);
@@ -121,11 +128,15 @@ int show(void* base) {
     return sceDisplaySetFrameBuf(&fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
 }
 
-ui::Canvas canvas() { return {s.pixels, st::Width, st::Height, st::Width}; }
-
 void draw() {
     s.text.releaseWait = s.closing;
-    st::draw_page(canvas(), s.page, s.backdrop, s.text);
+    const int target = s.buffers[1] ? 1 - s.shown : 0;
+    st::draw_page({s.buffers[target], st::Width, st::Height, st::Width}, s.page, s.backdrop, s.text);
+    // One buffer: it is on the display already and was drawn in place. Two: this one takes the
+    // display at the next vertical blank (the page's loop waits for one after every draw).
+    if (s.buffers[1] || !s.pixels) s.displayResult = show(s.buffers[target]);
+    s.shown = target;
+    s.pixels = s.buffers[target];
     s.dirty = false;
 }
 
@@ -243,6 +254,8 @@ void load_values() {
     p.available[int(st::Id::Preset)] = p.available[int(st::Id::RenderScale)] && p.available[int(st::Id::Performance)];
     p.sync_preset();
     p.sync_speed();
+    // Back on the entry the page was closed on, when it is still shown.
+    if (s.lastSelected >= 0 && s.lastSelected < st::EntryCount && p.available[s.lastSelected]) p.reopen(s.lastSelected, s.lastTop);
 }
 
 void restart_game();
@@ -385,9 +398,14 @@ void finish_close() {
     // The game's last frame back on the display, then our buffer can go once it is no longer shown.
     if (s.haveSaved) telemetryEvent("settings_page_restore_display", sceDisplaySetFrameBuf(&s.saved, SCE_DISPLAY_SETBUF_NEXTFRAME));
     sceDisplayWaitVblankStart();
-    if (s.block >= 0) sceKernelFreeMemBlock(s.block);
-    s.block = -1;
+    for (int i = 0; i < 2; ++i) {
+        if (s.blocks[i] >= 0) sceKernelFreeMemBlock(s.blocks[i]);
+        s.blocks[i] = -1;
+        s.buffers[i] = nullptr;
+    }
     s.pixels = nullptr;
+    s.lastSelected = s.page.selected;
+    s.lastTop = s.page.top;
     save_changes();
     if (twv_vita_scene_snapshot) twv_vita_scene_snapshot("settings_close");
     telemetryEvent("settings_page_changes", s.changes);
@@ -520,12 +538,15 @@ extern "C" int twv_settings_open(void) {
     if (s.haveSaved && s.saved.pixelformat == SCE_DISPLAY_PIXELFORMAT_A8B8G8R8 && s.saved.width <= st::Width &&
         s.saved.height <= st::Height && s.saved.pitch >= s.saved.width)
         s.backdrop = {static_cast<const uint32_t*>(s.saved.base), int(s.saved.width), int(s.saved.height), int(s.saved.pitch)};
-    void* base = alloc_buffer();
+    void* base = alloc_buffer(s.blocks[0]);
     if (!base) {
         telemetryText("settings_page_unavailable", "no memory for the page's display buffer");
         return 0;
     }
-    s.pixels = static_cast<uint32_t*>(base);
+    s.buffers[0] = static_cast<uint32_t*>(base);
+    s.buffers[1] = static_cast<uint32_t*>(alloc_buffer(s.blocks[1])); // null: the page draws in place
+    s.pixels = nullptr;
+    s.shown = 1; // the first draw goes to buffer 0
     if (twv_vita_scene_snapshot) twv_vita_scene_snapshot("settings_open");
     load_values();
     s.text.build = s.build;
@@ -544,7 +565,8 @@ extern "C" int twv_settings_open(void) {
     s.repeat = {};
     s.repeat.last = held_keys(buttons_now());
     draw();
-    const int shown = show(base);
+    const int shown = s.displayResult;
+    telemetryEvent("settings_page_buffers", s.buffers[1] ? 2 : 1);
     s.openedAt = processTimeUs();
     telemetryEvent("settings_page_display", shown);
     telemetryEvent("settings_page_backdrop", s.backdrop.pixels != nullptr);

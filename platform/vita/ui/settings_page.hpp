@@ -2,12 +2,14 @@
 // The settings page: its entries, values and navigation (no drawing, no SDK; ui/settings_draw.hpp
 // draws it, ui/settings_screen.cpp runs it on the Vita). Host-tested in tests/settings_page_test.cpp.
 //
-// D-pad up/down chooses an entry (wrapping), left/right changes its value (wrapping), the confirm
-// button changes it too or runs an action, triangle puts the entry back to its default, back or
-// START closes the page. L and R jump to the previous and the next section. Front-screen taps: a tap
-// on an entry chooses it, a tap on its value (left or right half) changes it, a tap on an action runs
-// it, a tap on the section name in the title goes to the next section (its left third: the previous
-// one), a tap on the footer's "Close" closes.
+// The sections are listed on the left; the right side shows the entries of the chosen section only,
+// so the list scrolls inside a section and never across the whole page. D-pad up/down chooses an
+// entry (past a section's end it goes on into the next section, wrapping at the ends), left/right
+// changes its value (wrapping), the confirm button changes it too or runs an action, triangle puts
+// the entry back to its default, back or START closes the page. L and R jump to the previous and
+// the next section. Front-screen taps: a section on the left opens it, a tap on an entry chooses it,
+// a tap on its value (left or right half) changes it, a tap on an action runs it, a tap on the
+// footer's "Close" closes.
 //
 // The Comfort, Challenge and Cheats entries are Dusklight's own options (dusk/settings.h): each is
 // off by default, and off is the game as it was made.
@@ -34,9 +36,13 @@ enum class Kind : uint8_t { Choice, Action };
 constexpr int SectionCount = 8;
 constexpr Id SectionFirst[SectionCount] = {Id::Preset, Id::ButtonPrompts, Id::GyroAim, Id::FreeCamera,
                                            Id::AutoSave, Id::DamageTaken, Id::InfiniteHearts, Id::OpenGesture};
-constexpr const char* SectionNames[SectionCount] = {"Display and speed", "Buttons and text", "Gyro",
-                                                    "Camera and aim", "Comfort", "Challenge", "Cheats",
+constexpr const char* SectionNames[SectionCount] = {"Display & speed", "Buttons & text", "Gyro",
+                                                    "Camera & aim", "Comfort", "Challenge", "Cheats",
                                                     "This page"};
+// One line under a section's name, for the sections that change the game.
+constexpr const char* SectionNotes[SectionCount] = {
+    "", "", "", "", "Off is the game as it was made.", "The defaults are the game as it was made.",
+    "Off is the game as it was made.", ""};
 constexpr int section_of(Id id) {
     int section = 0;
     for (int k = 1; k < SectionCount; ++k)
@@ -238,14 +244,17 @@ constexpr const Entry& entry(Id id) { return Entries[int(id)]; }
 
 // --- layout (960x544), shared by the drawing and the touch hit test ---
 constexpr int Width = 960, Height = 544;
-constexpr int RowScale = 3, SmallScale = 2;
-constexpr int TitleY = 18, ListTop = 70, RowHeight = 34, VisibleRows = 9;
-constexpr int LabelX = 48, ValueX = 556, ValueRight = 920; // value: "<" at ValueX, ">" ends at ValueRight
-constexpr int HelpY = ListTop + RowHeight * VisibleRows + 12, HelpLines = 3; // at SmallScale
-constexpr int FooterY = 464, FooterLine2Y = 490, FooterLine3Y = 516; // controls; how it opens; build, disc
-constexpr int CloseButtonX = 760, CloseButtonY = 457, CloseButtonW = 172, CloseButtonH = 30;
-// The section name in the title, "L <  name  > R": a tap on it changes the section.
-constexpr int SectionX = 222, SectionY = TitleY + 6, SectionW = 420, SectionTapBottom = ListTop - 12;
+// Left: the title, the section list, the build and the disc.
+constexpr int SidebarW = 232, TitleX = 24, TitleY = 20;
+constexpr int SectionTop = 78, SectionHeight = 38, SectionX = 12, SectionW = SidebarW - 24;
+constexpr int SidebarInfoY = 438; // "L / R", then the build and the disc
+// Right: the section's name, its entries, the help of the chosen one, the controls.
+constexpr int ContentX = 256, ContentRight = 936, HeadingY = 22;
+constexpr int ListTop = 70, RowHeight = 36, VisibleRows = 9;
+constexpr int LabelX = ContentX + 20, ValueX = 652, ValueRight = ContentRight - 16; // the value's column
+constexpr int HelpY = ListTop + RowHeight * VisibleRows + 12, HelpLines = 3, HelpLineHeight = 20;
+constexpr int FooterY = 486, FooterLine2Y = 514; // the controls; how the page opens
+constexpr int CloseButtonX = 820, CloseButtonY = 478, CloseButtonW = 116, CloseButtonH = 34;
 
 // Keys (the shell maps the Vita buttons or a test script onto them).
 enum Key : uint32_t {
@@ -376,9 +385,12 @@ public:
             out.add({Effect::Close, Id::Close, 0});
             return out;
         }
-        if (y >= SectionY - 6 && y < SectionTapBottom && x >= SectionX && x < SectionX + SectionW) {
-            resetArmed = restartArmed = false;
-            jump(x < SectionX + SectionW / 3 ? -1 : +1);
+        if (x < SidebarW) {
+            const int k = y >= SectionTop ? (y - SectionTop) / SectionHeight : -1;
+            if (k >= 0 && k < SectionCount && k != section()) {
+                resetArmed = restartArmed = false;
+                open_section(k);
+            }
             return out;
         }
         const int row = row_at(y);
@@ -397,32 +409,67 @@ public:
     // The entry drawn at screen row y, or -1.
     int row_at(int y) const {
         if (y < ListTop || y >= ListTop + VisibleRows * RowHeight) return -1;
-        int shown = 0;
-        for (int i = top; i < EntryCount; ++i) {
-            if (!available[i]) continue;
-            if ((y - ListTop) / RowHeight == shown) return i;
-            ++shown;
-        }
-        return -1;
+        int rows[VisibleRows];
+        const int n = visible(rows), row = (y - ListTop) / RowHeight;
+        return row < n ? rows[row] : -1;
     }
-    // Entries shown from `top`, in order (for drawing): fills rows[], returns the count.
+    // The first entry of section k and the one after its last.
+    static constexpr int section_begin(int k) { return int(SectionFirst[k]); }
+    static constexpr int section_end(int k) { return k + 1 < SectionCount ? int(SectionFirst[k + 1]) : EntryCount; }
+    // Entries of the chosen section shown from `top`, in order (for drawing): fills rows[], returns
+    // the count.
     int visible(int* rows) const {
         int n = 0;
-        for (int i = top; i < EntryCount && n < VisibleRows; ++i)
+        const int end = section_end(section());
+        for (int i = top; i < end && n < VisibleRows; ++i)
             if (available[i]) rows[n++] = i;
         return n;
     }
-    bool more_above() const {
-        for (int i = 0; i < top; ++i)
+    // Shown entries of the chosen section: how many there are, and how many are above `top`.
+    int section_rows(int* above = nullptr) const {
+        int n = 0, before = 0;
+        const int k = section();
+        for (int i = section_begin(k); i < section_end(k); ++i) {
+            if (!available[i]) continue;
+            ++n;
+            before += i < top;
+        }
+        if (above) *above = before;
+        return n;
+    }
+    bool section_shown(int k) const {
+        for (int i = section_begin(k); i < section_end(k); ++i)
             if (available[i]) return true;
         return false;
     }
+    bool more_above() const {
+        int above = 0;
+        section_rows(&above);
+        return above > 0;
+    }
     bool more_below() const {
+        int above = 0;
+        return section_rows(&above) - above > VisibleRows;
+    }
+    // The page as it was left: entry `entry` chosen, the list from `first` when that still shows it.
+    void reopen(int entry, int first) {
+        selected = entry;
+        top = first;
+        keep_selection_shown();
         int rows[VisibleRows];
         const int n = visible(rows);
-        for (int i = n ? rows[n - 1] + 1 : top; i < EntryCount; ++i)
-            if (available[i]) return true;
-        return false;
+        bool shown = false;
+        for (int r = 0; r < n; ++r) shown |= rows[r] == selected;
+        if (!shown) top = selected;
+    }
+    // Opens section k at its first shown entry (nothing happens for a section without one).
+    void open_section(int k) {
+        for (int i = section_begin(k); i < section_end(k); ++i) {
+            if (!available[i]) continue;
+            selected = top = i;
+            status = nullptr;
+            return;
+        }
     }
 
     // The section of the chosen entry.
@@ -444,34 +491,30 @@ private:
         }
         keep_selection_shown();
     }
+    // `top` stays inside the chosen entry's section, and the chosen entry stays on screen: the list
+    // moves only when the selection passes its first or last row.
     void keep_selection_shown() {
-        if (selected < top) top = selected;
+        const int k = section();
+        if (top < section_begin(k) || top >= section_end(k) || selected < top) {
+            top = selected < top && top < section_end(k) && top >= section_begin(k) ? selected : section_begin(k);
+        }
         int rows[VisibleRows];
         for (int guard = 0; guard < EntryCount; ++guard) {
             const int n = visible(rows);
             bool shown = false;
             for (int r = 0; r < n; ++r) shown |= rows[r] == selected;
-            if (shown) break;
+            if (shown || top >= selected) break;
             ++top;
         }
     }
-    // To the first shown entry of the previous or next section that has one (wrapping); that entry
-    // goes to the top row, or as near to it as the end of the list allows.
+    // To the first shown entry of the previous or next section that has one (wrapping).
     void jump(int direction) {
         const int from = section();
         for (int k = 1; k <= SectionCount; ++k) {
             const int target = ((from + direction * k) % SectionCount + SectionCount) % SectionCount;
-            const int end = target + 1 < SectionCount ? int(SectionFirst[target + 1]) : EntryCount;
-            for (int i = int(SectionFirst[target]); i < end; ++i) {
-                if (!available[i]) continue;
-                selected = top = i;
-                // A full page when the list ends before nine rows.
-                int rows[VisibleRows];
-                while (top > 0 && visible(rows) < VisibleRows) --top;
-                keep_selection_shown();
-                status = nullptr;
-                return;
-            }
+            if (!section_shown(target)) continue;
+            open_section(target);
+            return;
         }
     }
     void change(Id id, int choice, Effects& out) {
