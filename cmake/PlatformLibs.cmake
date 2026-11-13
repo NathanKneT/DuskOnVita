@@ -225,7 +225,7 @@ if(TWV_VITA_GFX_VGL)
         platform/vita/gfx_vgl/backend.cpp platform/vita/gfx_vgl/vertex.cpp
         platform/vita/gfx_vgl/shaders.cpp platform/vita/gfx_vgl/gpu_vertex_shader.cpp
         platform/vita/gfx_vgl/profile_hooks.cpp platform/vita/gfx_vgl/pipeline_fast.cpp
-        platform/vita/gfx_vgl/textures.cpp
+        platform/vita/gfx_vgl/textures.cpp platform/vita/gfx_vgl/map_pass.cpp
         ${AURORA_ROOT}/lib/gx/shader_info.cpp ${AURORA_ROOT}/lib/gx/texture.cpp
         ${AURORA_ROOT}/lib/gfx/texture_convert.cpp)
     set_property(SOURCE platform/vita/gfx_vgl/vertex.cpp APPEND PROPERTY

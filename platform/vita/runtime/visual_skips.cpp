@@ -321,7 +321,18 @@ extern "C" void twv_vita_visual_skip_tick(void) {
                 mem_digest(fine[i], tick, reinterpret_cast<const char*>(link) + 0x2c00 + i * 448u, 448);
     }
     mem_digest("gs_mem_env", tick, &g_env_light, sizeof g_env_light);
-    if (camera_process_class* camera = dComIfGp_getCamera(0)) mem_digest("gs_mem_cam", tick, camera, sizeof *camera);
+    if (camera_process_class* camera = dComIfGp_getCamera(0)) {
+        mem_digest("gs_mem_cam", tick, camera, sizeof *camera);
+        // The camera as this tick left it, one line per tick: a camera that jumps between two
+        // places from one tick to the next shows here whatever the picture rate is.
+        const auto& view = camera->view;
+        char cam[176];
+        std::snprintf(cam, sizeof cam, "t=%u eye=%.1f,%.1f,%.1f center=%.1f,%.1f,%.1f fov=%.2f", tick,
+                      double(view.lookat.eye.x), double(view.lookat.eye.y), double(view.lookat.eye.z),
+                      double(view.lookat.center.x), double(view.lookat.center.y), double(view.lookat.center.z),
+                      double(view.fovy));
+        twv::vita::telemetryText("gs_cam", cam);
+    }
     // Who drew random numbers: n = numbers drawn since the end of the tick before (this tick and
     // whatever ran between the two), then "type:numbers" for the actor types' executes. Nested
     // executes count in both their own type and their caller's.

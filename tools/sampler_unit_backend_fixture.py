@@ -345,6 +345,25 @@ STATE_DIFF = [
      '  sDrawSplit.previousMatrix=matrix;\n'),
 ]
 
+# Map screens: their off-screen pass is drawn on the CPU (gfx_vgl/map_pass.cpp). Three
+# hooks: the pass begins, a draw is offered to it before the off-screen drop, the copy keeps its
+# picture. Outside the sampled-texture loop.
+MAP_SCREENS = [
+    (' if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}\n',
+     " // The map screens' pass is drawn on the CPU (map_pass.cpp); every other off-screen pass is dropped.\n"
+     ' if(offscreen && data.pipeline<pipelines.size() &&\n'
+     '    map_pass_draw(pipelines[data.pipeline],data,viewport.left,viewport.top,viewport.width,viewport.height)) return;\n'
+     ' if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}\n'),
+    ('void resolve_pass_into(TextureHandle,ClipRect,bool,bool,bool,Vec4<float>,float,GXTexFmt,GXPixelFmt) {twv::vgl::count("unsupported_efb_copy");}\n'
+     'void begin_offscreen(uint32_t w,uint32_t h) {twv::vgl::off_w=w;twv::vgl::off_h=h;twv::vgl::offscreen=true;}\n',
+     'void resolve_pass_into(TextureHandle into,ClipRect,bool,bool,bool,Vec4<float>,float,GXTexFmt format,GXPixelFmt) {\n'
+     " // A map picture is kept, as palette indices, inside the copy's texture (map_pass.cpp). No other copy exists.\n"
+     ' if(twv::vgl::offscreen && into && twv::vgl::map_pass_resolve(static_cast<twv::vgl::Texture&>(*into),format)) return;\n'
+     ' twv::vgl::count("unsupported_efb_copy");\n'
+     '}\n'
+     'void begin_offscreen(uint32_t w,uint32_t h) {twv::vgl::off_w=w;twv::vgl::off_h=h;twv::vgl::offscreen=true;twv::vgl::map_pass_begin(w,h);}\n'),
+]
+
 def audited(original):
     """The baseline with the C03 replacement, the G2 insertions (each after its anchor line), the
     off-screen edits, the pipeline memo, the g4 console fixes and the fast info check."""
@@ -380,6 +399,10 @@ def audited(original):
     for old, new in STATE_DIFF:
         if expected.count(old) != 1:
             raise SystemExit('Audited state-difference edit no longer matches the baseline: ' + old[:60])
+        expected = expected.replace(old, new, 1)
+    for old, new in MAP_SCREENS:
+        if expected.count(old) != 1:
+            raise SystemExit('Audited map-screens edit no longer matches the baseline: ' + old[:60])
         expected = expected.replace(old, new, 1)
     return expected
 

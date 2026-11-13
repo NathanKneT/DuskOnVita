@@ -20,6 +20,20 @@
 //                          UP DOWN LEFT RIGHT CONFIRM BACK DEFAULT START, L R (previous and next
 //                          section), or SHOT (a PNG of the page)
 //   page wait N            the open page shows N passes with no key (time for a window capture)
+//   press A+B X Y N        buttons and the main stick together for N reads (a roll, a jump attack)
+//   give ITEM              (one pad read, no input) the game's own item-get for item number ITEM
+//                          (execItemGet, d_item.cpp): a test fixture to try a passage without the
+//                          hours before it, never in a player's script
+//   equip SLOT PLACE       (one pad read, no input) puts inventory place PLACE (0..23) on button SLOT
+//                          (0 or 1), as the item wheel does (dComIfGs_setSelectItemIndex)
+//   tp X Y Z               (one pad read, no input) sets Link down at that point of the room
+//   shot                   (one pad read, no input) the next presented frame is written as a PNG
+//                          (captures/live-NNNN.png), whatever --vita-capture says
+//   live                   (one pad read, no input) step-by-step play, for a person or a tool driving
+//                          the emulator: from here on, each time the steps run out the game stops
+//                          inside the pad read, writes where it is (receipt live_ready) and waits for
+//                          the next command file, live/0001.txt, live/0002.txt, ... in the data folder;
+//                          a file holds steps in this same syntax, or the single word "end"
 //   # comment, blank lines
 // While the settings page is open the game reads no pad, so "page KEY" steps cost no pad read and
 // the pad steps after them run exactly as without the page.
@@ -55,7 +69,7 @@ constexpr uint32_t ScriptPageUp=1u<<0,ScriptPageDown=1u<<1,ScriptPageLeft=1u<<2,
 // Steps a pad read consumes ("page open", "page gesture"); the other page steps are the page's.
 constexpr bool script_pad_page_step(uint32_t page) noexcept {return page==ScriptPageOpen || page==ScriptPageGesture;}
 
-constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3;
+constexpr uint8_t StepPad=0,StepWarp=1,StepLoop=2,StepDarkClear=3,StepLive=4,StepShot=5,StepGive=6,StepEquip=7,StepTp=8;
 struct InputStep {uint32_t reads=0,buttons=0;int x=0,y=0;uint8_t kind=StepPad;char stage[8]{};int room=0,point=0,layer=0;
                   uint32_t page=0;};
 
@@ -147,6 +161,32 @@ private:
             if(k!=3 || !integer(fields[0],ends[0],-128,127,x) || !integer(fields[1],ends[1],-128,127,y) ||
                !integer(fields[2],ends[2],1,100000,v))return false;
             s.x=int(x);s.y=int(y);s.reads=uint32_t(v);
+        } else if(n==5 && std::strncmp(p,"press",5)==0) {
+            long x=0,y=0;
+            if(k!=4 || !integer(fields[1],ends[1],-128,127,x) || !integer(fields[2],ends[2],-128,127,y) ||
+               !integer(fields[3],ends[3],1,100000,v))return false;
+            s.x=int(x);s.y=int(y);s.reads=uint32_t(v);
+            for(const char* a=fields[0];a<ends[0];) {
+                const char* plus=a;while(plus<ends[0] && *plus!='+')++plus;
+                const uint32_t bit=button(a,std::size_t(plus-a));
+                if(!bit || plus+1==ends[0])return false;
+                s.buttons|=bit;a=plus<ends[0]?plus+1:plus;
+            }
+        } else if(n==4 && std::strncmp(p,"give",4)==0) {
+            if(k!=1 || !integer(fields[0],ends[0],0,255,v))return false;
+            s.kind=StepGive;s.reads=1;s.room=int(v);
+        } else if(n==5 && std::strncmp(p,"equip",5)==0) {
+            long place=0;
+            if(k!=2 || !integer(fields[0],ends[0],0,1,v) || !integer(fields[1],ends[1],0,23,place))return false;
+            s.kind=StepEquip;s.reads=1;s.room=int(v);s.point=int(place);
+        } else if(n==2 && std::strncmp(p,"tp",2)==0) {
+            long x=0,y=0,z=0;
+            if(k!=3 || !integer(fields[0],ends[0],-1000000,1000000,x) || !integer(fields[1],ends[1],-1000000,1000000,y) ||
+               !integer(fields[2],ends[2],-1000000,1000000,z))return false;
+            s.kind=StepTp;s.reads=1;s.room=int(x);s.point=int(y);s.layer=int(z);
+        } else if(n==4 && (std::strncmp(p,"live",4)==0 || std::strncmp(p,"shot",4)==0)) {
+            if(k!=0)return false;
+            s.kind=*p=='l'?StepLive:StepShot;s.reads=1;
         } else if(n==4 && std::strncmp(p,"warp",4)==0) {
             // Stage names are at most 7 characters (dStage_nextStage_c); room and layer are s8, point s16.
             long room=0,point=0,layer=0;

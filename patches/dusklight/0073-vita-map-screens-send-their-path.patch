@@ -1,0 +1,62 @@
+Vita: the map screens send their path again; only the minimap's is left out.
+
+--vita-fast-unseen-map (0052) leaves out the polygons and lines of every map picture while the
+backend drops off-screen draws: the minimap, but also the dungeon map and the field map screens,
+whose detailed picture therefore never showed (the region picture, the names and the cursor of
+the field map are plain 2D and did show). The backend now draws the pass of a map picture on the
+CPU (twilight-vita: platform/vita/gfx_vgl/map_pass.cpp), a few flat polygons and lines while a
+map screen is open, so the two map screens must send their path whatever the switch says.
+
+The minimap's pass (renderingAmap_c::draw) sets twv_vita_minimap_pass around its call, and the
+skip of 0052 now applies to that pass only. With the switch on, the minimap is left out as
+before and costs nothing more; with it off, its path is sent and drawn like the others.
+Nothing changes outside TARGET_VITA.
+
+--- a/src/d/d_map_path.cpp
++++ b/src/d/d_map_path.cpp
+@@ -422,12 +422,16 @@
+ // 351 dropped draws per frame on the console, most of them in Hyrule Field). The framebuffer
+ // set-up, the back quad, the copy and the 2D set-up after it are sent as before.
+ extern "C" int twv_vita_unseen_map_skip(void) __attribute__((weak));
++// Vita (patches/dusklight/0073): the pictures of the two map screens are drawn now (twilight-vita:
++// platform/vita/gfx_vgl/map_pass.cpp), so their path is always sent; only the minimap's path is
++// still left out. Set by renderingAmap_c::draw (d_map.cpp) around its own pass. Game thread only.
++int twv_vita_minimap_pass = 0;
+ #endif
+ 
+ void dRenderingMap_c::renderingMap() {
+     preRenderingMap();
+ #if TARGET_VITA
+-    if (twv_vita_unseen_map_skip && twv_vita_unseen_map_skip()) {
++    if (twv_vita_minimap_pass && twv_vita_unseen_map_skip && twv_vita_unseen_map_skip()) {
+         postRenderingMap();
+         return;
+     }
+--- a/src/d/d_map.cpp
++++ b/src/d/d_map.cpp
+@@ -343,6 +343,10 @@
+     return ((f32)param_0 + (param_2 * ((f32)param_1 - (f32)param_0)));
+ }
+ 
++#if TARGET_VITA
++extern int twv_vita_minimap_pass;
++#endif
++
+ void renderingAmap_c::draw() {
+     f32 tmp = ((f32)(g_Counter.mCounter0 % dMap_HIO_prm_res_dst_s::m_res->field_0x1aa) /
+                (f32)dMap_HIO_prm_res_dst_s::m_res->field_0x1aa);
+@@ -378,7 +382,14 @@
+                                   dMap_HIO_prm_res_dst_s::m_res->field_0x1a7, tmp);
+     setAmapPaletteColor(0x2E, temp_r31, temp_r30, temp_r29, temp_r28);
+ 
++#if TARGET_VITA
++    // Vita (patches/dusklight/0073, d_map_path.cpp): this pass is the minimap's.
++    twv_vita_minimap_pass = 1;
++#endif
+     GX_DEBUG_GROUP(renderingDAmap_c::draw);
++#if TARGET_VITA
++    twv_vita_minimap_pass = 0;
++#endif
+ }
+ 
+ int renderingAmap_c::getDispType() const {

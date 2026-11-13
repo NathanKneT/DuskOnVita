@@ -1702,4 +1702,30 @@ void gpu_vertex_uniforms(TwvVitaDrawState& out,const Pipeline& p,unsigned pnSlot
     }
   }
 }
+// Where each vertex lands on its target: the reference decoder, the vertex's position matrix, the
+// projection, the viewport. Only for draws the CPU draws itself (the map screens, map_pass.cpp):
+// a handful of small draws while a map screen is open.
+bool decode_screen_positions(const Pipeline& p,const aurora::gx::DrawData& d,float left,float top,float width,float height,float* xy,
+                             float* st) noexcept {
+#if TWV_VITA_LAZY_VERTEX_PLAN
+  VertexStage stage(p,d,false);
+#else
+  VertexStage stage(p,d);
+#endif
+  const auto& proj=g_gxState.proj;
+  Decoded v{};
+  for(uint32_t i=0;i<d.vtxCount;++i) {
+    stage.decode_reference(i,v);
+    if(v.pnmtx>=aurora::gx::MaxPnMtx)return false;
+    const V3 eye=mul34(g_gxState.pnMtx[v.pnmtx].pos,v.pos.x,v.pos.y,v.pos.z,1.f);
+    const float cx=proj.m0[0]*eye.x+proj.m0[1]*eye.y+proj.m0[2]*eye.z+proj.m0[3];
+    const float cy=proj.m1[0]*eye.x+proj.m1[1]*eye.y+proj.m1[2]*eye.z+proj.m1[3];
+    const float cw=proj.m3[0]*eye.x+proj.m3[1]*eye.y+proj.m3[2]*eye.z+proj.m3[3];
+    if(cw==0.f)return false;
+    xy[2*i]=left+(cx/cw*0.5f+0.5f)*width;
+    xy[2*i+1]=top+(0.5f-cy/cw*0.5f)*height;
+    if(st){st[2*i]=v.tex[0][0];st[2*i+1]=v.tex[0][1];}
+  }
+  return true;
+}
 } // namespace twv::vgl

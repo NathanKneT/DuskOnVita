@@ -5,7 +5,30 @@
 #include <cstring>
 #include <initializer_list>
 
+// Step-by-step play: "live" and "shot" are one read each with no input; a command file is a script
+// of its own, so it may hold them too.
+static void live_steps() {
+    static twv::vita::InputScript s;
+    assert(s.parse("wait 2\nshot\nlive\n") && s.count == 3);
+    assert(s.steps[1].kind == twv::vita::StepShot && s.steps[1].reads == 1 && s.steps[1].buttons == 0);
+    assert(s.steps[2].kind == twv::vita::StepLive && s.steps[2].reads == 1);
+    assert(s.next() && s.next() && s.next()->kind == twv::vita::StepShot && s.next()->kind == twv::vita::StepLive && !s.next());
+    assert(s.parse("stick 0 100 30\nhold A 2\nshot\nwait 3\n") && s.count == 4);
+    for (const char* bad : {"live 2\n", "shot now\n", "liv\n"}) assert(!s.parse(bad));
+    // Buttons with the stick, and the three fixtures for trying a passage.
+    assert(s.parse("press A 0 100 3\npress A+B -50 60 2\ngive 72\nequip 1 4\ntp -100 250 3000\n") && s.count == 5);
+    assert(s.steps[0].buttons == twv::vita::ScriptButtonA && s.steps[0].y == 100 && s.steps[0].reads == 3);
+    assert(s.steps[1].buttons == (twv::vita::ScriptButtonA | twv::vita::ScriptButtonB) && s.steps[1].x == -50);
+    assert(s.steps[2].kind == twv::vita::StepGive && s.steps[2].room == 72 && s.steps[2].reads == 1);
+    assert(s.steps[3].kind == twv::vita::StepEquip && s.steps[3].room == 1 && s.steps[3].point == 4);
+    assert(s.steps[4].kind == twv::vita::StepTp && s.steps[4].room == -100 && s.steps[4].point == 250 && s.steps[4].layer == 3000);
+    for (const char* bad : {"press A 0 100\n", "press Q 0 0 1\n", "give 256\n", "equip 2 0\n", "equip 0 24\n", "tp 1 2\n"})
+        assert(!s.parse(bad));
+    std::puts("input_script_test: live and shot steps, press, give, equip, tp");
+}
+
 int main() {
+    live_steps();
     using twv::vita::InputScript;
     static InputScript s;
     assert(s.parse("# boot\r\nwait 3\n\nhold A+START 2\r\n  stick -128 127 1  \nhold DOWN 1\n"));

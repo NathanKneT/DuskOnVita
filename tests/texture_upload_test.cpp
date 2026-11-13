@@ -58,7 +58,7 @@ uint32_t twv_vgl_texture_static_rgba(uint32_t w,uint32_t h,uint32_t m,const void
 void twv_vgl_texture_write(uint32_t gpu,uint32_t,uint32_t,uint32_t,const void*){assert(gpu);++writes;}
 namespace twv::vgl {
 struct Texture {
-    uint32_t gpu=0;bool deferredUpload=false,hasArbitraryMips=false,efbCopy=false;
+    uint32_t gpu=0;bool deferredUpload=false,hasArbitraryMips=false,efbCopy=false;std::vector<uint8_t> cpu;
     struct {uint32_t width,height;} size;
     uint32_t mipCount,gxFormat;
     Texture(uint32_t w,uint32_t h,uint32_t m,uint32_t f,bool defer=false):deferredUpload(defer),size{w,h},mipCount(m),gxFormat(f){if(!defer)gpu=twv_vgl_texture(w,h,m);}

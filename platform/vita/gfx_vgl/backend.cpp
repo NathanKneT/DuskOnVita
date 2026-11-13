@@ -631,6 +631,9 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  if(sDrawSplit.on<0)sDrawSplit.on=(twv_gpu_features()&TwvGpuFeatureDrawSplit)!=0;
  const uint64_t splitEntry=sDrawSplit.on?twv_vgl_time_us():0;
  if(!in_frame) {count("draw_outside_frame");return;}
+ // The map screens' pass is drawn on the CPU (map_pass.cpp); every other off-screen pass is dropped.
+ if(offscreen && data.pipeline<pipelines.size() &&
+    map_pass_draw(pipelines[data.pipeline],data,viewport.left,viewport.top,viewport.width,viewport.height)) return;
  if(offscreen && !OffscreenDrawSupported) {count("unsupported_offscreen_draw");tally_offscreen_discard();return;}
  if(data.pipeline>=pipelines.size()) {count("invalid_pipeline");return;}
  auto& p=pipelines[data.pipeline]; const auto& c=p.config;
@@ -772,8 +775,12 @@ template<> void push_draw_command<gx::DrawData>(gx::DrawData data) {
  count(p.gpuTexgen?CounterId::GpuTexgenDraws:CounterId::CpuTexgenDraws);
  count(p.gpuTexgen?CounterId::GpuTexgenVertices:CounterId::CpuTexgenVertices,data.vtxCount);
 }
-void resolve_pass_into(TextureHandle,ClipRect,bool,bool,bool,Vec4<float>,float,GXTexFmt,GXPixelFmt) {twv::vgl::count("unsupported_efb_copy");}
-void begin_offscreen(uint32_t w,uint32_t h) {twv::vgl::off_w=w;twv::vgl::off_h=h;twv::vgl::offscreen=true;}
+void resolve_pass_into(TextureHandle into,ClipRect,bool,bool,bool,Vec4<float>,float,GXTexFmt format,GXPixelFmt) {
+ // A map picture is kept, as palette indices, inside the copy's texture (map_pass.cpp). No other copy exists.
+ if(twv::vgl::offscreen && into && twv::vgl::map_pass_resolve(static_cast<twv::vgl::Texture&>(*into),format)) return;
+ twv::vgl::count("unsupported_efb_copy");
+}
+void begin_offscreen(uint32_t w,uint32_t h) {twv::vgl::off_w=w;twv::vgl::off_h=h;twv::vgl::offscreen=true;twv::vgl::map_pass_begin(w,h);}
 void end_offscreen() {twv::vgl::offscreen=false;}
 bool is_offscreen() noexcept {return twv::vgl::offscreen;}
 void push_debug_group(std::string){}

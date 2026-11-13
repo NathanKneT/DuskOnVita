@@ -5,13 +5,20 @@
 #include "input_script.hpp"
 #include "telemetry.hpp"
 #include "d/d_com_inf_game.h"
+#include "d/d_item.h"
 #include <dolphin/pad.h>
 #include <cstdio>
+#include <cstring>
+#include <unistd.h>
 
 // ui/settings_screen.cpp (graphics builds): open the settings page at the next pass, or put two
 // still fingers on the rear pad for its gesture recogniser.
 extern "C" void twv_vita_settings_request_open(void) __attribute__((weak));
 extern "C" void twv_vita_settings_inject_rear_hold(void) __attribute__((weak));
+// gfx_vgl/gpu_dispatch.cpp: write the next presented frame as captures/live-NNNN.png.
+extern "C" void twv_vita_capture_request(unsigned serial) __attribute__((weak));
+// runtime/scene_probe.cpp: ticks, game counters, Link and the camera in one receipt.
+extern "C" void twv_vita_scene_snapshot(const char* tag) __attribute__((weak));
 
 namespace {
 static_assert(PAD_BUTTON_A==twv::vita::ScriptButtonA && PAD_BUTTON_B==twv::vita::ScriptButtonB &&
@@ -23,6 +30,41 @@ static_assert(PAD_BUTTON_A==twv::vita::ScriptButtonA && PAD_BUTTON_B==twv::vita:
 twv::vita::InputScript script;
 bool active=false;
 unsigned reads=0,lastStep=~0u,lastLoops=0;
+// Step-by-step play ("live"): command files taken so far, frames captured by "shot".
+bool live=false;
+unsigned liveSeq=0,shots=0;
+
+// The steps ran out in live mode: say where the game is, then wait for the next command file.
+// The game thread sleeps here, so nothing moves until the file is there. False: the session ends.
+bool live_wait() {
+    if(twv_vita_scene_snapshot)twv_vita_scene_snapshot("live");
+    char state[160];
+    std::snprintf(state,sizeof state,"seq=%u stage=%s room=%d layer=%d event=%d life=%d rupees=%d reads=%u",liveSeq,
+                  dComIfGp_getStartStageName(),int(dComIfGp_getStartStageRoomNo()),int(dComIfGp_getStartStageLayer()),
+                  int(dComIfGp_event_runCheck()),int(dComIfGs_getLife()),int(dComIfGs_getRupee()),reads);
+    twv::vita::telemetryText("live_ready",state);
+    twv::vita::telemetryFlush();
+    static char text[8192];
+    for(;;) {
+        char path[64];
+        std::snprintf(path,sizeof path,"ux0:data/twilight-vita/live/%04u.txt",liveSeq+1);
+        if(FILE* file=std::fopen(path,"rb")) {
+            const auto n=std::fread(text,1,sizeof text-1,file);
+            std::fclose(file);
+            text[n]=0;
+            ++liveSeq;
+            if(std::strncmp(text,"end",3)==0)return false;
+            if(script.parse(text)) {
+                twv::vita::telemetryEvent("live_command",liveSeq);
+                return true;
+            }
+            twv::vita::telemetryEvent("live_command_rejected",liveSeq);
+            twv::vita::telemetryFlush();
+            continue; // the next file replaces a rejected one
+        }
+        usleep(50000);
+    }
+}
 }
 
 extern "C" int twv_vita_input_script_load(const char* path) {
@@ -53,6 +95,11 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
     }
     waitingForPage=0;
     const auto* step=script.next();
+    while(!step && live) {
+        if(!live_wait()){live=false;break;}
+        lastStep=~0u;
+        step=script.next();
+    }
     if(!step) {
         active=false;
         twv::vita::telemetryEvent("input_script_done",reads);
@@ -70,6 +117,23 @@ extern "C" void twv_vita_benchmark_pad(PADStatus* status) {
     } else if(step->kind==twv::vita::StepDarkClear && script.used==1) {
         twv::vita::telemetryEvent("input_script_darkclear",step->layer);
         dComIfGs_onDarkClearLV(step->layer);
+    } else if(step->kind==twv::vita::StepLive) {
+        live=true;
+        twv::vita::telemetryEvent("input_script_live",reads);
+    } else if(step->kind==twv::vita::StepShot) {
+        if(twv_vita_capture_request)twv_vita_capture_request(++shots);
+    } else if(step->kind==twv::vita::StepGive) {
+        twv::vita::telemetryEvent("input_script_give",step->room);
+        execItemGet(u8(step->room));
+    } else if(step->kind==twv::vita::StepEquip) {
+        twv::vita::telemetryEvent("input_script_equip",step->room*100+step->point);
+        dComIfGs_setSelectItemIndex(step->room,u8(step->point));
+    } else if(step->kind==twv::vita::StepTp) {
+        if(auto* player=dComIfGp_getPlayer(0)) {
+            player->current.pos.set(f32(step->room),f32(step->point),f32(step->layer));
+            player->old.pos=player->current.pos;
+            twv::vita::telemetryEvent("input_script_tp",reads);
+        }
     }
     auto& p=status[0];p={};p.err=PAD_ERR_NONE;
     if(step->page) {

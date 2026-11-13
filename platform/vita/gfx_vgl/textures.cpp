@@ -133,6 +133,8 @@ TextureHandle new_static_texture_2d(uint32_t w,uint32_t h,uint32_t mips,u32 fmt,
         }
         const auto converted=convert_tlut(fmt,w,data);
         if(texture->gpu && converted.data.size()==size_t(w)*4) {
+            // Kept on the CPU too: the map screens' pictures are coloured there (map_pass.cpp).
+            texture->cpu.assign(converted.data.data(),converted.data.data()+converted.data.size());
             twv_vgl_texture_write(texture->gpu,0,w,1,converted.data.data());
             twv::vgl::count("tluts_uploaded");
         } else twv::vgl::count("tlut_upload_failure");
@@ -158,7 +160,14 @@ TextureHandle new_conv_texture(uint32_t w,uint32_t h,u32 fmt,const char*) noexce
 void write_texture(TextureRef& ref,ArrayRef<uint8_t> data) noexcept {twv::vgl::upload(static_cast<twv::vgl::Texture&>(ref),data);}
 void queue_texture_upload(TextureUpload) {twv::vgl::count("unsupported_webgpu_texture_upload");}
 void queue_texture_upload_data(const uint8_t*,uint32_t,uint32_t,wgpu::TexelCopyTextureInfo,wgpu::Extent3D) {twv::vgl::count("unsupported_webgpu_texture_upload");}
-void queue_palette_conv(tex_palette_conv::ConvRequest) {twv::vgl::count("unsupported_efb_palette_conversion");}
+// Only the map screens' pictures are converted (map_pass.cpp): an 8-bit picture kept by its copy.
+void queue_palette_conv(tex_palette_conv::ConvRequest request) {
+    using twv::vgl::Texture;
+    if(twv::vgl::map_palette_convert(static_cast<Texture*>(request.src.get()),static_cast<Texture*>(request.dst.get()),
+                                     static_cast<Texture*>(request.tlut.get()),
+                                     request.variant==tex_palette_conv::Variant::FromFloat8))return;
+    twv::vgl::count("unsupported_efb_palette_conversion");
+}
 }
 namespace aurora::gfx::texture_replacement {
 StreamingStats process_streaming() noexcept {return {};}

@@ -16,6 +16,7 @@
 #include "ui/startup_screen.hpp"
 #include <psp2/kernel/processmgr.h>
 #include <sys/stat.h>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -33,6 +34,8 @@ twv::gpu::CaptureSchedule capture;
 FILE* drawLog=nullptr;
 uint64_t digestDraws=0;
 constexpr const char* CaptureRoot="ux0:data/twilight-vita/captures";
+// A frame asked for outside the schedule: its serial, 0 when none is pending.
+std::atomic<unsigned> captureRequest{0};
 constexpr const char* MatchFile="ux0:data/twilight-vita/capture_match.txt";
 constexpr const char* DrawLogFile="ux0:data/twilight-vita/digest_draws.txt";
 
@@ -159,6 +162,9 @@ extern "C" int twv_vita_gpu_select(int which,int digestOption,uint32_t first,uin
 }
 
 extern "C" uint32_t twv_gpu_features(void) {return requestedFeatures;}
+// Test only (runtime/input_script.cpp, "shot"): the next presented frame is written as
+// captures/live-NNNN.png. Called from the game thread; the frame end takes it.
+extern "C" void twv_vita_capture_request(unsigned serial) {captureRequest.store(serial);}
 extern "C" uint32_t twv_gpu_split_scenes(void) {return splitScenes;}
 // patches/aurora/0008: whether quads, strips and fans reach the backend without index lists.
 extern "C" int twv_gx_native_primitives(void) noexcept {return (requestedFeatures&TwvGpuFeaturePrimitives)!=0;}
@@ -231,6 +237,12 @@ extern "C" void twv_vgl_end(void) {
     if(capture.active() && capture.wants(index,frameDigest)) {
         twv::gpu::capture_name(path,sizeof path,CaptureRoot,index,frameDigest);
         capturePath=path;
+    } else if(const unsigned serial=captureRequest.exchange(0)) {
+        // Asked for by the input script's "shot" step (runtime/input_script.cpp).
+        mkdir(CaptureRoot,0777);
+        std::snprintf(path,sizeof path,"%s/live-%04u.png",CaptureRoot,serial);
+        capturePath=path;
+        twv::vita::telemetryEvent("capture_request",serial);
     }
     // The submit thread's drain, the scene end and the flip, apart from the receipts and the
     // caches' frame ends (gpu_api.h SETTLE split).

@@ -661,6 +661,10 @@ ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/input_script_test.cpp" -o "$out/input_script_test"
 "$out/input_script_test"
+# The map screens' pictures, drawn on the CPU (gfx_vgl/map_raster.hpp).
+${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I "$repo/platform/vita" "$repo/tests/map_raster_test.cpp" -o "$out/map_raster_test"
+"$out/map_raster_test"
 # Front touch for the menu pointer: finger tracking and the drawn area it maps to.
 ${CXX:-g++} -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I "$repo/platform/vita" "$repo/tests/touch_test.cpp" -o "$out/touch_test"

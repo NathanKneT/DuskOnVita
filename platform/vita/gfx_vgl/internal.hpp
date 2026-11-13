@@ -34,6 +34,9 @@ struct Texture : aurora::gfx::TextureRef {
     // Destination of an EFB copy (or of its palette conversion). Nothing writes it while
     // resolve_pass_into is unsupported: its storage stays as created (zero on GXM).
     bool efbCopy = false;
+    // CPU copy, for the map screens (map_pass.cpp): a palette's colours (RGBA, one per entry), or
+    // a map picture's palette indices (one byte per pixel) inside its copy's texture. Empty otherwise.
+    std::vector<uint8_t> cpu;
     Texture(uint32_t w,uint32_t h,uint32_t mips,uint32_t format,bool deferred=false);
     ~Texture();
 };
@@ -41,6 +44,16 @@ void count(const char* name, uint32_t amount=1) noexcept;
 void count(CounterId id,uint32_t amount=1) noexcept;
 void count_game(CounterId id,uint32_t amount=1) noexcept; // game thread only, see backend.cpp
 TwvVitaVertex* build_vertices(const Pipeline&,const aurora::gx::DrawData&) noexcept;
+// vertex.cpp: where each vertex of a draw lands in a target whose viewport is (left, top, width,
+// height): x and y in pixels, y down; and, when `st` is given, its first texture coordinate as
+// sent. For draws that are drawn on the CPU (map_pass.cpp).
+bool decode_screen_positions(const Pipeline&,const aurora::gx::DrawData&,float left,float top,float width,float height,float* xy,
+                             float* st=nullptr) noexcept;
+// map_pass.cpp: the map screens' off-screen pass, drawn on the CPU.
+void map_pass_begin(uint32_t w,uint32_t h) noexcept;
+bool map_pass_draw(const Pipeline&,const aurora::gx::DrawData&,float left,float top,float width,float height) noexcept;
+bool map_pass_resolve(Texture& into,uint32_t format) noexcept;
+bool map_palette_convert(Texture* source,Texture* target,Texture* palette,bool eightBit) noexcept;
 bool gpu_vertex_supported(const Pipeline&) noexcept;
 void* build_gpu_vertices(const Pipeline&,const aurora::gx::DrawData&,unsigned& pnSlots,bool& culled) noexcept;
 TwvVitaVertexLayout gpu_vertex_layout(const Pipeline&) noexcept;
