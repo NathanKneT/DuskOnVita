@@ -1,9 +1,10 @@
 #pragma once
-// Start-up screens drawn by the CPU into a 32-bit display buffer (A8B8G8R8, the format the GXM backend
-// and sceDisplay use): a progress screen while the shader warm-up bundle is prepared, and plain error
-// screens. SDK-free; startup_screen.cpp puts the buffer on the display.
+// A canvas the CPU draws into: a 32-bit display buffer (A8B8G8R8, the format the GXM backend and
+// sceDisplay use), with filled rectangles and a pixel font. The start-up screens and the settings
+// page draw on it with their own font and shapes (ui/ui_paint.hpp, ui/startup_layouts.hpp,
+// ui/settings_draw.hpp); the pixel font here is what the FPS counter uses. SDK-free.
 //
-// The font is our own 5x9 pixel font, drawn for this project: printable ASCII, 7 rows above the
+// The pixel font is our own 5x9 font, drawn for this project: printable ASCII, 7 rows above the
 // baseline and 2 for descenders. Each glyph is up to nine 5-column rows ('#' set, '.' clear) separated
 // by spaces; missing rows are clear. Anything outside printable ASCII is drawn as '?'.
 #include <array>
@@ -145,9 +146,11 @@ constexpr const GlyphRows& glyph(char c) {
 // A8B8G8R8 in memory: R in the lowest byte.
 constexpr uint32_t rgb(uint32_t r, uint32_t g, uint32_t b) { return 0xff000000u | (b << 16) | (g << 8) | r; }
 namespace palette {
-constexpr uint32_t Background = rgb(12, 16, 22), Name = rgb(140, 150, 165), Title = rgb(255, 206, 110),
-                   Text = rgb(235, 238, 242), Path = rgb(130, 210, 255), Note = rgb(160, 168, 180),
-                   BarFrame = rgb(120, 130, 145), BarFill = rgb(120, 200, 140), BarEmpty = rgb(28, 34, 44);
+// The colours of the start-up screens, the settings page's own (ui/settings_draw.hpp).
+constexpr uint32_t Background = rgb(16, 14, 27), Name = rgb(142, 138, 166), Title = rgb(255, 206, 110),
+                   Text = rgb(240, 238, 248), Path = rgb(160, 204, 255), Note = rgb(150, 146, 172),
+                   BarFrame = rgb(74, 70, 100), BarFill = rgb(255, 184, 92), BarEmpty = rgb(36, 33, 56),
+                   Rule = rgb(54, 51, 78);
 }
 
 struct Canvas {
@@ -214,117 +217,6 @@ inline int wrap_text(const char* text, std::size_t columns, TextLine* lines, int
         at = end;
     }
     return count;
-}
-
-// --- screen layouts (960x544) ---
-constexpr const char* AppName = "DuskOnVita";
-constexpr int ScreenWidth = 960, ScreenHeight = 544, Margin = 48;
-
-enum class Style : uint8_t { Text, Path, Note };
-struct MessageItem {
-    Style style = Style::Text;
-    const char* text = nullptr; // null: unused
-};
-struct Message {
-    const char* title = "";
-    std::array<MessageItem, 6> items{};
-    const char* footer = "Press any button to exit.";
-};
-struct Layout {
-    int lines = 0, bottom = 0;
-    bool fits = false;
-};
-
-// Draws the whole error screen; with a null canvas only measures. `fits`: every line is on the screen
-// above the footer.
-inline Layout draw_message(const Canvas* c, const Message& m) {
-    constexpr int TitleScale = 4, TextScale = 3, NoteScale = 2, NameScale = 2;
-    constexpr int FooterY = ScreenHeight - 36 - FontRows * TextScale;
-    Layout out;
-    if (c) fill_rect(*c, 0, 0, c->width, c->height, palette::Background);
-    int y = 32;
-    if (c) draw_text(*c, Margin, y, NameScale, palette::Name, AppName);
-    y += line_height(NameScale) + 18;
-    TextLine lines[12];
-    bool cut = false, anyCut = false;
-    const auto columns_at = [](int scale) { return std::size_t((ScreenWidth - 2 * Margin) / (FontAdvance * scale)); };
-    int n = wrap_text(m.title, columns_at(TitleScale), lines, 2, &cut);
-    anyCut |= cut;
-    for (int i = 0; i < n; ++i, y += line_height(TitleScale)) {
-        if (c) draw_text(*c, Margin, y, TitleScale, palette::Title, m.title + lines[i].start, lines[i].length);
-        ++out.lines;
-    }
-    y += 14;
-    for (const MessageItem& item : m.items) {
-        if (!item.text) continue;
-        const uint32_t color = item.style == Style::Path ? palette::Path : item.style == Style::Note ? palette::Note : palette::Text;
-        const int scale = item.style == Style::Note ? NoteScale : TextScale;
-        const int indent = item.style == Style::Path ? 2 * FontAdvance * scale : 0;
-        const std::size_t columns = columns_at(scale) - (indent ? 2 : 0);
-        n = wrap_text(item.text, columns, lines, 12, &cut);
-        anyCut |= cut;
-        for (int i = 0; i < n; ++i, y += line_height(scale)) {
-            if (c && y + FontRows * scale <= FooterY - 8)
-                draw_text(*c, Margin + indent, y, scale, color, item.text + lines[i].start, lines[i].length);
-            ++out.lines;
-        }
-        y += 10;
-    }
-    out.bottom = y - 10;
-    out.fits = !anyCut && out.bottom <= FooterY - 8;
-    if (c && m.footer) draw_text(*c, Margin, FooterY, TextScale, palette::Note, m.footer);
-    return out;
-}
-
-// Progress screen: the app name, a label, and (once compiles are seen) a bar with "done / total".
-struct Progress {
-    const char* label = "Loading...";
-    uint32_t done = 0, total = 0;
-    bool bar = false;
-    const char* note = nullptr;
-    const char* hint = nullptr; // bottom line: how to open the settings page (ui/settings_screen.hpp)
-};
-constexpr int BarX = 180, BarY = 300, BarW = 600, BarH = 26, CountY = 346, LabelY = 244, NoteY = 420, HintY = 492;
-// full: the whole screen; otherwise the bar interior, the count and the label lines only.
-inline void draw_progress(const Canvas& c, const Progress& p, bool full) {
-    constexpr int CountScale = 3, LabelScale = 3;
-    if (full) {
-        fill_rect(c, 0, 0, c.width, c.height, palette::Background);
-        draw_centered(c, 150, 6, palette::Text, AppName);
-        if (p.hint) draw_centered(c, HintY, 2, palette::Note, p.hint);
-    } else {
-        fill_rect(c, 0, LabelY, c.width, FontRows * LabelScale, palette::Background);
-    }
-    draw_centered(c, LabelY, LabelScale, palette::Text, p.label);
-    if (!p.bar) return;
-    if (full) {
-        fill_rect(c, BarX - 3, BarY - 3, BarW + 6, BarH + 6, palette::BarFrame);
-        if (p.note) draw_centered(c, NoteY, 2, palette::Note, p.note);
-    }
-    const uint32_t done = p.done > p.total ? p.total : p.done;
-    const int filled = p.total ? int(uint64_t(BarW) * done / p.total) : 0;
-    fill_rect(c, BarX, BarY, filled, BarH, palette::BarFill);
-    fill_rect(c, BarX + filled, BarY, BarW - filled, BarH, palette::BarEmpty);
-    char count[32];
-    int length = 0;
-    {   // "done / total" without snprintf (host and Vita alike).
-        char digits[2][12];
-        int lengths[2] = {0, 0};
-        const uint32_t values[2] = {done, p.total};
-        for (int k = 0; k < 2; ++k) {
-            uint32_t v = values[k];
-            char tmp[12];
-            int t = 0;
-            do { tmp[t++] = char('0' + v % 10); v /= 10; } while (v);
-            while (t) digits[k][lengths[k]++] = tmp[--t];
-        }
-        for (int i = 0; i < lengths[0]; ++i) count[length++] = digits[0][i];
-        for (const char* s = " / "; *s; ++s) count[length++] = *s;
-        for (int i = 0; i < lengths[1]; ++i) count[length++] = digits[1][i];
-        count[length] = 0;
-    }
-    fill_rect(c, 0, CountY, c.width, FontRows * CountScale, palette::Background);
-    draw_centered(c, CountY, CountScale, palette::Text, count);
 }
 
 } // namespace twv::ui

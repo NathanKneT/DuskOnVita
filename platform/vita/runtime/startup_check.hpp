@@ -11,7 +11,7 @@
 // disc holds the header blocks, the DOL, the FST and every file the FST lists (a trimmed image
 // passes; a cut one does not).
 #include "disc/disc_report.h"
-#include "ui/startup_canvas.hpp"
+#include "ui/startup_layouts.hpp"
 
 #include <cstddef>
 #include <cstdint>

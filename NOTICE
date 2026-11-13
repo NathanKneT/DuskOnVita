@@ -1,11 +1,12 @@
 THIRD-PARTY NOTICES AND SOURCE PROVENANCE
 
 The MIT license in LICENSE covers the original code of this PS Vita port. It does not replace the
-licenses or notices of the projects below. None of them is copied into this repository: Dusklight
-(with Aurora and Borealis) is a pinned git submodule, the other sources are archives pinned by
-SHA-256 in deps.lock and downloaded by tools/fetch_deps.sh, and the toolchain is a container image
-pinned by digest. The files in patches/ modify those projects' files at build time; a patch does not
-change the license of the file it applies to. License texts are in LICENSES/.
+licenses or notices of the projects below. Apart from the font (see "Font"), none of them is copied
+into this repository: Dusklight (with Aurora and Borealis) is a pinned git submodule, the other
+sources are archives pinned by SHA-256 in deps.lock and downloaded by tools/fetch_deps.sh, and the
+toolchain is a container image pinned by digest. The files in patches/ modify those projects' files
+at build time; a patch does not change the license of the file it applies to. License texts are in
+LICENSES/.
 
 Game code and libraries (git submodules)
 
@@ -65,6 +66,16 @@ Toolchain and system libraries (container image, not distributed by this reposit
   The toolchain and SDK components keep their own licenses; this repository grants none for them.
   A binary release (VPK) contains some of them. It needs an inventory of everything it actually
   contains, with the notices those licenses require.
+
+Font
+
+  Inter (https://github.com/rsms/inter), Copyright (c) 2016 The Inter Project Authors, SIL Open
+  Font License 1.1 (LICENSES/Inter-OFL.txt). It is the one third-party work this repository holds
+  in a derived form: platform/vita/ui/ui_font_data.hpp is printable ASCII of Inter Regular and Bold
+  as small coverage bitmaps, rasterised by tools/make_ui_font.cpp from the font files Dusklight
+  ships in res/ (with stb_truetype as Dear ImGui carries it, public domain or MIT). The start-up
+  screens and the settings page are drawn with them, so a VPK contains them. The font files
+  themselves are neither in this repository nor in a VPK.
 
 Shared code
 

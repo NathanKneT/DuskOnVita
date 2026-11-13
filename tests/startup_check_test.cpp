@@ -276,7 +276,8 @@ int main(int argc, char** argv) {
     p.note = "This takes about a minute once. Later launches skip it.";
     ui::draw_progress(c, p, true);
     const auto at = [&](int x, int y) { return px[std::size_t(y) * ui::ScreenWidth + std::size_t(x)]; };
-    assert(at(ui::BarX + ui::BarW / 2 - 1, ui::BarY + 5) == ui::palette::BarFill);
+    // The part done has round ends: a bar's height in from its end it is the plain colour.
+    assert(at(ui::BarX + ui::BarW / 2 - ui::BarH, ui::BarY + 5) == ui::palette::BarFill);
     assert(at(ui::BarX + ui::BarW / 2 + 1, ui::BarY + 5) == ui::palette::BarEmpty);
     assert(at(ui::BarX - 2, ui::BarY + 5) == ui::palette::BarFrame);
     write_ppm("progress_half", px);
@@ -284,11 +285,11 @@ int main(int argc, char** argv) {
     p.done = 510;
     p.label = "Starting the game...";
     ui::draw_progress(c, p, false);
-    assert(at(ui::BarX + ui::BarW - 1, ui::BarY + 5) == ui::palette::BarFill);
+    assert(at(ui::BarX + ui::BarW - ui::BarH, ui::BarY + 5) == ui::palette::BarFill);
     for (int y = 0; y < ui::ScreenHeight; ++y) {
-        const bool redrawn = (y >= ui::LabelY && y < ui::LabelY + ui::FontRows * 3) ||
+        const bool redrawn = (y >= ui::LabelY && y < ui::LabelY + ui::LabelH) ||
                              (y >= ui::BarY && y < ui::BarY + ui::BarH) ||
-                             (y >= ui::CountY && y < ui::CountY + ui::FontRows * 3);
+                             (y >= ui::CountY && y < ui::CountY + ui::CountH);
         if (!redrawn)
             for (int x = 0; x < ui::ScreenWidth; ++x) assert(at(x, y) == before[std::size_t(y) * ui::ScreenWidth + std::size_t(x)]);
     }
