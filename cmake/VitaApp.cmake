@@ -82,6 +82,14 @@ endif()
 foreach(asset icon0.png livearea/contents/bg.png livearea/contents/startup.png livearea/contents/template.xml)
     list(APPEND TWV_VPK_EXTRA_FILES FILE "${CMAKE_SOURCE_DIR}/platform/vita/sce_sys/${asset}" "sce_sys/${asset}")
 endforeach()
+# The license texts travel with the binary: LICENSE, NOTICE and the texts NOTICE refers to.
+foreach(doc LICENSE NOTICE)
+    list(APPEND TWV_VPK_EXTRA_FILES FILE "${CMAKE_SOURCE_DIR}/${doc}" "${doc}")
+endforeach()
+file(GLOB twv_license_texts RELATIVE "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/LICENSES/*.txt")
+foreach(doc ${twv_license_texts})
+    list(APPEND TWV_VPK_EXTRA_FILES FILE "${CMAKE_SOURCE_DIR}/${doc}" "${doc}")
+endforeach()
 
 # Dusklight's own platform/UI layer (src/dusk: OS threads/queues, settings,
 # config, audio DSP emulation, menus). Linked; what it needs from Aurora,

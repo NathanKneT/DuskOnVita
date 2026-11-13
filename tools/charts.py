@@ -25,7 +25,7 @@ FRAME = [('Backend draws', 10.86), ('Pipeline lookup', 8.16), ('XF: matrices, li
 # left out: its runs have too few steady stretches for a whole-run average to mean much.
 BENCH = [('outside', 'Ordon, outside\nthe house'), ('castle-town', 'Castle Town'),
          ('hyrule-field', 'Hyrule Field'), ('kakariko', 'Kakariko'), ('ordon-centre', 'Ordon village\ncentre')]
-SESSIONS = [('b2', '28 Oct', GRID), ('b3', '5 Nov', BLUE), ('p1', '10 Nov', GREEN)]
+SESSIONS = [('b2', '28 Oct', GRID), ('b3', '5 Nov', BLUE), ('p1', '10 Nov', GREEN), ('p5', '11 Nov', ORANGE)]
 
 
 def vita_rows():
@@ -121,7 +121,7 @@ def bench():
         s.append(f"<rect x='{lx}' y='{ly - 9}' width='12' height='12' rx='2' fill='{color}'/>")
         s.append(text(lx + 18, ly + 2, f'{day} ({build})', 11))
         lx += 120
-    s.append(text(left, h - 18, '10 Nov: Hyrule Field with the GX worker speed-ups only, Kakariko without direct uniforms; both are on by default now', 11, MUTED))
+    s.append(text(left, h - 18, '10 Nov: Hyrule Field with the GX worker speed-ups only, Kakariko without direct uniforms. 11 Nov: pad values from events, a switch still off', 11, MUTED))
     s.append('</svg>')
     return '\n'.join(s)
 

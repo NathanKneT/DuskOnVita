@@ -13,21 +13,37 @@ Vita side of things: a renderer that turns Aurora's GX commands into GXM (or
 [vitaGL](https://github.com/Rinnegatamante/vitaGL)), audio, input, memory, a lot of logging, and a
 small stack of patches on top of the pinned upstreams.
 
-## Where it's at (10 Nov 2026)
+## Where it's at (13 Nov 2026, version 0.9.0)
 
-- **First release: you can install it and play, but it's not comfy yet.** On my PS Vita 1000 it
-  boots from your disc image to the title screen, a new game starts, the opening in Ordon plays, and
-  saving works.
-- **It's getting faster, but it's not there yet.** 13 to 28 FPS in the places I've measured, where
-  the original runs at 30; Hyrule Field went from 18 to 28 FPS on 10 Nov. The game keeps its normal
-  speed down to 15 FPS; below that, everything slows down with it.
+- **You can install it and play, but it's not comfy yet.** On my PS Vita 1000 it boots from your
+  disc image to the title screen, a new game starts, the opening in Ordon plays, and saving works.
+- **It's getting faster, but it's not there yet.** 10 to 29 FPS in the places I've measured, where
+  the original runs at 30. The villages are the slowest: Ordon 14 to 16 FPS and about 10 when you
+  stand in the middle and look across the whole village, Kakariko 18 to 19. The game keeps its
+  normal speed down to 15 FPS; below that, everything slows down with it.
+- **New on 13 Nov, speed:** seven more exact speed-ups on by default after console sessions. Rows
+  of identical squares go out as one draw (the Palace of Twilight went from 7 to 13 FPS, Snowpeak
+  Ruins room 9 from 9 to 19), a simple shadow is one draw, the sound is rendered in small steps
+  (late sound buffers fell from 29 % to 0.2 % in the Palace of Twilight), and four smaller ones:
+  repeated register writes are skipped, child particles go out ten per draw, the room background
+  isn't drawn twice, and the pad values come from SDL's events.
+- **New on 13 Nov:** comfort options on the settings page, all off by default so the game stays
+  as it was made: auto-save, instant text, quick transform (R + Triangle), faster climbing, iron
+  boots and Tears of Light, bigger wallets, an aiming reticle, HUD size, and more; a Challenge
+  section (double damage, no heart drops) and a few cheats. The page now has sections (L and R), a
+  "Restart the game" entry, and a short screen on the first launch that says where it all is.
+- **New on 11 and 12 Nov:** the HUD's button icons sit as the Vita's buttons do (Square left,
+  Circle right) and read better on a bright background, SELECT is drawn as the button's shape, a
+  free camera setting, an icon and LiveArea pictures, more exact speed-ups on by default, and a
+  crash fixed when entering some areas of Hyrule Field.
 - **New on 10 Nov:** exact speed-ups for the renderer's worker thread and the game's model maths, on
   by default, and a Speed-ups setting (Original or Performance) that skips work you can't see.
 - **New on 5 Nov:** an in-game settings page (two fingers held on the rear touch pad, or three on the screen), your disc as `.iso`, `.ciso`
   or `.gcz`, the game in your Vita's language, and Cross/Circle following your Vita's Enter button.
 - **Not there yet:** the minimap and map screens, Link's real-time shadow, water effects, bloom and
   depth of field (everything that needs frame-buffer copies).
-- **Known bugs:** some textures flicker.
+- **Known bugs:** some textures flicker; the first visit to an area stutters while its shaders
+  compile (0.4 s each on the console).
 - **Not tested yet:** dungeons, the rest of the story, a full playthrough, sleep and resume, and any
   disc other than the European one.
 
@@ -36,18 +52,39 @@ It's all open so anyone can reproduce it, poke at it and help out.
 
 ## Numbers (on a real PS Vita 1000)
 
-Latest console sessions (5 and 10 Nov): six of the busiest places in the game, each loaded with
-`--stage`, drawn at 75 % with the default play profile ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
-FPS with Link standing still / walking a scripted route:
+Latest console sessions (5, 10 and 11 Nov): six of the busiest places in the game, each loaded
+with `--stage`, drawn at 75 % with the default play profile
+([docs/PERFORMANCE.md](docs/PERFORMANCE.md)). FPS with Link standing still / walking a scripted
+route:
 
-| Place | 5 Nov | 10 Nov | What holds it back now |
-| --- | ---: | ---: | --- |
-| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 28.5 / 27.4 | not run | GX worker |
-| Hyrule Field bridge (`F_SP121,0,4,-1`) | 18.3 / 19.7 | **28.1 / 28.2** | main thread |
-| Castle Town, twilight (`F_SP116,0,0,-1`) | 21.1 / 18.9 | not run | main thread |
-| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.5 | not run | main thread and GX worker |
-| Kakariko, twilight (`F_SP109,0,59,-1`) | 12.2 / 12.9 | 14.0 / 14.9 | GX worker and main thread |
-| Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.4 | 13.3 / 14.0 | GX worker and main thread |
+| Place | 5 Nov | 10 Nov | 11 Nov | What holds it back now |
+| --- | ---: | ---: | ---: | --- |
+| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 28.5 / 27.4 | not run | 29.5 / 28.7 | GX worker |
+| Hyrule Field bridge (`F_SP121,0,4,-1`) | 18.3 / 19.7 | 28.1 / 28.2 | **29.1 / 29.1** | main thread |
+| Castle Town, twilight (`F_SP116,0,0,-1`) | 21.1 / 18.9 | not run | **27.0 / 25.5** | main thread |
+| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.5 | not run | 22.2 / 20.4 | main thread and GX worker |
+| Kakariko, twilight (`F_SP109,0,59,-1`) | 12.2 / 12.9 | 14.0 / 14.9 | 14.9 / 16.8 | GX worker and main thread |
+| Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.4 | 13.3 / 14.0 | 13.6 / 14.6 (10 Nov, evening) | GX worker and main thread |
+
+The 11 Nov column was measured with the pad values taken from SDL's events, a default since
+13 Nov. In free play on 12 Nov the village read between 11 and 18 FPS, and 9 to 10 in its
+widest view: the bench camera in the village centre is not the worst one.
+
+The heaviest places, console session of 13 Nov, at normal game speed, with the speed settings
+0.9.0 ships (the seven defaults of that day):
+
+| Place | FPS | Game speed | Late sound buffers |
+| --- | ---: | ---: | ---: |
+| Snowpeak Ruins, room 9 (`D_MN11`) | 19.3 | 100 % | 0 |
+| Kakariko, twilight (`F_SP109,0,59,-1`) | 17.6 standing / 18.8 walking | 100 % | 0 |
+| Ordon village centre (`F_SP103,0,23,-1`) | 14.0 standing / 15.9 walking | 94 to 98 % | 0 |
+| Hyrule Field, the enemy areas (rooms 1, 7, 10, 13) | 14.5 | 82 % | 26 % |
+| Palace of Twilight, entrance (`D_MN08`) | 13.7 | 90 % | 0.2 % |
+| Ordon village, its widest view | 9.9 | 66 % | 0 |
+
+That session ran on a build made just before this version's settings page and HUD work, with a
+prepared shader set, which a release doesn't ship (a first visit compiles its shaders). In every
+one of these places the main thread is the limit.
 
 What changed on 10 Nov, all exact and on by default: the GX worker (the thread that turns the game's
 GX commands into GXM draws) no longer checks again a pipeline that didn't change, no longer receives
@@ -99,13 +136,15 @@ Where the GX worker's time went in the house on g2c:
 | Title screen, new game, the opening in Ordon | ✅ | played on the console (28 Oct); title and file select around 21 FPS, Ordon around 23 |
 | Saves | ✅ | saving and the rolling backups work on the console; the repair check at boot and save import ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Saves") are checked in the emulator and host tests |
 | Link's house, Ordon, the Faron fight | ✅ | loaded with `--stage` |
-| Castle Town, Kakariko, Hyrule Field | ⚠️ | they run: Hyrule Field at 28 FPS, Castle Town around 20, Kakariko around 14 |
+| Castle Town, Kakariko, Hyrule Field | ⚠️ | they run: open Hyrule Field at 29 FPS, Castle Town 25 to 27, Kakariko 18 to 19, the field's enemy areas around 14 |
 | Full-width 16:9 picture | ✅ | drawn at 75 % (720x408) and scaled to 960x544; `--vita-gxm-scale=100` for full size |
 | GXM renderer | ✅ | the default; `--vita-profile=off` goes back to vitaGL |
 | Real game speed | ✅ | fixed 30 game ticks per second, held down to 15 FPS |
 | Controls (both sticks, buttons) | ✅ | |
-| PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork |
-| Settings page | ✅ | two fingers held on the rear touch pad, or three on the screen; presets, render size, FPS counter, prompts, confirm button, language, gyro, camera. Works on the console |
+| PlayStation button prompts | ✅ | symbols drawn in code over the game's button art, no Sony or Nintendo artwork; SELECT is the button's oval |
+| HUD button positions | ✅ | Square is drawn left of Cross and Circle right, as on the Vita; "Original" in the settings puts the GameCube's places back. Seen on the console; not yet with every item |
+| Settings page | ✅ | two fingers held on the rear touch pad, or three on the screen; presets, render size, FPS counter, prompts, HUD button positions, confirm button, language, gyro, free camera, comfort options, camera invert. Works on the console |
+| Icon and LiveArea pictures | ✅ | drawn in code by `tools/make_livearea.py`, no artwork from anyone |
 | Speed-ups (Original / Performance) | ⚠️ | off by default. Performance skips work you can't see: the frame that isn't shown, animals off screen or far away, part of the Castle Town crowd. Quests, items and saves are unchanged; random idle choices can differ. On the console: Ordon village centre 14.1 / 16.0 FPS instead of 12.6 / 13.2 |
 | Disc images: ISO, CISO, GCZ | ⚠️ | read in place, any name, region from the disc; checked in the emulator with the European disc |
 | Your Vita's language and Enter button | ⚠️ | text in the console's language when the disc has it, Circle confirms when the Vita does (prompts follow); checked in the emulator |
@@ -152,18 +191,24 @@ profile can use them, and leaves out the per-draw diagnostics
 
 ## Install
 
-1. Install the VPK from the release page with VitaShell.
+1. Install the VPK from the [release page](https://github.com/NathanKneT/DuskOnVita/releases) with
+   VitaShell.
 2. Put the shader compiler at `ur0:data/libshacccg.suprx`. It comes from your own console's system
    files: extract it with the ShaRKBR33D app. Without it the game shows a screen saying so.
-3. Copy your disc image into `ux0:data/twilight-vita/` (create the folder). Any name works;
-   `game.iso` is looked at first. If you already keep the disc in `ux0:data/dusklight/` (`Zelda.iso`
-   or `Zelda.ciso`), it's found there too. Images are read where they are, never copied.
-4. Launch **DuskOnVita (dev)**.
+3. Copy your disc image into `ux0:data/twilight-vita/` (the game creates the folder the first time
+   it starts, or create it yourself). Any name works; `game.iso` is looked at first. If you already
+   keep the disc in `ux0:data/dusklight/` (`Zelda.iso` or `Zelda.ciso`), it's found there too, and
+   so is a `data/twilight-vita/` folder on a second storage device (`uma0:`, `imc0:` or `xmc0:`).
+   Images are read where they are, never copied.
+4. Launch **DuskOnVita** (a build of your own is named "DuskOnVita (dev)").
 
 There's no shader pack in the release (it would be derived from the game's materials). So the first
 time you visit an area, the game stutters for a while as the Vita compiles its shaders; they're
 cached, and the next visit is smooth. Saves go to `ux0:data/twilight-vita/<region>/Card A/`, with
-three rolling backups; an extra copy somewhere else never hurts. If something's wrong with the disc
+three rolling backups; an extra copy somewhere else never hurts. They're ordinary `.gci` files, the
+format Dolphin and Dusklight on a PC use: to bring a save over, put its `.gci` in
+`ux0:data/twilight-vita/import/` before the first start (it's copied in when the card has no save
+yet). If something's wrong with the disc
 image (missing, cut short, a format the port can't read, another game), a screen says what and
 where.
 
@@ -183,19 +228,70 @@ logs to `ux0:data/twilight-vita/runtime.jsonl`; Dusklight's own logs and caches 
 | L / R | L / R (targeting on L) |
 | Select | Z |
 | Start, D-pad | Start, D-pad |
+| Start + Square + Circle, held | Start + X + B: back to the title screen, as on the GameCube |
 
-Button prompts show the PlayStation symbols. In menus you can tap the front touch screen. Aiming
-also follows the gyro (on by default).
+Button prompts show the PlayStation symbols, and the HUD draws Square left of Cross and Circle
+right, as the buttons sit on the Vita. In menus you can tap the front touch screen. Aiming also
+follows the gyro (on by default).
 
 **Settings:** hold two fingers still on the rear touch pad for a second, or tap the screen with
-three fingers. The game pauses and a page opens: a preset (Quality 100 %, Balanced 75 %, Battery
+three fingers (the first launch shows a screen that says so). The game pauses and a page opens,
+in sections you change with L and R: a preset (Quality 100 %, Balanced 75 %, Battery
 50 % with the console's own clocks), render size, Speed-ups (Original or Performance, or each of
-the four on its own), an FPS counter, button prompts (PlayStation or GameCube), the confirm button
-(System, Cross or Circle), the language (from the ones on your disc), gyro aim, sensitivity, invert
-and recentre, camera invert, and a reset. D-pad and Cross to change, Circle or START to close (or
-tap). Render size, performance, language and the confirm button apply at the next start; Speed-ups
-apply at once (the crowd at the next area). Game settings go to Dusklight's `config.json`, the
+the four on its own), an FPS counter, button prompts (PlayStation or GameCube), HUD button
+positions (Vita pad or Original), the confirm button (System, Cross or Circle), the language (from
+the ones on your disc), gyro aim, sensitivity, invert and recentre, the free camera (off is the
+original camera), camera and aim invert, and a reset. D-pad and Cross to change, Circle or START to
+close (or tap). Render size, performance, language and the confirm button apply at the next start
+("Restart the game" on the page does it for you); Speed-ups apply at once (the crowd at the next
+area).
+
+**Comfort, Challenge and Cheats** are Dusklight's own options, and every one is off until you turn
+it on, so the default is the game as it was made. Comfort: auto-save (on a new area or a dungeon
+door), instant text while you hold the cancel button, hold instead of mashing, quick transform
+(R + Triangle), faster climbing, iron boots, Tears of Light and area changes, instant saves, rupee
+messages only once, rupees taken with a full wallet, the HD version's bigger wallets, an aiming
+reticle, no low-health beep, a hidden HUD, HUD size, gyro for Rollgoal. Challenge: double or four
+times the damage, no heart drops (the two halves of the HD version's Hero Mode that don't need a
+mirrored picture). Cheats: infinite hearts, arrows, bombs, rupees, lantern oil and air. Game settings go to Dusklight's `config.json`, the
 port's own to `ux0:data/twilight-vita/vita_settings.json`.
+
+## Known issues (0.9.0)
+
+- Slow places: Ordon village 14 to 16 FPS (about 10 in its widest view), the Palace of Twilight
+  entrance and the enemy areas of Hyrule Field around 14, Kakariko 18 to 19, Snowpeak Ruins 19, the
+  Faron fight 20 to 22. Under 15 FPS the game itself slows down.
+- In the enemy areas of Hyrule Field about a quarter of the sound buffers are produced late (the
+  sound mixer needs most of a buffer's time with 39 voices playing). No crackle was heard in
+  testing, but it can happen there.
+- The minimap and the map screens are not drawn; neither are Link's real-time shadow, water
+  effects, bloom, depth of field and heat haze.
+- Some textures flicker.
+- The first visit to an area stalls while its shaders compile, about 0.4 s for each new one on the
+  console (32 of them, 14 s in all, on a first visit to four areas of Hyrule Field); later visits
+  don't. No prepared shader set ships with a release.
+- A button with nothing on it is faded on the HUD, as in the original, and is hard to see on a
+  bright background.
+- Not tested: dungeons beyond loading them, the story past Ordon, a full playthrough, sleep and
+  resume, the USA and Japanese discs. Save before you put the Vita to sleep.
+- Not supported: mods, texture packs and the randomizer; RVZ, WIA, WBFS and NKit disc images;
+  Dusklight's mirror mode (it needs the same frame-buffer copies as the minimap); remapping
+  buttons beyond the confirm button. The roadmap says where each stands.
+
+**A tip, not measured yet:** the game already asks for the highest clocks an application can set
+(444 MHz for the CPU). A kernel plugin that overclocks the CPU to 500 MHz, such as PSVshell, can
+help in the heavy places.
+
+## If something goes wrong
+
+- A screen at start-up says what's missing (the shader compiler, the disc image, a wrong or cut
+  disc image) and where it goes.
+- If the game closes at launch, try once with your other plugins off: plugins that hook every
+  application have crashed other new ports at start.
+- For a report, the file that helps is `ux0:data/twilight-vita/runtime.jsonl` (each run adds to
+  it), with the place, what you did and your console model.
+
+[CHANGELOG.md](CHANGELOG.md) has what changed in each version.
 
 ## Measuring
 
@@ -240,7 +336,8 @@ pinned version and license.
 The original code in this repo is under the [MIT license](LICENSE). Upstream projects and
 dependencies keep their own licenses, and a patch doesn't change the license of the file it applies
 to. vitaGL is LGPL-3.0-or-later: its pinned source, the local patches and the build recipe are all
-here, so it can be rebuilt and relinked.
+here, so it can be rebuilt and relinked. [NOTICE](NOTICE) also lists what a release VPK contains;
+the VPK carries `LICENSE`, `NOTICE` and the license texts.
 
 The Legend of Zelda and Twilight Princess are trademarks of Nintendo. This repo contains no game disc
 image, extracted game data, Nintendo or Sony software, or shader compiler binary.

@@ -35,3 +35,19 @@ p1,2026-11-10,vita1000,ordon-centre,every,13.87,27.60,measured,444 MHz; bench v2
 p1-perf,2026-11-10,vita1000,ordon-centre,every,15.60,28.61,measured,444 MHz; bench v2; F_SP103 room 0; GX worker speed-ups + Speed-ups: Performance (picture-only; opt-in)
 p1,2026-11-10,vita1000,hyrule-field,every,28.15,30.00,measured,444 MHz; bench v2; F_SP121 (bridge); GX worker speed-ups only (part of the new default)
 p1,2026-11-10,vita1000,kakariko,every,14.72,29.22,measured,444 MHz; bench v2; F_SP109 (twilight); GX worker speed-ups + search-index; hair; rnd; envelopes (the new default without direct uniforms)
+p4,2026-11-10,vita1000,ordon-centre,every,14.35,27.90,measured,444 MHz; bench v2; F_SP103 room 0; evening build: cheaper pad read (default) + wide geometry cache and block decode (switches then; default since)
+p4,2026-11-10,vita1000,outside,every,28.83,30.00,measured,444 MHz; bench v2; F_SP103 room 1 (outside Link's house); same switches
+p4,2026-11-10,vita1000,kakariko,every,15.49,29.56,measured,444 MHz; bench v2; F_SP109 (twilight); same switches
+p4,2026-11-10,vita1000,faron-bench,every,14.53,28.95,measured,444 MHz; bench v2; F_SP108 room 6; only 3 steady windows; same switches
+p5,2026-11-11,vita1000,kakariko,every,16.53,29.93,measured,444 MHz; bench v2; F_SP109 (twilight); wide cache and block decode by default + patient cache (switch then; default since) + pad values from SDL's events (switch; still off by default)
+p5,2026-11-11,vita1000,castle-town,every,25.77,30.00,measured,444 MHz; bench v2; F_SP116 (twilight); same switches
+p5,2026-11-11,vita1000,hyrule-field,every,29.14,29.99,measured,444 MHz; bench v2; F_SP121 (bridge); same switches
+p5,2026-11-11,vita1000,outside,every,28.81,30.00,measured,444 MHz; bench v2; F_SP103 room 1 (outside Link's house); same switches
+p5,2026-11-11,vita1000,faron-bench,every,14.63,29.08,measured,444 MHz; bench v2; F_SP108 room 6; only 2 steady windows; same switches
+p8,2026-11-12,vita1000,ordon-overview,every,8.72,17.47,measured,444 MHz; F_SP103 room 0 seen whole from the middle of the village (the slowest view found so far); default profile; development build after 0.9.0
+p12,2026-11-13,vita1000,ordon-centre,every,15.59,29.18,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; F_SP103 room 0 spawn 23; idle and walk
+p12,2026-11-13,vita1000,kakariko,every,18.61,30.00,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; F_SP109 room 0 spawn 59; idle and walk
+p12,2026-11-13,vita1000,ordon-overview,every,9.87,19.75,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; F_SP103 room 0 seen whole from the middle of the village
+p12,2026-11-13,vita1000,palace-of-twilight,every,13.72,27.00,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; D_MN08 entrance
+p12,2026-11-13,vita1000,snowpeak-ruins-r9,every,19.26,29.99,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; D_MN11 room 9
+p12,2026-11-13,vita1000,field-enemy-areas,every,14.48,24.56,measured,444 MHz; normal game speed; the speed settings of 0.9.0; prepared shader set; F_SP121 rooms 1/7/10/13 by warp; 26 % of sound buffers late

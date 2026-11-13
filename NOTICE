@@ -64,8 +64,34 @@ Toolchain and system libraries (container image, not distributed by this reposit
   (tag 2026.08): GCC, newlib, libstdc++, the psp2 stub libraries, SDL3, zstd, libpng and zlib.
   SDL3: zlib license (LICENSES/SDL3.txt, the image's share/licenses/SDL3/LICENSE.txt).
   The toolchain and SDK components keep their own licenses; this repository grants none for them.
-  A binary release (VPK) contains some of them. It needs an inventory of everything it actually
-  contains, with the notices those licenses require.
+
+What a release VPK contains
+
+  eboot.bin is one statically linked program. Besides this repository's own code (MIT) and the
+  projects listed above, the linker takes these prebuilt libraries from the VitaSDK image named
+  above (the digest fixes their exact versions); the licenses are the ones their repositories
+  publish:
+    newlib (C library; BSD-style licenses per file, https://github.com/vitasdk/newlib)
+    libstdc++ and libgcc (GPL-3.0-or-later with the GCC Runtime Library Exception)
+    pthread-embedded (LGPL, https://github.com/vitasdk/pthread-embedded)
+    SDL3 (zlib license; LICENSES/SDL3.txt)
+    vitaShaRK (LGPL-3.0, https://github.com/Rinnegatamante/vitaShaRK)
+    SceShaccCgExt (LGPL-2.1, https://github.com/bythos14/SceShaccCgExt;
+    LICENSES/SceShaccCgExt-LGPL-2.1-text.txt)
+    math-neon (MIT), zlib (zlib license), libpng (libpng license)
+    Inter, as the coverage bitmaps of platform/vita/ui/ui_font_data.hpp (SIL Open Font License
+    1.1; LICENSES/Inter-OFL.txt; see "Font")
+    taiHEN stubs (MIT, https://github.com/yifanlu/taiHEN) and the Vita SDK stub libraries (MIT,
+    https://github.com/vitasdk/vita-headers)
+  and vitaGL, built here from its pinned source (LGPL-3.0-or-later, see above). The LGPL-3.0 and
+  GPL-3.0 texts are LICENSES/vitaGL-LGPL-text.txt and LICENSES/vitaGL-GPL-text.txt.
+  (libzip and libtoloader are on the link line; the linker takes no code from them.)
+  For the LGPL libraries: this repository is the complete corresponding source of everything else
+  in eboot.bin, with the build recipe (tools/vita_build.sh, the pinned image and deps.lock), so
+  the program can be rebuilt and relinked against a changed version of any of them.
+  The VPK also holds sce_sys/ (param.sfo, and the icon and LiveArea pictures drawn by
+  tools/make_livearea.py), LICENSE, NOTICE and LICENSES/. It holds no game data, no shader pack
+  derived from the game and no firmware module.
 
 Font
 
