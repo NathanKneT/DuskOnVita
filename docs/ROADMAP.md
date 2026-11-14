@@ -6,6 +6,13 @@ and complain about the most. One rule for everything here: the game has to behav
 original. Anything that changes the picture, or how random events roll, is a setting, and the
 default stays faithful.
 
+## Done on 14 Nov 2026
+
+- The map screens draw their map: dungeon map (rooms, doors) and field map (terrain, zoom), from
+  the game's own map pass drawn on the CPU. The minimap in play is still off.
+- A crash at area changes fixed: Link's own heaps are three times the original's size instead of
+  twenty. Found by loading every room of the game in the emulator.
+
 ## Done on 13 Nov 2026
 
 - Dusklight's comfort options on the settings page, each off by default: auto-save, instant text,
@@ -76,7 +83,7 @@ default stays faithful.
 | 3 | Long sessions without crashes | Test runs last minutes, not hours | Track memory use per area, long scripted runs in the emulator, a pass over the spots where other ports crash, then an hour of real play on the console |
 | 4 | Your disc, your language | ISO, CISO, GCZ; the region, language and Enter button from the disc and the Vita (done, checked in the emulator) | A USA and a Japanese disc on the console |
 | 5 | Settings without editing files | The settings page, presets and Speed-ups are in | The HUD kept sharp while the 3D is scaled; shadow and bloom settings once those effects exist |
-| 6 | Minimap and map, then shadows and bloom | Not drawn yet: EFB copies aren't in | Copies and off-screen targets on GXM, minimap and map first (in progress), with the minimap redrawn only when it changes so the field keeps its speed; then shadows and bloom as settings |
+| 6 | Minimap, then shadows and bloom | The map screens are drawn (14 Nov, on the CPU); the minimap, shadows and bloom are not: EFB copies aren't in | Copies and off-screen targets on GXM, the minimap first, redrawn only when it changes so the field keeps its speed; then shadows and bloom as settings |
 | 7 | Sleep and resume | Not tested | A console checklist: sleep mid-game, in a cutscene and right after saving, and go back and forth to LiveArea; check picture, sound, gyro, touch, speed and the in-game clock |
 | 8 | Measure where it actually hurts | Six bench places | Add a horse ride across the field, some grass, a dungeon; count hitches over 100 ms; run the bench before every release |
 | 9 | Releases you can trust | First test release with a short install guide | A changelog and the bench table with every release, a short "how to send a crash log" |

@@ -9,6 +9,9 @@ The first version with a release page. No game data is included: you need your o
 GameCube disc.
 
 Play and presentation
+- The map screens draw their map: the dungeon map with its rooms and doors, the field map with its
+  terrain and zoom. The game's own off-screen map pass is drawn on the CPU; the minimap in play
+  stays off (14 Nov).
 - Comfort options on the settings page, Dusklight's own and all off by default: auto-save, instant
   text, hold to mash, quick transform, faster climbing, iron boots, Tears of Light and area
   changes, instant saves, rupee options, bigger wallets, aiming reticle, low-health beep, HUD
@@ -35,6 +38,13 @@ Play and presentation
   (28 Oct).
 
 Fixes
+- A stop at an area change or at the restart after a fall: Link's own heaps were twenty times the
+  original's size (Dusklight's room for mods), 13.3 MiB in one block of a 27 MiB heap, and the
+  game stops when that block is not free. They are three times the original's size now. Found by
+  loading every room of the game in the emulator; nine area changes in a row on the console
+  (14 Nov).
+- Dusklight's log file is written at the info level instead of debug, so loads write less to the
+  memory card; the game's own error lines are kept in the runtime log (14 Nov).
 - A crash when entering some areas of Hyrule Field: an enemy could be created one game tick before
   Link and read him. An enemy's creation now waits for the player (12 Nov).
 - Saves: rolling backups and a repair check at start (28 Oct).

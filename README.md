@@ -21,6 +21,9 @@ small stack of patches on top of the pinned upstreams.
   the original runs at 30. The villages are the slowest: Ordon 14 to 16 FPS and about 10 when you
   stand in the middle and look across the whole village, Kakariko 18 to 19. The game keeps its
   normal speed down to 15 FPS; below that, everything slows down with it.
+- **New on 14 Nov:** the map screens draw their map (the dungeon map with its rooms and doors, the
+  field map with its terrain and zoom; the minimap in play is still off), and a crash at area
+  changes is fixed (the game could stop when entering an area or restarting after a fall).
 - **New on 13 Nov, speed:** seven more exact speed-ups on by default after console sessions. Rows
   of identical squares go out as one draw (the Palace of Twilight went from 7 to 13 FPS, Snowpeak
   Ruins room 9 from 9 to 19), a simple shadow is one draw, the sound is rendered in small steps
@@ -40,12 +43,13 @@ small stack of patches on top of the pinned upstreams.
   by default, and a Speed-ups setting (Original or Performance) that skips work you can't see.
 - **New on 5 Nov:** an in-game settings page (two fingers held on the rear touch pad, or three on the screen), your disc as `.iso`, `.ciso`
   or `.gcz`, the game in your Vita's language, and Cross/Circle following your Vita's Enter button.
-- **Not there yet:** the minimap and map screens, Link's real-time shadow, water effects, bloom and
+- **Not there yet:** the minimap in play, Link's real-time shadow, water effects, bloom and
   depth of field (everything that needs frame-buffer copies).
 - **Known bugs:** some textures flicker; the first visit to an area stutters while its shaders
   compile (0.4 s each on the console).
-- **Not tested yet:** dungeons, the rest of the story, a full playthrough, sleep and resume, and any
-  disc other than the European one.
+- **Not tested yet:** the story past Ordon and a full playthrough (every room of the game loads in
+  the emulator, but loading is not playing), sleep and resume, and any disc other than the European
+  one.
 
 The goal is a steady 30 FPS. What I'm working on next is in [docs/ROADMAP.md](docs/ROADMAP.md).
 It's all open so anyone can reproduce it, poke at it and help out.
@@ -153,8 +157,9 @@ Where the GX worker's time went in the house on g2c:
 | Start-up screens | ✅ | the progress screen while shaders get ready works on the console; the error screens (no disc, wrong disc, missing shader compiler) are checked in the emulator |
 | Shader preparation | ⚠️ | shaders compile the first time they're needed, which stalls; an optional warm-up file moves that to start-up |
 | 3D scenes (textured, lit, fog) | ⚠️ | some textures flicker |
-| Frame-buffer effects (minimap, map, Link's shadow, water, bloom, depth of field, heat haze) | ❌ | EFB copies and off-screen passes aren't in yet; draws that would read an empty copy are skipped rather than drawn black |
-| Dungeons, a full playthrough | ❔ | not tested |
+| Map screens (dungeon map, field map) | ✅ | the game's own map pass, drawn on the CPU; work on the console |
+| Frame-buffer effects (minimap, Link's shadow, water, bloom, depth of field, heat haze) | ❌ | EFB copies and off-screen passes aren't in yet; draws that would read an empty copy are skipped rather than drawn black |
+| Dungeons, a full playthrough | ❔ | every room of the game loads in the emulator, and two dungeon rooms were visited on the console; the story past Ordon has not been played |
 
 ## What you need
 
@@ -264,8 +269,8 @@ port's own to `ux0:data/twilight-vita/vita_settings.json`.
 - In the enemy areas of Hyrule Field about a quarter of the sound buffers are produced late (the
   sound mixer needs most of a buffer's time with 39 voices playing). No crackle was heard in
   testing, but it can happen there.
-- The minimap and the map screens are not drawn; neither are Link's real-time shadow, water
-  effects, bloom, depth of field and heat haze.
+- The minimap in play is not drawn (the map screens are); neither are Link's real-time shadow,
+  water effects, bloom, depth of field and heat haze.
 - Some textures flicker.
 - The first visit to an area stalls while its shaders compile, about 0.4 s for each new one on the
   console (32 of them, 14 s in all, on a first visit to four areas of Hyrule Field); later visits
@@ -313,8 +318,8 @@ prove anything about the picture on the GPU or speed on the console.
 - **The main thread:** in towns and busy places it's the bottleneck. Actor updates (crowds, fish,
   some enemies) and the game's painter take most of it. Profiles and exact speed-ups are very welcome,
   as long as the game behaves exactly like the original.
-- **Frame-buffer effects:** EFB copies and off-screen passes on GXM, for the minimap, the map screen,
-  shadows and bloom.
+- **Frame-buffer effects:** EFB copies and off-screen passes on GXM, for the minimap, shadows and
+  bloom (the map screens are drawn on the CPU for now).
 - **Texture flicker:** still hunting the cause (an upstream texture filter fix is in, but it didn't
   change the picture where I looked). The place and a short video help; a matched Dolphin capture of
   the same scene helps even more.

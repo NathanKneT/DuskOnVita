@@ -101,7 +101,9 @@ frontend, FIFO, command processor and register state run unchanged and hand fini
   so two backends or two runs can be compared frame by frame.
 - **Not done yet:** off-screen passes and EFB copies (shadows, heat haze, the minimap) and some
   indirect-texture effects. `--vita-shadow-image-skip` skips the CPU work of the shadow images the
-  renderer cannot draw.
+  renderer cannot draw. The map screens are the exception: `map_pass.cpp` draws their flat-colour
+  pass on the CPU (`map_raster.hpp`), keeps the 8-bit copy and turns it into the texture the
+  screen shows at the palette conversion.
 
 ### GXM backend (experimental)
 
