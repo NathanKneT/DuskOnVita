@@ -13,7 +13,7 @@ Vita side of things: a renderer that turns Aurora's GX commands into GXM (or
 [vitaGL](https://github.com/Rinnegatamante/vitaGL)), audio, input, memory, a lot of logging, and a
 small stack of patches on top of the pinned upstreams.
 
-## Where it's at (13 Nov 2026, version 0.9.0)
+## Where it's at (14 Nov 2026, version 0.9.0)
 
 - **You can install it and play, but it's not comfy yet.** On my PS Vita 1000 it boots from your
   disc image to the title screen, a new game starts, the opening in Ordon plays, and saving works.
