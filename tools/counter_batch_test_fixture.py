@@ -92,8 +92,8 @@ def main():
             raise SystemExit('Unexpected V59 shadow counter text: ' + old)
         expected = expected.replace(old, new)
     if source != expected:
-        # Root may add independent backend work after this agent's freeze. Keep
-        # this local audit strict for the producer blocks owned by this fixture.
+        # The backend may have gained unrelated work since this fixture was written. Keep
+        # the audit strict for the producer blocks this fixture owns.
         if (fallback_calls(source) != fallback_calls(expected) or cull_call(source) != cull_call(expected)
                 or current_shadow != '\n'.join(function(expected, signature) for signature in signatures)):
             raise SystemExit('Backend counter producer changed beyond the audited ID substitutions')

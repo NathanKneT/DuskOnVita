@@ -1,5 +1,6 @@
 // Compile with pinned_vitagl_mipmap_fixture.inc extracted verbatim from the
-// pinned SDK gpu_utils.c gpu_alloc_mipmaps function (handoff audit has recipe).
+// pinned SDK gpu_utils.c gpu_alloc_mipmaps function (tools/pinned_vitagl_mip_fixture.py,
+// run by tools/host_tests.sh).
 #include <algorithm>
 #include <cassert>
 #include <cstdint>

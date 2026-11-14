@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// First query freezes all choices for this boot. Parent implements selection.
+// The first query freezes all choices for this boot. main_vita.cpp makes the selection.
 int twv_vita_bundle_feature(uint32_t feature);
 uint32_t twv_vita_bundle_memory_profile(void);
 int twv_vita_bundle_select(uint32_t features,uint32_t memory_profile);
