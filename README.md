@@ -63,10 +63,10 @@ route:
 
 | Place | 5 Nov | 10 Nov | 11 Nov | What holds it back now |
 | --- | ---: | ---: | ---: | --- |
-| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 28.5 / 27.4 | not run | 29.5 / 28.7 | GX worker |
+| Ordon, outside Link's house (`F_SP103,1,3,-1`) | 28.5 / 27.4 | 28.8 (run average) | 29.5 / 28.7 | GX worker |
 | Hyrule Field bridge (`F_SP121,0,4,-1`) | 18.3 / 19.7 | 28.1 / 28.2 | **29.1 / 29.1** | main thread |
 | Castle Town, twilight (`F_SP116,0,0,-1`) | 21.1 / 18.9 | not run | **27.0 / 25.5** | main thread |
-| Faron fight (`F_SP108,6,1,0`) | 18.3 / 14.5 | not run | 22.2 / 20.4 | main thread and GX worker |
+| Faron fight (`F_SP108,6,1,0`), run average | 11.7 | 14.5 | 14.6 | main thread and GX worker |
 | Kakariko, twilight (`F_SP109,0,59,-1`) | 12.2 / 12.9 | 14.0 / 14.9 | 14.9 / 16.8 | GX worker and main thread |
 | Ordon village centre (`F_SP103,0,23,-1`) | 11.9 / 12.4 | 13.3 / 14.0 | 13.6 / 14.6 (10 Nov, evening) | GX worker and main thread |
 
@@ -105,7 +105,15 @@ against 12.6 / 13.2 with the same GX worker speed-ups and Original.
 The game ticks at a fixed 30 Hz (two ticks per frame at most), so it keeps its real speed down to
 15 FPS. At 75 % the GPU has room to spare (23-27 ms per frame). The limits are the main thread (the
 game's actors and its painter) and the GX worker. How these runs are done:
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded places".
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md), "Bench of crowded places". A pair is the bench report's
+figure for each phase of the scripted route (`tools/vita_bench_report.py`); a single figure is the
+run average over steady windows (`tools/vita_run_report.py`), which is what
+[docs/benchmarks.csv](docs/benchmarks.csv) holds.
+
+The Faron line was wrong here until 14 Nov. Its run leaves Faron Woods after about eight timing
+windows and plays the rest in the Forest Temple (`D_MN05` room 22), and the pair shown for it
+on 11 Nov (22.2 / 20.4) was the temple's part; the 5 Nov pair (18.3 / 14.5) was read the same way. In Faron Woods itself the fight ran at
+about 14.5 FPS on 10 and 11 Nov; the temple part measured about 20.
 
 ![The bench places on the console, 28 Oct to 10 Nov](docs/img/bench.svg)
 
@@ -265,7 +273,7 @@ port's own to `ux0:data/twilight-vita/vita_settings.json`.
 
 - Slow places: Ordon village 14 to 16 FPS (about 10 in its widest view), the Palace of Twilight
   entrance and the enemy areas of Hyrule Field around 14, Kakariko 18 to 19, Snowpeak Ruins 19, the
-  Faron fight 20 to 22. Under 15 FPS the game itself slows down.
+  Faron fight about 14.5. Under 15 FPS the game itself slows down.
 - In the enemy areas of Hyrule Field about a quarter of the sound buffers are produced late (the
   sound mixer needs most of a buffer's time with 39 voices playing). No crackle was heard in
   testing, but it can happen there.
