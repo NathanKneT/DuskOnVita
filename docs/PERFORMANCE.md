@@ -7,7 +7,8 @@ game state, never to state a frame rate.
 
 ## Results so far (PS Vita 1000, console)
 
-The latest results (5 and 10 Nov, six crowded places with the play profile) are in the README.
+The latest results (the heavy places on 13 Nov, the lighter ones on 10 and 11 Nov, all with the
+play profile) are in the README.
 The single runs before them are in [benchmarks.csv](benchmarks.csv) (`python3 tools/charts.py`
 redraws the charts), measured by `tools/vita_run_report.py` over steady windows. Build v61, at the
 system clocks (333 MHz CPU, 111 MHz GPU):
@@ -21,8 +22,9 @@ Where one 154 ms frame goes in Link's house (v61, everything on one core): game 
 draw building 20 ms, GX command decode 31 ms, vertex preparation 66 ms, vitaGL calls 25 ms. Build v54
 was faster but rejected: it lost draws through uniform failures.
 
-Not yet measured on the console: the 444 MHz default (`--vita-clocks`), static geometry by reference
-(`--vita-static-geometry=on`) and the GX worker thread (`--vita-gx-thread=on`). In the emulator, static
+Those two rows are from before the 444 MHz default (`--vita-clocks`), static geometry by reference
+(`--vita-static-geometry=on`) and the GX worker thread (`--vita-gx-thread=on`). All three are part of
+the play profile now, and the console numbers in the README are measured with them. In the emulator, static
 geometry in verify mode compared 337,408 certified hits in three scenes with no mismatch, and cut the
 bytes compared per 1,020 frames in the house from 3.07 GB to 2.37 MB.
 
@@ -103,7 +105,7 @@ Available in every build:
 | `--vita-exit-after=SECONDS` | off | 10-3600: the run ends itself that long after Link first appears, with the receipts written |
 | `--vita-static-geometry=off\|on\|verify` | `off` | J3D display lists and their arrays by reference (aurora 0006, dusklight 0014); certified cache hits skip the byte comparison; `verify` compares every certified hit and counts differences |
 | `--vita-gx-thread=off\|on` | `off` | Aurora's GX FIFO, and every vitaGL draw, on a worker thread on core 1 (aurora 0007); the game thread keeps core 0 |
-| `--vita-gpu=vgl\|gxm` | `vgl` | the renderer: vitaGL, or the experimental direct GXM backend ([ARCHITECTURE.md](ARCHITECTURE.md)); if it fails to start, the run writes `gfx_init_failure` and exits |
+| `--vita-gpu=vgl\|gxm` | `vgl`; `gxm` with the play profile | the renderer: vitaGL, or the direct GXM backend ([ARCHITECTURE.md](ARCHITECTURE.md)); if it fails to start, the run writes `gfx_init_failure` and exits |
 | `--vita-gxm-resident=on\|off` | `off` | GXM only: certified geometry and static-list indices stay in a GPU memory arena instead of being copied every frame |
 | `--vita-gxm-compact=off\|on\|colors` | `off` | GXM only: integer positions, normals and texture coordinates keep their GX format (exact); `colors` also sends RGBA8 colours as bytes |
 | `--vita-gxm-primitives=on\|off` | `off` | GXM only: quads, strips and fans drawn natively, without index lists (aurora 0008) |

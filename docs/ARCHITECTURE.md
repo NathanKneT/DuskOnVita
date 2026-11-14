@@ -12,7 +12,7 @@ DVD, CARD), and [Borealis](https://github.com/encounter/borealis) (logging, file
  Borealis                      log, io, data, cli, task; net reports "unavailable"
  Aurora                        OS, VI, PAD, SI, CARD, THP, DVD; GX frontend -> FIFO -> command processor
  platform/vita/gfx_vgl         Aurora's gfx contract on vitaGL (GXM): Cg shaders, vertices, textures
- platform/vita/gfx_gxm         the same contract straight on SceGxm (experimental, --vita-gpu=gxm)
+ platform/vita/gfx_gxm         the same contract straight on SceGxm (the play profile's renderer)
  platform/vita                 entry point, clocks, receipts, audio output, input defaults, run control
  VitaSDK, vitaGL, SDL3         system libraries, the GL layer over GXM, SDL's Vita input and events
 ```
@@ -71,10 +71,10 @@ capacities, not a validated full-game budget.
 
 ## Threads
 
-- **Core 0:** the game thread: game logic, J3D building GX commands, and by default (Inline mode,
-  patch `aurora/0001`) also Aurora's GX processing and every vitaGL call.
-- **Core 1:** with `--vita-gx-thread=on` (patch `aurora/0007`), a worker processes the GX FIFO and so
-  runs every draw. The game still waits for it at the end of its drawing (GXDrawDone), so only J3D's
+- **Core 0:** the game thread: game logic and J3D building GX commands. Without the play profile
+  (Inline mode, patch `aurora/0001`) it also runs Aurora's GX processing and every renderer call.
+- **Core 1:** with `--vita-gx-thread=on` (patch `aurora/0007`, on with the play profile, so on in a
+  normal launch), a worker processes the GX FIFO and so runs every draw. The game still waits for it at the end of its drawing (GXDrawDone), so only J3D's
   command building overlaps the GX work.
 - **Core 2:** the audio worker (SceAudioOut) and the receipt writer.
 
@@ -105,8 +105,9 @@ frontend, FIFO, command processor and register state run unchanged and hand fini
   pass on the CPU (`map_raster.hpp`), keeps the 8-bit copy and turns it into the texture the
   screen shows at the palette conversion.
 
-### GXM backend (experimental)
+### GXM backend
 
+The play profile, so a normal launch, uses it; `--vita-profile=off` goes back to vitaGL.
 `--vita-gpu=gxm` selects `platform/vita/gfx_gxm/gxm_backend.cpp`, which implements the same backend
 table directly on SceGxm; everything above it (Aurora, the caches, the digest, the receipts) is
 unchanged. It was built in three steps: G0 the backend table and digest, G1 the backend, G2 the
