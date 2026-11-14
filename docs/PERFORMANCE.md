@@ -94,6 +94,26 @@ differences; in the six bench places in Vita3K they found none):
 | `--vita-crowd=full\|half\|low` | `full`; the settings page's Speed-ups | how many passers Castle Town's crowd keeps walking (dusklight 0048). Resting creatures and a smaller crowd draw fewer random numbers, so random idle choices can differ |
 | `--vita-state-digest=off\|on` | `off` | test only: one hash of the game state per tick (every actor's place, angles, speeds, health, status and condition flags; the save data; both random generators), to check that a run with a speed-up on plays the same game as a run with it off (dusklight 0044) |
 
+Added from 10 to 13 Nov (the first seven rows are the defaults that came with 0.9.0):
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `--vita-fast-draw-runs=off\|on\|verify` | `on` with the profile since 13 Nov | a quad or triangle-list draw command followed by more of the same kind, with nothing changed between them, goes to the backend as one draw (the game draws snow, rain, the twilight squares and text one quad per command); `verify` joins nothing and checks each candidate. Console: the Palace of Twilight 7.0 to 13.3 FPS, Snowpeak Ruins room 9 8.7 to 18.9, no mismatch |
+| `--vita-fast-shadow-lists=off\|on\|verify` | `on` with the profile since 13 Nov | a simple (blob) shadow's volume is drawn from a display list in which its eight triangle strips are one indexed draw of the same 16 triangles in the same order. Console: Ordon village's widest view 8.7 to 9.9 FPS, no mismatch |
+| `--vita-fast-reg-repeats=off\|on\|verify` | `on` with the profile since 13 Nov | a TEV colour or konst write equal to the value last decoded for that register, and a light load equal to the words last decoded, skip their handlers; `verify` runs the handler and compares the state. No mismatch in any console run since 12 Nov |
+| `--vita-audio-pull=frame\|subframe` | `frame`; `subframe` with the profile since 13 Nov | how much sound one render call makes: a whole 16.7 ms sound frame, or 80 samples at a time (the same subframes in the same order, spread evenly over the device buffers). Console: late sound buffers in the Palace of Twilight 29 % to 0.2 %, in Hyrule Field's enemy areas 47 % to about a quarter |
+| `--vita-fast-particle-palette=off\|on` | `on` with the profile since 13 Nov | child particles, which the game draws one per draw, go out up to ten per draw through the ten position-matrix slots; each vertex is still transformed by its own particle's matrix |
+| `--vita-fast-present-bg=off\|on` | `on` with the profile since 13 Nov | the room's background actor does not run its draw a second time in the presentation walk when frame interpolation is off |
+| `--vita-fast-pad=off\|on\|verify`, `--vita-fast-pad-events=off\|on\|verify` | `on` with the profile since 10 and 13 Nov | `pad`: PADRead keeps the SDL gamepad values asked since SDL last pumped events, so each button or axis is asked once per pump (console: 2,292 reads compared in verify, no difference). `pad-events`, with `pad` on: the kept values are brought up to date by SDL's own button and axis events instead of being dropped at each pump |
+| `--vita-fast-wide-cache`, `--vita-fast-decode-blocks`, `--vita-fast-patient-cache` `=off\|on\|verify` | `on` with the profile since 10 and 11 Nov | geometry cache: a packet is looked for in a group of 8 entries instead of 4; a packet of more than 256 vertices is decoded 256 at a time; a packet is stored the second time its key is seen and survives one frame without use (console: Kakariko stores 16 packets per frame instead of 77). `verify` decodes again and compares |
+| `--vita-gxm-submit-thread=off\|on\|verify` | `off` | GXM only: the GX worker hands each finished draw to a third thread that makes the GXM calls. Console: about 2 ms less GX worker time and no FPS gained in the villages, slower in Hyrule Field's enemy areas |
+| `--vita-gxm-draw-merge=off\|on\|verify` | `off` | GXM only: a quad or triangle-list draw whose state and sampler requests equal the previous one's byte for byte, and whose vertices follow it directly, joins that draw |
+| `--vita-gxm-draw-split=on\|off` | `off` | GXM diagnostic: each draw's backend time split into its steps; several clock reads per draw, so only for a run that measures the split |
+| `--vita-audio-priority=default\|high` | `default` | the sound thread's priority; `high` puts it 16 steps above the thread that opens the port. Console, 13 Nov: no gain |
+| `--vita-place=X,Y,Z,ANGLE` | none | bench lines only: puts Link at that position once the place has loaded |
+| `--vita-sync-loads=off\|on` | `off` | test only: the thread that queues a load request waits until the loader thread has finished it, so loading takes the same number of game ticks in every run and two emulator runs can be compared frame by frame |
+| `--vita-disc-read-test=MIB` | none | 1-1024: reads that much of the disc image through its container before the game starts and reports the read speed (log only) |
+
 The play profile also renders at 75 % (`--vita-gxm-scale=75`) unless the command line chooses a
 scale: drawn full width, Link's house needs about 67 ms of GPU per frame at 100 % and about 43 at 75 %.
 

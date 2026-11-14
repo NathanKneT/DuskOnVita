@@ -300,8 +300,8 @@ help in the heavy places.
 
 ## Measuring
 
-Speed claims need a console run. [docs/PERFORMANCE.md](docs/PERFORMANCE.md) has every switch and
-log field, and how I measure: one change per run, same scene, a fixed run length
+Speed claims need a console run. [docs/PERFORMANCE.md](docs/PERFORMANCE.md) has the start-up
+switches and log fields, and how I measure: one change per run, same scene, a fixed run length
 (`--vita-exit-after`), loading and shader compiling kept out of the numbers, and
 `tools/vita_run_report.py` to turn `runtime.jsonl` into one row per run.
 
