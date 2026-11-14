@@ -346,6 +346,8 @@ None of this would exist without the [zeldaret/tp](https://github.com/zeldaret/t
 [vitaGL](https://github.com/Rinnegatamante/vitaGL). [NOTICE](NOTICE) lists every upstream with its
 pinned version and license.
 
+DuskOnVita is developed with AI assistance.
+
 The original code in this repo is under the [MIT license](LICENSE). Upstream projects and
 dependencies keep their own licenses, and a patch doesn't change the license of the file it applies
 to. vitaGL is LGPL-3.0-or-later: its pinned source, the local patches and the build recipe are all
