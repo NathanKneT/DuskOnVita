@@ -205,7 +205,8 @@ profile can use them, and leaves out the per-draw diagnostics
 ## Install
 
 1. Install the VPK from the [release page](https://github.com/NathanKneT/DuskOnVita/releases) with
-   VitaShell.
+   VitaShell, or from [VitaDB](https://www.rinnegatamante.eu/vitadb/#/info/1805): on the Vita,
+   search for DuskOnVita in VitaDB Downloader.
 2. Put the shader compiler at `ur0:data/libshacccg.suprx`. It comes from your own console's system
    files: extract it with the ShaRKBR33D app. Without it the game shows a screen saying so.
 3. Copy your disc image into `ux0:data/twilight-vita/` (the game creates the folder the first time
