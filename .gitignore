@@ -52,10 +52,6 @@ sequence.txt
 /captures/
 
 # Local tool and editor state
-.codex/
-.claude/
-AGENTS.md
-CLAUDE.md
 .env
 .env.*
 .vscode/
