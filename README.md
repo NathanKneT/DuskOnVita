@@ -3,6 +3,8 @@
 A fan port of **The Legend of Zelda: Twilight Princess** to the PlayStation Vita. Unofficial, and
 very much a work in progress.
 
+![DuskOnVita on a PS Vita 1000: Link in Ordon village](https://nathanglhf.com/evidence/duskonvita-ordon.jpg)
+
 - Not affiliated with or endorsed by Nintendo, Sony, the Dusklight team or the zeldaret project.
 - Built on [Dusklight](https://github.com/TwilitRealm/dusklight), the native build of the
   [Twilight Princess decompilation](https://github.com/zeldaret/tp). The name is a nod to Dusklight.
